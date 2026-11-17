@@ -73,7 +73,7 @@ cd backend && source .venv/bin/activate && pytest
 
 ## Market data
 
-Set `DATABENTO_API_KEY` in `.env` after obtaining a licensed Databento account. Until the Phase 1.5 ingestion implementation lands, jobs are queued and recorded but **do not import bars** without a connected provider.
+Set `DATABENTO_API_KEY` in `.env` (or on Railway backend) after obtaining a licensed Databento account with **GLBX.MDP3** access. Use **Market Data → Queue Databento ingestion**; the worker downloads real 1m bars and stores your chosen timeframe.
 
 ## Project status
 
