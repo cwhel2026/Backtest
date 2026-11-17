@@ -94,6 +94,7 @@ def run_deep_search(
     budget: int,
     refine_top: int = 8,
     seed: int | None = None,
+    on_progress=None,
 ) -> tuple[list[SearchHit], int]:
     settings = get_settings()
     wr_max = float(getattr(settings, "reverse_winrate_max", 0.20) or 0.20)
@@ -115,9 +116,14 @@ def run_deep_search(
             return
         closest.append((float(metrics.get("total_net_profit") or 0), spec, metrics))
 
+    def _tick() -> None:
+        if on_progress and evaluated % 20 == 0:
+            on_progress(evaluated)
+
     for spec in specs:
         train_m = _metrics_for_spec(spec, train, instrument, tf)
         evaluated += 1
+        _tick()
         if not train_m:
             continue
         _remember(spec, train_m)
@@ -131,10 +137,12 @@ def run_deep_search(
             continue
         test_m = _metrics_for_spec(spec, test, instrument, tf)
         evaluated += 1
+        _tick()
         if not _passes_oos(test_m):
             continue
         full_m = _metrics_for_spec(spec, bars, instrument, tf)
         evaluated += 1
+        _tick()
         _consider(spec, train_m, test_m, full_m, origin="deep", original_metrics=None, leaderboard=leaderboard)
 
     for spec, orig_train in reverse_queue[: max(24, refine_top * 3)]:
@@ -143,15 +151,18 @@ def run_deep_search(
             continue
         train_m = _metrics_for_spec(rev, train, instrument, tf)
         evaluated += 1
+        _tick()
         if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
             continue
         test_m = _metrics_for_spec(rev, test, instrument, tf)
         evaluated += 1
+        _tick()
         orig_wr = orig_train.get("win_rate")
         if not reverse_passes_oos(test_m, float(orig_wr) if orig_wr is not None else None):
             continue
         full_m = _metrics_for_spec(rev, bars, instrument, tf)
         evaluated += 1
+        _tick()
         _consider(
             rev,
             train_m,
@@ -166,14 +177,17 @@ def run_deep_search(
         for refined in refine_spec(base):
             train_m = _metrics_for_spec(refined, train, instrument, tf)
             evaluated += 1
+            _tick()
             if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
                 continue
             test_m = _metrics_for_spec(refined, test, instrument, tf)
             evaluated += 1
+            _tick()
             if not _passes_oos(test_m):
                 continue
             full_m = _metrics_for_spec(refined, bars, instrument, tf)
             evaluated += 1
+            _tick()
             _consider(
                 refined,
                 train_m,

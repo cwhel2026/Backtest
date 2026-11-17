@@ -55,16 +55,30 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def job_heartbeat(job: ResearchJob) -> datetime | None:
+    raw = (job.payload or {}).get("heartbeat")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return _aware(datetime.fromisoformat(raw))
+    except ValueError:
+        return None
+
+
 def job_is_stale(job: ResearchJob, now: datetime | None = None) -> bool:
-    """Queued with no worker, or running long enough that the process was killed."""
+    """Queued with nobody claiming it, or running with no recent heartbeat (dead worker)."""
     now = now or datetime.now(UTC)
-    created = job.created_at if job.created_at.tzinfo else job.created_at.replace(tzinfo=UTC)
-    if job.status == ResearchJobStatus.QUEUED and now - created > timedelta(minutes=3):
+    created = _aware(job.created_at)
+    if job.status == ResearchJobStatus.QUEUED and now - created > timedelta(minutes=2):
         return True
-    started = job.started_at or created
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
-    return job.status == ResearchJobStatus.RUNNING and now - started > timedelta(minutes=40)
+    if job.status != ResearchJobStatus.RUNNING:
+        return False
+    beat = job_heartbeat(job) or _aware(job.started_at or created)
+    return now - beat > timedelta(minutes=6)
 
 
 def find_active_prop_search_job(session: Session) -> ResearchJob | None:
@@ -174,6 +188,13 @@ def run_autonomous_prop_cycle(
             inst = session.get(Instrument, ds.instrument_id)
             if not inst:
                 continue
+            def _pulse(done: int, symbol: str = symbol) -> None:
+                current = _job()
+                current.payload = {**(current.payload or {}), "heartbeat": datetime.now(UTC).isoformat()}
+                current.message = f"Scoring {symbol} · {done} tests" if done else f"Scoring {symbol}"
+                session.commit()
+
+            _pulse(0)
             hits, evaluated = run_deep_search(
                 session,
                 symbol=symbol,
@@ -181,6 +202,7 @@ def run_autonomous_prop_cycle(
                 instrument=inst,
                 budget=budget,
                 seed=seed + hash(symbol) % 1000,
+                on_progress=_pulse,
             )
             total_eval += evaluated
             winners = persist_search_hits(

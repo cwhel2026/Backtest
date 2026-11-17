@@ -1,11 +1,15 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import hash_password
-from app.models.enums import DataProviderStatus
+from app.models.enums import DataProviderStatus, ResearchJobStatus
 from app.models.market_data import DataProvider
+from app.models.research import ResearchActivity, ResearchJob
 from app.models.user import User
+from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE
 from app.services.instruments import seed_instruments
 from app.services.strategy_library import seed_strategy_library
 from app.services.market_data.providers import PROVIDER_REGISTRY
@@ -16,6 +20,30 @@ async def bootstrap_database(session: AsyncSession) -> None:
     await seed_strategy_library(session)
     await _seed_providers(session)
     await _seed_admin_user(session)
+    await _clear_searches_interrupted_by_restart(session)
+
+
+async def _clear_searches_interrupted_by_restart(session: AsyncSession) -> None:
+    """A deploy kills the old process. Any search still marked running is not actually running."""
+    rows = (
+        await session.execute(
+            select(ResearchJob).where(
+                ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+            )
+        )
+    ).scalars().all()
+    for job in rows:
+        job.status = ResearchJobStatus.FAILED
+        job.error = "Stopped because the server restarted. Press Run prop search to start a new one."
+        job.completed_at = datetime.now(UTC)
+        session.add(
+            ResearchActivity(
+                headline="Search stopped on restart",
+                detail=job.error,
+                job_id=job.id,
+            )
+        )
 
 
 async def _seed_providers(session: AsyncSession) -> None:

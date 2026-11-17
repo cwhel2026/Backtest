@@ -131,6 +131,7 @@ async def run_autopilot_now(
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    restart: bool = Query(False),
 ) -> AutopilotRunResponse:
     active_job = (
         await db.execute(
@@ -143,9 +144,9 @@ async def run_autopilot_now(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if active_job and job_is_stale(active_job):
+    if active_job and (restart or job_is_stale(active_job)):
         active_job.status = ResearchJobStatus.FAILED
-        active_job.error = "Search stalled before it finished. Starting a new one."
+        active_job.error = "Replaced by a new search."
         active_job.completed_at = datetime.now(UTC)
         await db.commit()
         active_job = None
