@@ -15,11 +15,30 @@ from app.models.research import ResearchActivity, ResearchJob
 from app.services.market_data.ingestion_runner import run_yahoo_ingestion
 from app.services.strategy_search import persist_search_hits, run_deep_search
 
+# Nasdaq micro + e-mini always included (even if SEARCH_SYMBOLS omits them).
+NASDAQ_SYMBOLS = ("MNQ", "NQ")
+DEFAULT_SEARCH_SYMBOLS = ("MNQ", "NQ", "MES", "ES")
+
+
+def resolve_search_symbols() -> tuple[str, ...]:
+    settings = get_settings()
+    raw = getattr(settings, "search_symbols", None) or ",".join(DEFAULT_SEARCH_SYMBOLS)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        sym = token.strip().upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            ordered.append(sym)
+    for sym in NASDAQ_SYMBOLS:
+        if sym not in seen:
+            ordered.insert(0, sym)
+            seen.add(sym)
+    return tuple(ordered)
+
 
 def _search_symbols() -> tuple[str, ...]:
-    settings = get_settings()
-    raw = getattr(settings, "search_symbols", "MES,MNQ,ES,NQ") or "MES,MNQ,ES,NQ"
-    return tuple(s.strip().upper() for s in raw.split(",") if s.strip())
+    return resolve_search_symbols()
 
 
 def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset:

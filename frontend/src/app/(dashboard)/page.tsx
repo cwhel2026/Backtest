@@ -12,6 +12,7 @@ type AutopilotStatus = {
   profitable_candidates: LeaderboardEntry[];
   recent_activity: { headline: string; detail: string; created_at: string }[];
   cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
+  search_symbols: string[];
 };
 
 export default function HomePage() {
@@ -59,6 +60,9 @@ export default function HomePage() {
       <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
         <p className="text-sm leading-relaxed text-zinc-200">{status?.message}</p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+          <span className="rounded-full border border-violet-900/50 bg-violet-950/30 px-2 py-1 text-violet-200/90">
+            Markets: {(status?.search_symbols ?? ["MNQ", "NQ", "MES", "ES"]).join(" · ")}
+          </span>
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
           <span className="rounded-full border border-zinc-700 px-2 py-1">
             AI: {status?.ai_configured ? "OpenAI" : "rules"}
@@ -93,7 +97,7 @@ export default function HomePage() {
         {!candidates.length ? (
           <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
             No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests many
-            stop/target variants on MES &amp; MNQ.
+            combos across Nasdaq (MNQ, NQ) and S&amp;P (MES, ES).
           </div>
         ) : (
           <ul className="mt-4 space-y-4">

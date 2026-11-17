@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     autonomous_forward_sim: bool = True
     search_budget_per_symbol: int = Field(default=120, validation_alias="SEARCH_BUDGET_PER_SYMBOL")
     search_history_days: int = Field(default=35, validation_alias="SEARCH_HISTORY_DAYS")
-    search_symbols: str = Field(default="MES,MNQ,ES,NQ", validation_alias="SEARCH_SYMBOLS")
+    search_symbols: str = Field(default="MNQ,NQ,MES,ES", validation_alias="SEARCH_SYMBOLS")
 
     api_v1_prefix: str = "/api/v1"
 

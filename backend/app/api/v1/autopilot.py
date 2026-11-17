@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.models.research import ResearchActivity
 from app.models.user import User
 from app.schemas.autopilot import AutopilotRunResponse, AutopilotStatus, CycleStats, LeaderboardEntry
-from app.services.autonomous_cycle import run_autonomous_prop_cycle
+from app.services.autonomous_cycle import resolve_search_symbols, run_autonomous_prop_cycle
 from app.services.leaderboard import leaderboard_entries_async
 from app.worker.tasks import autonomous_prop_cycle
 
@@ -49,9 +49,10 @@ async def autopilot_status(
     return AutopilotStatus(
         hourly_enabled=settings.autonomous_hourly_enabled,
         ai_configured=settings.ai_configured,
+        search_symbols=list(resolve_search_symbols()),
         message=(
-            "Deep search: 120+ random combos per symbol (ORB/EMA/VWAP grids), 35 days of 5m data, "
-            "walk-forward validation, then only OOS-profitable strategies are saved."
+            "Deep search on S&P + Nasdaq (MES/MNQ/NQ/ES by default): 120+ combos per symbol, "
+            "35 days of 5m data, walk-forward validation, OOS-profitable only."
         ),
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],
         recent_activity=recent,

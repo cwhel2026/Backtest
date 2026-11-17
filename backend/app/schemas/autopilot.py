@@ -25,6 +25,7 @@ class CycleStats(BaseModel):
 class AutopilotStatus(BaseModel):
     hourly_enabled: bool
     ai_configured: bool
+    search_symbols: list[str] = Field(default_factory=list)
     message: str
     profitable_candidates: list[LeaderboardEntry] = Field(default_factory=list)
     recent_activity: list[dict] = Field(default_factory=list)
