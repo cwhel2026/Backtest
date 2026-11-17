@@ -159,12 +159,12 @@ export default function HomePage() {
         </button>
         {searching ? (
           <p className="mt-3 text-sm text-amber-100">
-            A search is already in progress on the server. You do not have to press the button for that — the
-            hourly autopilot or an earlier run started it. Current step: {status?.background_search?.message}
+            A search is already in progress on the server. Current step: {status?.background_search?.message}
           </p>
-        ) : null}
-        {status?.background_search?.error ? (
-          <p className="mt-3 text-sm text-red-300">{status.background_search.error}</p>
+        ) : status?.background_search?.status === "failed" ? (
+          <p className="mt-3 text-sm text-amber-100">
+            {status.background_search.error || "The last search stopped."} Press the green button to start a new one.
+          </p>
         ) : null}
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
       </section>

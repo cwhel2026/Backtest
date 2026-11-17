@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,11 +74,12 @@ async def autopilot_status(
     ).scalar_one_or_none()
     background_search = None
     if latest_job:
+        raw_status = latest_job.status
         background_search = BackgroundSearchStatus(
             job_id=str(latest_job.id),
-            status=latest_job.status.value,
-            message=latest_job.message,
-            progress_pct=latest_job.progress_pct,
+            status=raw_status.value if hasattr(raw_status, "value") else str(raw_status),
+            message=latest_job.message or "",
+            progress_pct=latest_job.progress_pct or 0,
             started_at=latest_job.started_at.isoformat() if latest_job.started_at else None,
             error=latest_job.error,
         )
@@ -128,7 +129,6 @@ async def prop_leaderboard(
 
 @router.post("/run", response_model=AutopilotRunResponse)
 async def run_autopilot_now(
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     restart: bool = Query(False),
@@ -158,13 +158,19 @@ async def run_autopilot_now(
         )
 
     job_id = create_prop_search_job(user.email)
-    # Run inside this API process as well as Celery. Only the first claim executes,
-    # so a missing worker cannot leave the search stuck on "queued" with a blank page.
-    background_tasks.add_task(run_prop_search_job, job_id)
-    mode = "server"
+    # Keep the heavy search off the web process. Running it inline was stalling
+    # every other request and the proxy answered "Internal Server Error".
     try:
         run_prop_search_job.delay(job_id)
         mode = "celery"
     except Exception:
-        mode = "inline"
+        import threading
+
+        threading.Thread(
+            target=run_prop_search_job,
+            args=(job_id,),
+            daemon=True,
+            name="prop-search",
+        ).start()
+        mode = "thread"
     return AutopilotRunResponse(job_id=job_id, status="queued", mode=mode)

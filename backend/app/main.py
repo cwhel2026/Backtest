@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
@@ -35,6 +36,11 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok", "app": settings.app_name, "environment": settings.environment}
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled_api_error", error=str(exc))
+        return JSONResponse(status_code=500, content={"detail": "Server error. Press Run prop search again in a few seconds."})
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     return app
