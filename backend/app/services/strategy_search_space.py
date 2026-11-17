@@ -336,6 +336,79 @@ def _sweep_discount_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[s
         yield _with_exits(base, stop, target)
 
 
+def _sweep_fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, gap, window, (stop, target) in product((8, 12), (2, 4), (2, 3), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_fvg",
+            {
+                "type": "confluence",
+                "window_bars": window,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": 2},
+                    {"type": "fair_value_gap", "min_gap_ticks": gap, "max_age_bars": 36, "side": "both"},
+                ],
+            },
+            f"{symbol} sweep+FVG {lookback}/{gap}t w{window}",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _sweep_ob_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, disp, (stop, target) in product((8, 12), (10, 14), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_ob",
+            {
+                "type": "confluence",
+                "window_bars": 3,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": 2},
+                    {"type": "order_block_retest", "displacement_ticks": disp, "max_age_bars": 48, "side": "both"},
+                ],
+            },
+            f"{symbol} sweep+OB {lookback}/{disp}t",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _orb_pull_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for minutes, (fast, slow), (stop, target) in product((15, 20), ((8, 21), (9, 26)), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "orb_pull",
+            {
+                "type": "confluence",
+                "window_bars": 4,
+                "all": [
+                    {"type": "opening_range_breakout", "range_minutes": minutes, "side": "both"},
+                    {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+                ],
+            },
+            f"{symbol} ORB+pull {minutes}m {fast}/{slow}",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:30",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
 def _intraday_1m_specs(symbol: str) -> Iterator[dict[str, Any]]:
     """Tighter families on 1m for scalping-style search."""
     for builder in (
@@ -346,6 +419,8 @@ def _intraday_1m_specs(symbol: str) -> Iterator[dict[str, Any]]:
         _killzone_fvg_specs,
         _orb_vwap_specs,
         _atr_pullback_specs,
+        _sweep_fvg_specs,
+        _sweep_ob_specs,
     ):
         for spec in builder(symbol, "1m"):
             yield spec
@@ -369,6 +444,9 @@ FAMILY_BUILDERS = {
     "killzone_fvg": _killzone_fvg_specs,
     "atr_pullback": _atr_pullback_specs,
     "sweep_discount": _sweep_discount_specs,
+    "sweep_fvg": _sweep_fvg_specs,
+    "sweep_ob": _sweep_ob_specs,
+    "orb_pull": _orb_pull_specs,
 }
 
 

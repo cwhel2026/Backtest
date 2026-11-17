@@ -118,6 +118,41 @@ LIBRARY: list[dict] = [
             "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
         },
     },
+    {
+        "name": "MNQ 5m Sweep + FVG",
+        "symbol": "MNQ",
+        "category": "sweep_fvg",
+        "timeframe": "5m",
+        "hypothesis": "Liquidity sweep and FVG retest must agree within 3 bars during NY morning.",
+        "spec": {
+            "name": "MNQ 5m Sweep + FVG",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "sweep_fvg",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {
+                "type": "confluence",
+                "window_bars": 3,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": 12, "sweep_ticks": 2},
+                    {"type": "fair_value_gap", "min_gap_ticks": 4, "max_age_bars": 36, "side": "both"},
+                ],
+            },
+            "filters": {
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "max_trades_per_day": 2,
+            },
+            "exit": {
+                "stop_ticks": 12,
+                "target_ticks": 20,
+                "breakeven_r": 1.0,
+                "max_bars": 16,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
 ]
 
 

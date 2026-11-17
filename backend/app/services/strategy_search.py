@@ -11,6 +11,7 @@ _BT_SEARCH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bt-searc
 
 from app.backtest.bars import load_bars
 from app.backtest.engine import BacktestAssumptions, run_backtest
+from app.backtest.robustness import evaluate_robustness
 from app.core.config import get_settings
 from app.models.backtest import BacktestRun
 from app.models.instrument import Instrument
@@ -115,6 +116,34 @@ def _run_oos_battery(
     return ok, agg, runs
 
 
+def _apply_robustness(
+    spec: dict,
+    bars: list,
+    instrument: Instrument,
+    dataset_tf: str,
+    full_m: dict,
+) -> tuple[dict | None, int]:
+    settings = get_settings()
+    if not bool(getattr(settings, "search_robustness_enabled", True)):
+        return full_m, 0
+    n_shuffles = int(getattr(settings, "search_robustness_shuffles", 8) or 8)
+    slip = int(getattr(settings, "search_stress_slip_ticks", 2) or 2)
+    min_pass = float(getattr(settings, "search_robustness_min_pass", 0.5) or 0.5)
+    report = evaluate_robustness(
+        spec,
+        bars,
+        instrument,
+        dataset_tf,
+        n_shuffles=n_shuffles,
+        slip_ticks=slip,
+        min_pass=min_pass,
+        seed=abs(hash(spec.get("name") or "spec")) % 10_000,
+    )
+    if not report["passed"]:
+        return None, int(report["backtests"])
+    return {**full_m, **report["metrics"]}, int(report["backtests"])
+
+
 @dataclass
 class SearchHit:
     spec: dict
@@ -124,6 +153,7 @@ class SearchHit:
     score: float
     origin: str = "deep"
     original_metrics: dict | None = field(default=None)
+    robustness: dict | None = field(default=None)
 
 
 def _consider(
@@ -240,6 +270,13 @@ def run_deep_search(
             memory.record(spec, full_m or test_m, outcome="prop_reject", note="prop screen")
             return
 
+        full_m, extra = _apply_robustness(spec, bars, instrument, tf, full_m)
+        evaluated += extra
+        _tick(spec, subphase="robustness")
+        if not full_m:
+            memory.record(spec, test_m, outcome="robust_fail", note="cost/MC/neighborhood")
+            return
+
         memory.record(spec, full_m, outcome="winner", note=origin)
         _consider(
             spec,
@@ -277,6 +314,12 @@ def run_deep_search(
         evaluated += 1
         _tick(rev, subphase="reverse_full")
         if full_m and is_profitable_backtest(full_m, reverse=True):
+            full_m, extra = _apply_robustness(rev, bars, instrument, tf, full_m)
+            evaluated += extra
+            _tick(rev, subphase="robustness")
+            if not full_m:
+                memory.record(rev, test_m, outcome="robust_fail", note="reverse robustness")
+                continue
             memory.record(rev, full_m, outcome="winner", note="reverse")
             _consider(
                 rev,
@@ -441,11 +484,38 @@ def _persist_one_hit(
             "oos_metrics": hit.test_metrics,
             "train_metrics": hit.train_metrics,
             "original_metrics": hit.original_metrics,
+            "robustness": {
+                k: hit.full_metrics.get(k)
+                for k in (
+                    "mc_pass_rate",
+                    "mc_median_net",
+                    "neighborhood_pass_rate",
+                    "stress_slip_net",
+                    "robustness_score",
+                )
+                if hit.full_metrics.get(k) is not None
+            },
         },
     )
     session.add(run)
     session.flush()
     execute_backtest_run(session, run.id)
+    if run.status == "completed" and isinstance(run.metrics, dict):
+        extra = {
+            k: hit.full_metrics.get(k)
+            for k in (
+                "mc_pass_rate",
+                "mc_median_net",
+                "neighborhood_pass_rate",
+                "stress_slip_net",
+                "stress_slip_pf",
+                "robustness_score",
+            )
+            if hit.full_metrics.get(k) is not None
+        }
+        if extra:
+            run.metrics = {**run.metrics, **extra}
+            session.add(run)
     if run.status == "completed" and hit.origin != "near_miss":
         enroll_strategy(session, strategy, symbol)
     session.commit()

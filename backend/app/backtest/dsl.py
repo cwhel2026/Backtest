@@ -42,9 +42,18 @@ ENTRY_TYPES = frozenset(
         "order_block_retest",
         "premium_discount",
         "mtf_ema_pullback",
+        "confluence",
     }
 )
+PRIMITIVE_ENTRY_TYPES = frozenset(t for t in ENTRY_TYPES if t != "confluence")
 SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
+
+
+def confluence_legs(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = entry.get("all") if entry.get("all") is not None else entry.get("legs")
+    if not isinstance(raw, list):
+        return []
+    return [leg for leg in raw if isinstance(leg, dict)]
 
 
 def validate_spec(spec: dict[str, Any]) -> list[str]:
@@ -59,6 +68,14 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         errors.append("entry.type required")
     elif entry.get("type") not in ENTRY_TYPES:
         errors.append(f"entry.type must be one of {sorted(ENTRY_TYPES)}")
+    elif entry.get("type") == "confluence":
+        legs = confluence_legs(entry)
+        if not (2 <= len(legs) <= 3):
+            errors.append("confluence entry.all must contain 2 or 3 primitive setups")
+        for i, leg in enumerate(legs):
+            lt = leg.get("type")
+            if lt not in PRIMITIVE_ENTRY_TYPES:
+                errors.append(f"confluence leg {i} type must be a primitive entry, not {lt!r}")
     exit_spec = spec.get("exit") or {}
     if "stop_ticks" not in exit_spec or "target_ticks" not in exit_spec:
         errors.append("exit.stop_ticks and exit.target_ticks required")
@@ -116,6 +133,7 @@ class SignalContext:
     htf_slow_ltf: list[Decimal | None] | None = None
     atr: list[Decimal | None] | None = None
     filter_htf_ema: list[Decimal | None] | None = None
+    leg_contexts: list["SignalContext"] | None = None
 
 
 def build_signal_context(
@@ -175,6 +193,13 @@ def build_signal_context(
         closes = [b.close for b in bars]
         ctx.fast_e = ema_series(closes, fast)
         ctx.slow_e = ema_series(closes, slow)
+    elif entry_type == "confluence":
+        ctx.leg_contexts = []
+        for leg in confluence_legs(entry):
+            leg_spec = {**spec, "entry": {**leg, "invert": False}, "filters": {}}
+            ctx.leg_contexts.append(
+                build_signal_context(leg_spec, bars, session_keys, instrument_tick=instrument_tick)
+            )
 
     filters = spec.get("filters") or {}
     exit_spec = spec.get("exit") or {}
@@ -526,5 +551,31 @@ def signal_at_bar(
         if hf[i] < hs[i] and bar.low <= ema_px <= bar.high and bar.close < ema_px:
             return pack("short", "mtf_pullback_short")
         return None
+
+    if entry_type == "confluence":
+        legs = confluence_legs(entry)
+        window = max(0, int(entry.get("window_bars", 2)))
+        leg_ctxs = ctx.leg_contexts or []
+        if len(legs) < 2 or len(leg_ctxs) != len(legs):
+            return None
+        directions: list[str] = []
+        reasons: list[str] = []
+        for leg, lctx in zip(legs, leg_ctxs, strict=True):
+            found: EntrySignal | None = None
+            for lag in range(window + 1):
+                j = i - lag
+                if j < 0:
+                    break
+                lspec = {**spec, "entry": {**leg, "invert": False}, "filters": {}}
+                found = signal_at_bar(lspec, bars, j, session_keys, tick, lctx)
+                if found:
+                    break
+            if not found:
+                return None
+            directions.append(found.direction)
+            reasons.append(found.reason)
+        if len(set(directions)) != 1:
+            return None
+        return pack(directions[0], "conf_" + "+".join(reasons))
 
     raise ValueError(f"Unsupported entry.type {entry_type}")

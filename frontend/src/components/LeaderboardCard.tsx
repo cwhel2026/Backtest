@@ -19,6 +19,7 @@ export type LeaderboardEntry = {
     expectancy_usd?: number | null;
     avg_win_usd?: number | null;
     avg_loss_usd?: number | null;
+    robustness_pct?: number | null;
   };
 };
 
@@ -94,6 +95,11 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
         <Metric label="Expectancy / trade" value={fmtUsd(m.expectancy_usd)} positive={(m.expectancy_usd ?? 0) > 0} />
         <Metric label="Avg win" value={fmtUsd(m.avg_win_usd)} positive />
         <Metric label="Avg loss" value={m.avg_loss_usd != null ? fmtUsd(-Math.abs(m.avg_loss_usd)) : "—"} positive={false} />
+        <Metric
+          label="Robust MC"
+          value={m.robustness_pct != null ? `${m.robustness_pct}%` : "—"}
+          positive={(m.robustness_pct ?? 0) >= 50}
+        />
       </dl>
     </li>
   );

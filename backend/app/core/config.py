@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     search_1m_budget_per_symbol: int = Field(default=72, validation_alias="SEARCH_1M_BUDGET_PER_SYMBOL")
     search_1m_history_days: int = Field(default=7, validation_alias="SEARCH_1M_HISTORY_DAYS")
     search_prefer_ibkr: bool = Field(default=False, validation_alias="SEARCH_PREFER_IBKR")
+    search_robustness_enabled: bool = Field(default=True, validation_alias="SEARCH_ROBUSTNESS_ENABLED")
+    search_robustness_shuffles: int = Field(default=8, validation_alias="SEARCH_ROBUSTNESS_SHUFFLES")
+    search_stress_slip_ticks: int = Field(default=2, validation_alias="SEARCH_STRESS_SLIP_TICKS")
+    search_robustness_min_pass: float = Field(default=0.5, validation_alias="SEARCH_ROBUSTNESS_MIN_PASS")
     paper_starting_equity: float = Field(default=100_000, validation_alias="PAPER_STARTING_EQUITY")
     paper_daily_loss: float = Field(default=2_000, validation_alias="PAPER_DAILY_LOSS")
     paper_trailing_dd: float = Field(default=3_000, validation_alias="PAPER_TRAILING_DD")
@@ -117,6 +121,8 @@ class Settings(BaseSettings):
         "search_ai_specs_per_round",
         "search_1m_budget_per_symbol",
         "search_1m_history_days",
+        "search_robustness_shuffles",
+        "search_stress_slip_ticks",
         mode="before",
     )
     @classmethod
