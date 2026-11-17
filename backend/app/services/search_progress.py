@@ -25,6 +25,9 @@ SEARCH_FAMILY_LABELS = (
     "Killzone FVG",
     "ATR pull",
     "Sweep fade",
+    "Sweep+FVG",
+    "Sweep+OB",
+    "ORB+pull",
 )
 
 _ENTRY_FAMILY = {
@@ -41,6 +44,7 @@ _ENTRY_FAMILY = {
     "order_block_retest": "Order block",
     "premium_discount": "Premium / discount",
     "mtf_ema_pullback": "MTF pull",
+    "confluence": "Confluence",
 }
 
 
@@ -49,6 +53,9 @@ _CATEGORY_FAMILY = {
     "killzone_fvg": "Killzone FVG",
     "atr_pullback": "ATR pull",
     "sweep_discount": "Sweep fade",
+    "sweep_fvg": "Sweep+FVG",
+    "sweep_ob": "Sweep+OB",
+    "orb_pull": "ORB+pull",
 }
 
 

@@ -43,7 +43,8 @@ def rank_score(metrics: dict[str, Any] | None) -> float:
         return -1e9
     # Higher PF and net, more trades (diminishing), penalize drawdown
     wr = float(metrics.get("win_rate") or 0)
-    return pf * 1000 + net * 0.5 + min(trades, 80) * 2 - dd * 0.1 + wr * 600
+    robust = float(metrics.get("mc_pass_rate") or 0)
+    return pf * 1000 + net * 0.5 + min(trades, 80) * 2 - dd * 0.1 + wr * 600 + robust * 250
 
 
 def prop_readiness_score(metrics: dict[str, Any] | None) -> int:
@@ -85,5 +86,8 @@ def format_metric_display(metrics: dict[str, Any] | None) -> dict[str, str | int
         else None,
         "avg_loss_usd": round(float(metrics.get("average_loss") or 0), 2)
         if metrics.get("average_loss") is not None
+        else None,
+        "robustness_pct": round(float(metrics["mc_pass_rate"]) * 100, 0)
+        if metrics.get("mc_pass_rate") is not None
         else None,
     }
