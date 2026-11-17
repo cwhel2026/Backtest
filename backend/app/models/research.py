@@ -1,11 +1,12 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.enums import pg_enum
 from app.models.enums import ResearchJobKind, ResearchJobStatus
 
 
@@ -13,9 +14,9 @@ class ResearchJob(Base):
     __tablename__ = "research_jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    kind: Mapped[ResearchJobKind] = mapped_column(Enum(ResearchJobKind, name="research_job_kind"), nullable=False)
+    kind: Mapped[ResearchJobKind] = mapped_column(pg_enum(ResearchJobKind, "research_job_kind"), nullable=False)
     status: Mapped[ResearchJobStatus] = mapped_column(
-        Enum(ResearchJobStatus, name="research_job_status"),
+        pg_enum(ResearchJobStatus, "research_job_status"),
         default=ResearchJobStatus.QUEUED,
         nullable=False,
     )

@@ -2,11 +2,12 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.enums import pg_enum
 from app.models.enums import DataProviderStatus, DatasetValidationStatus
 
 
@@ -17,7 +18,7 @@ class DataProvider(Base):
     slug: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[DataProviderStatus] = mapped_column(
-        Enum(DataProviderStatus, name="data_provider_status"),
+        pg_enum(DataProviderStatus, "data_provider_status"),
         default=DataProviderStatus.NOT_CONFIGURED,
         nullable=False,
     )
@@ -41,7 +42,7 @@ class HistoricalDataset(Base):
     source_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     version_tag: Mapped[str] = mapped_column(String(64), default="v0", nullable=False)
     validation_status: Mapped[DatasetValidationStatus] = mapped_column(
-        Enum(DatasetValidationStatus, name="dataset_validation_status"),
+        pg_enum(DatasetValidationStatus, "dataset_validation_status"),
         default=DatasetValidationStatus.PENDING,
         nullable=False,
     )
