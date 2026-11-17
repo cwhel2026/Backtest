@@ -1,5 +1,6 @@
 """Backtest engine tests use explicitly synthetic OHLCV — not real market performance."""
 
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -128,3 +129,58 @@ def test_backtest_reproducible_trade_count():
     r2 = run_backtest(spec, bars, _mes(), "5m", BacktestAssumptions(slippage_ticks_per_side=1))
     assert len(r1.trades) == len(r2.trades)
     assert r1.metrics["trade_count"] == r2.metrics["trade_count"]
+
+
+def _synthetic_orb_sized_bars(num_days: int = 45) -> list[Bar]:
+    """~one RTH session per day at 5m (~78 bars/day) to stress the signal loop."""
+    start = datetime(2024, 6, 3, 13, 30, tzinfo=UTC)
+    bars: list[Bar] = []
+    price = Decimal("18000")
+    for day in range(num_days):
+        day_start = start + timedelta(days=day)
+        for j in range(78):
+            ts = day_start + timedelta(minutes=5 * j)
+            drift = Decimal(str((day * 78 + j) * 0.02))
+            o = price + drift
+            c = o + Decimal("0.25")
+            bars.append(
+                Bar(
+                    ts=ts,
+                    open=o,
+                    high=c + Decimal("2"),
+                    low=o - Decimal("1"),
+                    close=c,
+                    volume=500,
+                )
+            )
+    return bars
+
+
+def test_orb_backtest_scales_linearly_with_bars():
+    """Regression: precomputed ORB map must not revisit every bar on every index."""
+    spec = {
+        "name": "MNQ ORB",
+        "instrument_symbol": "MNQ",
+        "timeframe": "5m",
+        "category": "opening_range",
+        "session": {"allowed": ["RTH"]},
+        "entry": {"type": "opening_range_breakout", "range_minutes": 30, "side": "both"},
+        "exit": {"stop_ticks": 40, "target_ticks": 80, "session_end_flatten": True},
+        "risk": {"dollar_risk_per_trade": 75, "max_contracts": 1},
+    }
+    inst = Instrument(
+        symbol="MNQ",
+        name="Micro Nasdaq",
+        asset_class=AssetClass.EQUITY_INDEX,
+        tick_size=Decimal("0.25"),
+        tick_value=Decimal("0.50"),
+        multiplier=Decimal("2"),
+        trading_hours={},
+        default_commission_per_side=Decimal("0.62"),
+    )
+    bars = _synthetic_orb_sized_bars(45)
+    t0 = time.monotonic()
+    result = run_backtest(spec, bars, inst, "5m", BacktestAssumptions())
+    elapsed = time.monotonic() - t0
+    assert elapsed < 8.0, f"ORB backtest took {elapsed:.1f}s — likely O(n²) signal path"
+    assert "trade_count" in result.metrics
