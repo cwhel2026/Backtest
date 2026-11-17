@@ -66,15 +66,13 @@ export default function HomePage() {
     setNote(null);
     try {
       const res = await apiFetch<{ status: string; mode: string; job_id: string | null }>(
-        "/api/v1/autopilot/run",
+        `/api/v1/autopilot/run${searching ? "?restart=true" : ""}`,
         { method: "POST" }
       );
       if (res.mode === "already_active") {
-        setNote("Search already running on the server — you can leave this page; results will appear when it finishes.");
+        setNote("One search is still scoring. Use Restart search if it has stopped updating.");
       } else {
-        setNote(
-          "Search queued on the server (5–8 min). You can close the app or switch tabs — hourly research also runs in the background."
-        );
+        setNote("Search started on the server. The status line below updates as each market is scored. You can leave this page.");
       }
       setTimeout(refresh, 5000);
     } catch (e) {
@@ -157,8 +155,14 @@ export default function HomePage() {
           onClick={runNow}
           className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 disabled:opacity-50 md:w-auto"
         >
-          {running ? "Searching…" : "Run prop search"}
+          {running ? "Starting…" : searching ? "Restart search" : "Run prop search"}
         </button>
+        {searching ? (
+          <p className="mt-3 text-sm text-amber-100">
+            A search is already in progress on the server. You do not have to press the button for that — the
+            hourly autopilot or an earlier run started it. Current step: {status?.background_search?.message}
+          </p>
+        ) : null}
         {status?.background_search?.error ? (
           <p className="mt-3 text-sm text-red-300">{status.background_search.error}</p>
         ) : null}
