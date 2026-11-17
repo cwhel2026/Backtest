@@ -49,9 +49,14 @@ async def _seed_admin_user(session: AsyncSession) -> None:
     settings = get_settings()
     email = settings.initial_admin_email.strip().lower()
     result = await session.execute(select(User).where(func.lower(User.email) == email))
-    user = result.scalar_one_or_none()
+    users = result.scalars().all()
     hashed = hash_password(settings.initial_admin_password)
+    if len(users) > 1:
+        for extra in users[1:]:
+            await session.delete(extra)
+    user = users[0] if users else None
     if user:
+        user.email = email
         user.hashed_password = hashed
         user.is_active = True
         user.is_superuser = True
