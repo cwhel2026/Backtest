@@ -224,8 +224,9 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, DD under ~$3.5k. Reverse fades can keep a slightly
-          lower PF if win rate actually inverted out of sample.
+          Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, win rate ≥ 42%, DD under ~$3.5k. Expectancy is net ÷
+          trades (can be positive even with a low hit rate if winners are huge). Reverse fades use separate
+          rules.
         </p>
         {searching ? (
           <p className="mt-4 text-sm text-amber-200/90">
