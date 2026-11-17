@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     )
 
     databento_api_key: str = ""
+    finzdata_api_key: str = Field(default="", validation_alias=AliasChoices("FINZDATA_API_KEY", "finzdata_api_key"))
     ibkr_host: str = Field(default="", validation_alias=AliasChoices("IBKR_HOST", "ibkr_host"))
     ibkr_port: int = Field(default=7497, validation_alias=AliasChoices("IBKR_PORT", "ibkr_port"))
     ibkr_client_id: int = Field(default=11, validation_alias=AliasChoices("IBKR_CLIENT_ID", "ibkr_client_id"))
@@ -160,6 +161,10 @@ class Settings(BaseSettings):
     @property
     def databento_configured(self) -> bool:
         return bool(self.databento_api_key.strip())
+
+    @property
+    def finzdata_configured(self) -> bool:
+        return bool(self.finzdata_api_key.strip())
 
     @property
     def ai_configured(self) -> bool:

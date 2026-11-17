@@ -14,6 +14,7 @@ from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
+    run_finzdata_ingestion,
     run_ibkr_ingestion,
     run_yahoo_ingestion,
 )
@@ -68,7 +69,7 @@ def _ingest_search_data(
     *,
     timeframe: str = "5m",
 ) -> tuple[HistoricalDataset, str]:
-    """IBKR (if reachable) → Databento → Yahoo."""
+    """IBKR (if reachable) → FinzData → Databento → Yahoo."""
     settings = get_settings()
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
@@ -81,6 +82,11 @@ def _ingest_search_data(
     if settings.search_prefer_ibkr and settings.ibkr_configured:
         try:
             return run_ibkr_ingestion(session, payload), f"IBKR {timeframe}"
+        except Exception:
+            session.rollback()
+    if settings.finzdata_configured:
+        try:
+            return run_finzdata_ingestion(session, payload), f"FinzData {timeframe}"
         except Exception:
             session.rollback()
     if settings.databento_configured:

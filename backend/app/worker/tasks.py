@@ -20,6 +20,7 @@ from app.services.autonomous_cycle import (
 )
 from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
+    run_finzdata_ingestion,
     run_ibkr_ingestion,
     run_yahoo_ingestion,
 )
@@ -88,7 +89,11 @@ def run_data_ingestion(job_id: str) -> None:
             _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
             return
 
-        if provider not in ("yahoo", "databento", "ibkr"):
+        if provider == "finzdata" and not settings_ref.finzdata_configured:
+            _fail_ingestion(db, job, "FINZDATA_API_KEY not configured", "Ingestion failed: FinzData not configured")
+            return
+
+        if provider not in ("yahoo", "databento", "ibkr", "finzdata"):
             _fail_ingestion(
                 db,
                 job,
@@ -101,7 +106,12 @@ def run_data_ingestion(job_id: str) -> None:
             _fail_ingestion(db, job, "IBKR_HOST not configured", "Ingestion failed: IBKR not configured")
             return
 
-        label = {"yahoo": "Yahoo Finance", "databento": "Databento", "ibkr": "IBKR Gateway"}[provider]
+        label = {
+            "yahoo": "Yahoo Finance",
+            "databento": "Databento",
+            "ibkr": "IBKR Gateway",
+            "finzdata": "FinzData",
+        }[provider]
         job.message = f"Downloading OHLCV from {label}"
         job.progress_pct = 10
         db.commit()
@@ -111,6 +121,8 @@ def run_data_ingestion(job_id: str) -> None:
                 dataset = run_yahoo_ingestion(db, job.payload)
             elif provider == "ibkr":
                 dataset = run_ibkr_ingestion(db, job.payload)
+            elif provider == "finzdata":
+                dataset = run_finzdata_ingestion(db, job.payload)
             else:
                 dataset = run_databento_ingestion(db, job.payload)
             db.commit()

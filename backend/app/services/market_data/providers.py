@@ -119,6 +119,45 @@ class YahooFinanceProvider(MarketDataProvider):
         }
 
 
+class FinzDataProvider(MarketDataProvider):
+    slug = "finzdata"
+    display_name = "FinzData (historical futures)"
+
+    async def health(self) -> ProviderHealth:
+        settings = get_settings()
+        if not settings.finzdata_configured:
+            return ProviderHealth(
+                slug=self.slug,
+                display_name=self.display_name,
+                state=ProviderConnectionState.NOT_CONFIGURED,
+                message="Set FINZDATA_API_KEY. Free plan is daily bars; 1m/5m search needs a paid FinzData market.",
+                capabilities={"ohlcv": True, "1m": True, "5m": True, "cost": "free_daily_or_paid_intraday"},
+            )
+        return ProviderHealth(
+            slug=self.slug,
+            display_name=self.display_name,
+            state=ProviderConnectionState.CONFIGURED,
+            message="API key present. Search tries FinzData 1m/5m then falls back to Yahoo if the plan is daily-only.",
+            capabilities={"ohlcv": True, "1m": True, "5m": True, "continuous": True},
+        )
+
+    async def ingest_historical(
+        self, instrument_symbol: str, timeframe: str, start: datetime, end: datetime
+    ) -> dict:
+        health = await self.health()
+        if health.state == ProviderConnectionState.NOT_CONFIGURED:
+            raise ValueError(health.message)
+        return {
+            "provider": self.slug,
+            "instrument_symbol": instrument_symbol,
+            "timeframe": timeframe,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "queued",
+            "note": "Worker pulls continuous FinzData bars (US Eastern timestamps → UTC).",
+        }
+
+
 class InteractiveBrokersProvider(MarketDataProvider):
     slug = "ibkr"
     display_name = "Interactive Brokers"
@@ -160,6 +199,7 @@ class InteractiveBrokersProvider(MarketDataProvider):
 
 PROVIDER_REGISTRY: dict[str, MarketDataProvider] = {
     YahooFinanceProvider.slug: YahooFinanceProvider(),
+    FinzDataProvider.slug: FinzDataProvider(),
     DatabentoProvider.slug: DatabentoProvider(),
     InteractiveBrokersProvider.slug: InteractiveBrokersProvider(),
 }
