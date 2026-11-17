@@ -20,7 +20,9 @@ export default function LoginPage() {
       setStoredToken(token.access_token);
       router.push("/");
     } catch {
-      setError("Invalid credentials. Use the admin email from .env and your configured password.");
+      setError(
+        "Invalid credentials. Use INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD from Railway (backend), then redeploy backend.",
+      );
     } finally {
       setLoading(false);
     }

@@ -45,14 +45,21 @@ async def _seed_providers(session: AsyncSession) -> None:
 
 
 async def _seed_admin_user(session: AsyncSession) -> None:
+    """Ensure Railway/env admin exists and password matches env (updates on each API boot)."""
     settings = get_settings()
-    result = await session.execute(select(User).limit(1))
-    if result.scalar_one_or_none():
+    email = settings.initial_admin_email.strip().lower()
+    result = await session.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    hashed = hash_password(settings.initial_admin_password)
+    if user:
+        user.hashed_password = hashed
+        user.is_active = True
+        user.is_superuser = True
         return
     session.add(
         User(
-            email=settings.initial_admin_email,
-            hashed_password=hash_password(settings.initial_admin_password),
+            email=email,
+            hashed_password=hashed,
             is_superuser=True,
         )
     )
