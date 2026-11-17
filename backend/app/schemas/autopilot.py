@@ -29,6 +29,7 @@ class BackgroundSearchStatus(BaseModel):
     message: str
     progress_pct: int = 0
     started_at: str | None = None
+    error: str | None = None
 
 
 class AutopilotStatus(BaseModel):
@@ -38,6 +39,7 @@ class AutopilotStatus(BaseModel):
     background_search: BackgroundSearchStatus | None = None
     message: str
     profitable_candidates: list[LeaderboardEntry] = Field(default_factory=list)
+    recent_tests: list[LeaderboardEntry] = Field(default_factory=list)
     recent_activity: list[dict] = Field(default_factory=list)
     cycle_stats: CycleStats = Field(default_factory=CycleStats)
 

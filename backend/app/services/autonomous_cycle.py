@@ -55,6 +55,18 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
+def job_is_stale(job: ResearchJob, now: datetime | None = None) -> bool:
+    """Queued with no worker, or running long enough that the process was killed."""
+    now = now or datetime.now(UTC)
+    created = job.created_at if job.created_at.tzinfo else job.created_at.replace(tzinfo=UTC)
+    if job.status == ResearchJobStatus.QUEUED and now - created > timedelta(minutes=3):
+        return True
+    started = job.started_at or created
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return job.status == ResearchJobStatus.RUNNING and now - started > timedelta(minutes=40)
+
+
 def find_active_prop_search_job(session: Session) -> ResearchJob | None:
     return session.execute(
         select(ResearchJob)
@@ -115,16 +127,28 @@ def run_autonomous_prop_cycle(
         session.add(job)
         session.flush()
 
+    job_pk = job.id
+    session.commit()
+
+    def _job() -> ResearchJob:
+        current = session.get(ResearchJob, job_pk)
+        if current is None:
+            raise RuntimeError("Search job disappeared")
+        return current
+
     try:
         datasets: dict[str, HistoricalDataset] = {}
+        warnings: list[str] = []
         for symbol in symbols:
             try:
-                ds = _ingest_yahoo(session, symbol, history_days)
+                with session.begin_nested():
+                    ds = _ingest_yahoo(session, symbol, history_days)
                 session.commit()
                 datasets[symbol] = ds
                 summary["symbols"][symbol] = {"dataset_id": str(ds.id), "row_count": ds.row_count}
             except Exception as exc:
                 session.rollback()
+                warnings.append(f"{symbol}: {exc}")
                 ds = _latest_dataset(session, symbol)
                 if ds:
                     datasets[symbol] = ds
@@ -133,8 +157,12 @@ def run_autonomous_prop_cycle(
                         "row_count": ds.row_count,
                         "warning": str(exc),
                     }
+            job = _job()
+            job.message = f"Loaded {symbol}" + (f" — {warnings[-1]}" if warnings else "")
+            session.commit()
 
-        job.message = f"Deep search ({budget} combos / symbol, walk-forward)"
+        job = _job()
+        job.message = f"Scoring {len(datasets)} markets ({budget} tests each)"
         session.commit()
 
         all_winners: list[str] = []
@@ -165,11 +193,27 @@ def run_autonomous_prop_cycle(
             )
             all_winners.extend(winners)
             summary["backtests"].extend([{"name": w, "symbol": symbol} for w in winners])
+            job = _job()
+            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval} tests so far"
+            job.progress_pct = min(95, int(100 * (list(symbols).index(symbol) + 1) / max(len(symbols), 1)))
+            session.add(
+                ResearchActivity(
+                    headline=f"Searched {symbol}",
+                    detail=job.message,
+                    job_id=job.id,
+                )
+            )
+            session.commit()
 
         summary["search_evaluations"] = total_eval
-        from app.services.paper_book import tick_paper_book
+        try:
+            from app.services.paper_book import tick_paper_book
 
-        summary["paper"] = tick_paper_book(session)
+            summary["paper"] = tick_paper_book(session)
+        except Exception as exc:
+            session.rollback()
+            summary["paper"] = {"error": str(exc)}
+        job = _job()
         job.status = ResearchJobStatus.COMPLETED
         job.progress_pct = 100
         job.completed_at = datetime.now(UTC)
@@ -183,7 +227,11 @@ def run_autonomous_prop_cycle(
             )
         else:
             job.message = "No walk-forward winners this cycle"
-            detail = f"Scored {total_eval}+ combinations — none passed train+OOS prop filters (will retry hourly)"
+            detail = f"Scored {total_eval} tests — none passed the prop screen."
+            if warnings:
+                detail += " Data notes: " + "; ".join(warnings[:3])
+            elif total_eval == 0:
+                detail += " No bars were available to test. Check that Yahoo data can download."
 
         session.add(
             ResearchActivity(
@@ -198,7 +246,7 @@ def run_autonomous_prop_cycle(
         return summary
     except Exception as exc:
         session.rollback()
-        job = session.get(ResearchJob, job.id)
+        job = session.get(ResearchJob, job_pk)
         if job:
             job.status = ResearchJobStatus.FAILED
             job.error = str(exc)

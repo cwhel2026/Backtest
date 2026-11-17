@@ -28,6 +28,7 @@ function fmtUsd(n?: number | null) {
 export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
   const m = row.metrics;
   const reversed = row.origin === "reverse" || row.category.startsWith("reversed_");
+  const nearMiss = row.origin === "near_miss";
   return (
     <li className="rounded-xl border border-zinc-800 bg-gradient-to-br from-[#1a1d26] to-[#14171e] p-4 shadow-lg">
       <div className="flex items-start justify-between gap-3">
@@ -35,6 +36,7 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           <p className="text-xs font-medium uppercase tracking-wide text-emerald-500/90">
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
             {reversed ? " · reverse fade" : ""}
+            {nearMiss ? " · did not pass prop screen" : ""}
           </p>
           <Link
             href={`/backtests/${row.run_id}`}

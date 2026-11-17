@@ -11,6 +11,7 @@ type BackgroundSearch = {
   message: string;
   progress_pct: number;
   started_at: string | null;
+  error?: string | null;
 };
 
 type PaperDesk = {
@@ -31,6 +32,7 @@ type AutopilotStatus = {
   message: string;
   background_search: BackgroundSearch | null;
   profitable_candidates: LeaderboardEntry[];
+  recent_tests: LeaderboardEntry[];
   recent_activity: { headline: string; detail: string; created_at: string }[];
   cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
   search_symbols: string[];
@@ -83,6 +85,9 @@ export default function HomePage() {
   }
 
   const candidates = status?.profitable_candidates ?? [];
+  const latestTests = (status?.recent_tests ?? []).filter((row) => !candidates.some((c) => c.run_id === row.run_id));
+  const searching =
+    status?.background_search?.status === "queued" || status?.background_search?.status === "running";
 
   return (
     <div className="space-y-8">
@@ -124,8 +129,16 @@ export default function HomePage() {
             Markets: {(status?.search_symbols ?? ["MNQ", "NQ", "MES", "ES"]).join(" · ")}
           </span>
           {status?.background_search ? (
-            <span className="rounded-full border border-amber-800/60 bg-amber-950/40 px-2 py-1 text-amber-200/90">
-              {status.background_search.status === "queued" ? "Queued" : "Searching"} on server — safe to leave
+            <span
+              className={`rounded-full border px-2 py-1 ${
+                status.background_search.status === "failed"
+                  ? "border-red-900/70 bg-red-950/40 text-red-200"
+                  : status.background_search.status === "completed"
+                    ? "border-emerald-900/60 bg-emerald-950/30 text-emerald-200"
+                    : "border-amber-800/60 bg-amber-950/40 text-amber-200"
+              }`}
+            >
+              {status.background_search.status}: {status.background_search.message}
             </span>
           ) : null}
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
@@ -146,6 +159,9 @@ export default function HomePage() {
         >
           {running ? "Searching…" : "Run prop search"}
         </button>
+        {status?.background_search?.error ? (
+          <p className="mt-3 text-sm text-red-300">{status.background_search.error}</p>
+        ) : null}
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
       </section>
 
@@ -182,15 +198,38 @@ export default function HomePage() {
           Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, DD under ~$3.5k. Reverse fades can keep a slightly
           lower PF if win rate actually inverted out of sample.
         </p>
+        {searching ? (
+          <p className="mt-4 text-sm text-amber-200/90">
+            Search is running on the server. This list fills as each market finishes — you can leave the page.
+          </p>
+        ) : null}
         {!candidates.length ? (
           <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
-            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests RSI,
-            Donchian, ORB, EMA, VWAP and streak systems on Nasdaq + S&amp;P, then fades any anti-edge
-            (e.g. 8% WR → reverse ~92% WR) if walk-forward still holds.
+            {searching
+              ? "No keepers yet. The search log above updates per market (MNQ, NQ, MES, ES)."
+              : "No prop-ready setups yet. Latest tests below still show what the search scored."}
           </div>
         ) : (
           <ul className="mt-4 space-y-4">
             {candidates.map((r) => (
+              <LeaderboardCard key={r.run_id} row={r} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold text-zinc-100">Latest tests</h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          Includes close calls that did not pass the prop screen, so a finished search is never a blank page.
+        </p>
+        {!latestTests.length ? (
+          <p className="mt-3 text-sm text-zinc-500">
+            {searching ? "Waiting for the first market to finish scoring." : "Nothing saved yet."}
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-4">
+            {latestTests.map((r) => (
               <LeaderboardCard key={r.run_id} row={r} />
             ))}
           </ul>

@@ -284,11 +284,13 @@ def enqueue_prop_search(actor: str) -> tuple[str, str]:
 def run_prop_search_job(job_id: str) -> None:
     with SyncSession() as db:
         job = db.get(ResearchJob, uuid.UUID(job_id))
-        if not job:
+        if not job or job.status != ResearchJobStatus.QUEUED:
             return
-        if job.status in (ResearchJobStatus.COMPLETED, ResearchJobStatus.FAILED):
-            return
+        job.status = ResearchJobStatus.RUNNING
+        job.started_at = datetime.now(UTC)
+        job.message = "Search started on the server"
         actor = (job.payload or {}).get("actor", "autopilot")
+        db.commit()
         run_autonomous_prop_cycle(db, actor=actor, job_id=job_id)
 
 

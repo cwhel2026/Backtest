@@ -106,14 +106,21 @@ def run_deep_search(
     specs = sample_search_specs(symbol, budget, seed=seed)
     evaluated = 0
     leaderboard: list = []
+    closest: list[tuple[float, dict, dict]] = []
     refine_queue: list[dict] = []
     reverse_queue: list[tuple[dict, dict]] = []
+
+    def _remember(spec: dict, metrics: dict | None) -> None:
+        if not metrics or int(metrics.get("trade_count") or 0) < 4:
+            return
+        closest.append((float(metrics.get("total_net_profit") or 0), spec, metrics))
 
     for spec in specs:
         train_m = _metrics_for_spec(spec, train, instrument, tf)
         evaluated += 1
         if not train_m:
             continue
+        _remember(spec, train_m)
         pf = float(train_m.get("profit_factor") or 0)
         net = float(train_m.get("total_net_profit") or 0)
         if pf >= 0.92 or net > 0:
@@ -198,6 +205,26 @@ def run_deep_search(
         if len(hits) >= 8:
             break
 
+    closest.sort(key=lambda row: row[0], reverse=True)
+    near = 0
+    for _net, spec, train_m in closest:
+        if spec["name"] in seen_names:
+            continue
+        seen_names.add(spec["name"])
+        hits.append(
+            SearchHit(
+                spec=spec,
+                train_metrics=train_m,
+                test_metrics=train_m,
+                full_metrics=train_m,
+                score=_net,
+                origin="near_miss",
+            )
+        )
+        near += 1
+        if near >= 2:
+            break
+
     return hits, evaluated
 
 
@@ -214,7 +241,12 @@ def persist_search_hits(
     for hit in hits:
         orig_wr = (hit.original_metrics or {}).get("win_rate") if hit.origin == "reverse" else None
         oos_wr = hit.test_metrics.get("win_rate")
-        if hit.origin == "reverse" and orig_wr is not None:
+        if hit.origin == "near_miss":
+            rationale = (
+                f"Closest {symbol} test this search (did not pass the prop screen). "
+                f"Train net {hit.train_metrics.get('total_net_profit')}."
+            )
+        elif hit.origin == "reverse" and orig_wr is not None:
             rationale = (
                 f"Reverse of anti-edge on {symbol}: original train WR {float(orig_wr):.0%} "
                 f"(implied fade {1 - float(orig_wr):.0%}). OOS WR {float(oos_wr or 0):.0%}, "
@@ -241,7 +273,7 @@ def persist_search_hits(
             reproducibility_id="pending",
             assumptions={"slippage_ticks_per_side": 1},
             parameters={
-                "search": "reverse_anti_edge" if hit.origin == "reverse" else "deep_walk_forward",
+                "search": hit.origin,
                 "origin": hit.origin,
                 "oos_metrics": hit.test_metrics,
                 "train_metrics": hit.train_metrics,
@@ -251,7 +283,7 @@ def persist_search_hits(
         session.add(run)
         session.flush()
         execute_backtest_run(session, run.id)
-        if run.status == "completed":
+        if run.status == "completed" and hit.origin != "near_miss":
             enroll_strategy(session, strategy, symbol)
         session.commit()
         winners.append(strategy.name)
