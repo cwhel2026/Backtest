@@ -15,4 +15,16 @@ def test_sample_covers_new_families():
     assert "rsi_reversion" in types
     assert "donchian_breakout" in types
     assert "consecutive_closes" in types
-    assert set(FAMILY_BUILDERS) >= {"orb", "ema", "vwap", "rsi", "donchian", "streak"}
+    assert set(FAMILY_BUILDERS) >= {
+        "orb",
+        "ema",
+        "ema_pullback",
+        "vwap",
+        "rsi",
+        "donchian",
+        "streak",
+        "fvg",
+        "bollinger",
+        "liquidity",
+    }
+    assert "fair_value_gap" in {s["entry"]["type"] for s in all_search_specs("ES")}

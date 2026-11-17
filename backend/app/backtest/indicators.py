@@ -54,6 +54,29 @@ def rsi_series(values: list[Decimal], period: int = 14) -> list[Decimal | None]:
     return out
 
 
+def bollinger_series(
+    closes: list[Decimal],
+    period: int = 20,
+    std_mult: Decimal = Decimal("2"),
+) -> tuple[list[Decimal | None], list[Decimal | None], list[Decimal | None]]:
+    """Mid, upper, lower bands using population stdev of closes."""
+    n = len(closes)
+    mid: list[Decimal | None] = [None] * n
+    upper: list[Decimal | None] = [None] * n
+    lower: list[Decimal | None] = [None] * n
+    if period <= 0 or n < period:
+        return mid, upper, lower
+    for i in range(period - 1, n):
+        window = closes[i - period + 1 : i + 1]
+        m = sum(window) / Decimal(period)
+        variance = sum((x - m) ** 2 for x in window) / Decimal(period)
+        stdev = variance.sqrt() if variance > 0 else Decimal(0)
+        mid[i] = m
+        upper[i] = m + std_mult * stdev
+        lower[i] = m - std_mult * stdev
+    return mid, upper, lower
+
+
 def session_vwap(bars: list[Bar], session_date_key: list[str]) -> list[Decimal | None]:
     """session_date_key[i] groups bars into session buckets for VWAP."""
     out: list[Decimal | None] = [None] * len(bars)

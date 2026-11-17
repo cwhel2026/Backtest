@@ -62,8 +62,8 @@ def run_backtest(
         warnings.append("Fewer than 30 bars after resample — statistics may be unreliable.")
 
     session_keys = session_keys_rth(bars)
-    signal_ctx = build_signal_context(spec, bars, session_keys)
     tick = instrument.tick_size
+    signal_ctx = build_signal_context(spec, bars, session_keys, instrument_tick=tick)
     commission_side = assumptions.commission_per_side or instrument.default_commission_per_side
     slip = assumptions.slippage_ticks_per_side
     dollar_risk = Decimal(str(spec["risk"].get("dollar_risk_per_trade", 100)))

@@ -12,7 +12,7 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
-from app.services.market_data.ingestion_runner import run_yahoo_ingestion
+from app.services.market_data.ingestion_runner import run_databento_ingestion, run_yahoo_ingestion
 from app.services.search_heartbeat import SearchJobHeartbeat
 from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
@@ -55,6 +55,25 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
         "end": end.isoformat(),
     }
     return run_yahoo_ingestion(session, payload)
+
+
+def _ingest_search_data(session: Session, symbol: str, days: int) -> tuple[HistoricalDataset, str]:
+    """Prefer Databento GLBX when configured; fall back to Yahoo 5m."""
+    settings = get_settings()
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days)
+    payload = {
+        "instrument_symbol": symbol,
+        "timeframe": "5m",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+    if settings.databento_configured:
+        try:
+            return run_databento_ingestion(session, payload), "Databento GLBX 1m→5m"
+        except Exception:
+            session.rollback()
+    return run_yahoo_ingestion(session, payload), "Yahoo Finance 5m"
 
 
 def _aware(value: datetime) -> datetime:
@@ -181,14 +200,18 @@ def run_autonomous_prop_cycle(
                 current_symbol=symbol,
                 symbol_index=idx,
             )
-            job.message = f"Downloading Yahoo 5m bars for {symbol} ({history_days} days)"
+            job.message = f"Downloading bars for {symbol} ({history_days} days)"
             session.commit()
             try:
                 with session.begin_nested():
-                    ds = _ingest_yahoo(session, symbol, history_days)
+                    ds, provider_label = _ingest_search_data(session, symbol, history_days)
                 session.commit()
                 datasets[symbol] = ds
-                summary["symbols"][symbol] = {"dataset_id": str(ds.id), "row_count": ds.row_count}
+                summary["symbols"][symbol] = {
+                    "dataset_id": str(ds.id),
+                    "row_count": ds.row_count,
+                    "provider": provider_label,
+                }
             except Exception as exc:
                 session.rollback()
                 warnings.append(f"{symbol}: {exc}")
@@ -212,7 +235,7 @@ def run_autonomous_prop_cycle(
         job = _job()
         merge_search_progress(job, phase="scoring", current_symbol=None)
         ai_bit = " + AI mutation rounds" if get_settings().ai_configured else ""
-        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 6 families{ai_bit})"
+        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 10 families{ai_bit})"
         session.commit()
 
         all_winners: list[str] = []

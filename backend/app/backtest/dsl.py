@@ -7,7 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.backtest.bars import Bar
-from app.backtest.indicators import ema_series, rsi_series, session_vwap
+from app.backtest.fvg import discover_fvg_zones, fvg_retest_signal
+from app.backtest.indicators import bollinger_series, ema_series, rsi_series, session_vwap
 
 
 @dataclass
@@ -23,10 +24,14 @@ ENTRY_TYPES = frozenset(
     {
         "opening_range_breakout",
         "ema_crossover",
+        "ema_pullback",
         "vwap_reversion",
         "rsi_reversion",
         "donchian_breakout",
         "consecutive_closes",
+        "fair_value_gap",
+        "bollinger_reversion",
+        "liquidity_sweep",
     }
 )
 SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
@@ -92,12 +97,17 @@ class SignalContext:
     slow_e: list[Decimal | None] | None = None
     vwap: list[Decimal | None] | None = None
     rsi: list[Decimal | None] | None = None
+    fvg_zones: list | None = None
+    bb_upper: list[Decimal | None] | None = None
+    bb_lower: list[Decimal | None] | None = None
 
 
 def build_signal_context(
     spec: dict,
     bars: list[Bar],
     session_keys: list[str] | None = None,
+    *,
+    instrument_tick: Decimal | None = None,
 ) -> SignalContext:
     """Compute indicators once per backtest (avoids O(n²) prefix recomputation)."""
     if session_keys is None:
@@ -108,12 +118,23 @@ def build_signal_context(
     if entry_type == "opening_range_breakout":
         range_minutes = int(entry.get("range_minutes", 15))
         ctx.or_map = opening_range_bounds(bars, session_keys, range_minutes)
-    elif entry_type == "ema_crossover":
+    elif entry_type in ("ema_crossover", "ema_pullback"):
         closes = [b.close for b in bars]
         fast = int(entry.get("fast_period", 9))
         slow = int(entry.get("slow_period", 21))
         ctx.fast_e = ema_series(closes, fast)
         ctx.slow_e = ema_series(closes, slow)
+    elif entry_type == "fair_value_gap":
+        min_gap = int(entry.get("min_gap_ticks", 4))
+        tick = instrument_tick or Decimal("0.25")
+        ctx.fvg_zones = discover_fvg_zones(bars, instrument_tick=tick, min_gap_ticks=min_gap)
+    elif entry_type == "bollinger_reversion":
+        closes = [b.close for b in bars]
+        period = int(entry.get("period", 20))
+        mult = Decimal(str(entry.get("std_mult", 2)))
+        _mid, upper, lower = bollinger_series(closes, period, mult)
+        ctx.bb_upper = upper
+        ctx.bb_lower = lower
     elif entry_type == "vwap_reversion":
         ctx.vwap = session_vwap(bars, session_keys)
     elif entry_type == "rsi_reversion":
@@ -268,6 +289,66 @@ def signal_at_bar(
             return pack("long", "streak_up")
         if dns:
             return pack("short", "streak_down")
+        return None
+
+    if entry_type == "fair_value_gap":
+        zones = ctx.fvg_zones
+        if not zones:
+            return None
+        max_age = int(entry.get("max_age_bars", 48))
+        side = str(entry.get("side", "both"))
+        direction = fvg_retest_signal(bar, i, zones, max_age_bars=max_age, side=side)
+        if direction == "long":
+            return pack("long", "fvg_retest_long")
+        if direction == "short":
+            return pack("short", "fvg_retest_short")
+        return None
+
+    if entry_type == "bollinger_reversion":
+        upper = ctx.bb_upper
+        lower = ctx.bb_lower
+        if upper is None or lower is None or upper[i] is None or lower[i] is None:
+            return None
+        if i < 1:
+            return None
+        touch_hi = bar.high >= upper[i]
+        touch_lo = bar.low <= lower[i]
+        if touch_hi and bar.close < upper[i]:
+            return pack("short", "bb_upper_reject")
+        if touch_lo and bar.close > lower[i]:
+            return pack("long", "bb_lower_reject")
+        return None
+
+    if entry_type == "ema_pullback":
+        fast_e = ctx.fast_e
+        slow_e = ctx.slow_e
+        if fast_e is None or slow_e is None or fast_e[i] is None or slow_e[i] is None or i < 2:
+            return None
+        if fast_e[i - 1] is None or slow_e[i - 1] is None:
+            return None
+        uptrend = fast_e[i - 1] > slow_e[i - 1]
+        dntrend = fast_e[i - 1] < slow_e[i - 1]
+        ema_px = fast_e[i]
+        assert ema_px is not None
+        if uptrend and bar.low <= ema_px <= bar.high and bar.close > ema_px:
+            return pack("long", "ema_pullback_long")
+        if dntrend and bar.low <= ema_px <= bar.high and bar.close < ema_px:
+            return pack("short", "ema_pullback_short")
+        return None
+
+    if entry_type == "liquidity_sweep":
+        lookback = int(entry.get("lookback", 12))
+        sweep_ticks = int(entry.get("sweep_ticks", 2))
+        if i < lookback + 1:
+            return None
+        window = bars[i - lookback : i]
+        swing_hi = max(b.high for b in window)
+        swing_lo = min(b.low for b in window)
+        sweep = tick * Decimal(sweep_ticks)
+        if bar.low < swing_lo - sweep and bar.close > swing_lo:
+            return pack("long", "liq_sweep_low")
+        if bar.high > swing_hi + sweep and bar.close < swing_hi:
+            return pack("short", "liq_sweep_high")
         return None
 
     raise ValueError(f"Unsupported entry.type {entry_type}")
