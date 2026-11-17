@@ -8,7 +8,14 @@ from zoneinfo import ZoneInfo
 
 from app.backtest.bars import Bar
 from app.backtest.fvg import discover_fvg_zones, fvg_retest_signal
+from app.backtest.ict import (
+    discover_order_blocks,
+    order_block_retest,
+    range_position,
+    session_dealing_ranges,
+)
 from app.backtest.indicators import bollinger_series, ema_series, rsi_series, session_vwap
+from app.backtest.mtf import htf_bars_from_ltf, ltf_to_htf_index, series_on_ltf
 
 
 @dataclass
@@ -32,6 +39,9 @@ ENTRY_TYPES = frozenset(
         "fair_value_gap",
         "bollinger_reversion",
         "liquidity_sweep",
+        "order_block_retest",
+        "premium_discount",
+        "mtf_ema_pullback",
     }
 )
 SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
@@ -100,6 +110,10 @@ class SignalContext:
     fvg_zones: list | None = None
     bb_upper: list[Decimal | None] | None = None
     bb_lower: list[Decimal | None] | None = None
+    session_ranges: dict | None = None
+    order_blocks: list | None = None
+    htf_fast_ltf: list[Decimal | None] | None = None
+    htf_slow_ltf: list[Decimal | None] | None = None
 
 
 def build_signal_context(
@@ -141,6 +155,24 @@ def build_signal_context(
         closes = [b.close for b in bars]
         period = int(entry.get("period", 14))
         ctx.rsi = rsi_series(closes, period)
+    elif entry_type == "order_block_retest":
+        tick = instrument_tick or Decimal("0.25")
+        disp = int(entry.get("displacement_ticks", 12))
+        ctx.order_blocks = discover_order_blocks(bars, instrument_tick=tick, displacement_ticks=disp)
+    elif entry_type == "premium_discount":
+        ctx.session_ranges = session_dealing_ranges(bars, session_keys)
+    elif entry_type == "mtf_ema_pullback":
+        htf = str(entry.get("htf", "15m"))
+        fast = int(entry.get("fast_period", 9))
+        slow = int(entry.get("slow_period", 21))
+        htf_bars = htf_bars_from_ltf(bars, htf)
+        idx = ltf_to_htf_index(bars, htf_bars)
+        closes_htf = [b.close for b in htf_bars]
+        ctx.htf_fast_ltf = series_on_ltf(ema_series(closes_htf, fast), idx)
+        ctx.htf_slow_ltf = series_on_ltf(ema_series(closes_htf, slow), idx)
+        closes = [b.close for b in bars]
+        ctx.fast_e = ema_series(closes, fast)
+        ctx.slow_e = ema_series(closes, slow)
     return ctx
 
 
@@ -349,6 +381,52 @@ def signal_at_bar(
             return pack("long", "liq_sweep_low")
         if bar.high > swing_hi + sweep and bar.close < swing_hi:
             return pack("short", "liq_sweep_high")
+        return None
+
+    if entry_type == "order_block_retest":
+        zones = ctx.order_blocks
+        if not zones:
+            return None
+        max_age = int(entry.get("max_age_bars", 60))
+        side = str(entry.get("side", "both"))
+        direction = order_block_retest(bar, i, zones, max_age_bars=max_age, side=side)
+        if direction == "long":
+            return pack("long", "ob_retest_long")
+        if direction == "short":
+            return pack("short", "ob_retest_short")
+        return None
+
+    if entry_type == "premium_discount":
+        ranges = ctx.session_ranges
+        if not ranges:
+            return None
+        key = session_keys[i]
+        sr = ranges.get(key)
+        if sr is None:
+            return None
+        pos = range_position(bar.close, sr)
+        discount_max = Decimal(str(entry.get("discount_max", 0.38)))
+        premium_min = Decimal(str(entry.get("premium_min", 0.62)))
+        zone = str(entry.get("zone", "both"))
+        if zone in ("both", "discount") and pos <= discount_max and bar.close > bar.open:
+            return pack("long", "discount_bounce")
+        if zone in ("both", "premium") and pos >= premium_min and bar.close < bar.open:
+            return pack("short", "premium_fade")
+        return None
+
+    if entry_type == "mtf_ema_pullback":
+        hf = ctx.htf_fast_ltf
+        hs = ctx.htf_slow_ltf
+        fast_e = ctx.fast_e
+        if hf is None or hs is None or fast_e is None:
+            return None
+        if hf[i] is None or hs[i] is None or fast_e[i] is None or i < 1:
+            return None
+        ema_px = fast_e[i]
+        if hf[i] > hs[i] and bar.low <= ema_px <= bar.high and bar.close > ema_px:
+            return pack("long", "mtf_pullback_long")
+        if hf[i] < hs[i] and bar.low <= ema_px <= bar.high and bar.close < ema_px:
+            return pack("short", "mtf_pullback_short")
         return None
 
     raise ValueError(f"Unsupported entry.type {entry_type}")

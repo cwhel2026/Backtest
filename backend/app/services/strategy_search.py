@@ -171,7 +171,7 @@ def run_deep_search(
     train, _test = _split_train_test(bars)
     tf = dataset.timeframe
 
-    specs = sample_search_specs(symbol, budget, seed=seed)
+    specs = sample_search_specs(symbol, budget, seed=seed, timeframe=tf)
     evaluated = 0
     leaderboard: list = []
     closest: list[tuple[float, dict, dict]] = []
