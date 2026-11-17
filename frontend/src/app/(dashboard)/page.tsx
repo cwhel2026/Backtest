@@ -13,6 +13,18 @@ type BackgroundSearch = {
   started_at: string | null;
 };
 
+type PaperDesk = {
+  account: {
+    status: string;
+    equity: number;
+    day_pnl: number;
+    trailing_room: number;
+    distance_to_target: number;
+  };
+  enrolled: { slot_id: string; symbol: string; strategy_name: string; in_trade: boolean }[];
+  open_positions: { slot_id: string; strategy_name: string; symbol: string; direction: string; quantity: number; entry_price: number }[];
+};
+
 type AutopilotStatus = {
   hourly_enabled: boolean;
   ai_configured: boolean;
@@ -26,11 +38,13 @@ type AutopilotStatus = {
 
 export default function HomePage() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null);
+  const [paper, setPaper] = useState<PaperDesk | null>(null);
   const [running, setRunning] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   function refresh() {
     apiFetch<AutopilotStatus>("/api/v1/autopilot/status").then(setStatus).catch((e) => setNote(String(e)));
+    apiFetch<PaperDesk>("/api/v1/paper/desk").then(setPaper).catch(() => undefined);
   }
 
   useEffect(() => {
@@ -73,11 +87,35 @@ export default function HomePage() {
   return (
     <div className="space-y-8">
       <header>
-        <h2 className="page-title">Prop firm autopilot</h2>
+        <h2 className="page-title">Prop desk</h2>
         <p className="page-sub">
-          Profitable named strategies only. Anti-edge setups (very low win rate) are reversed and re-tested.
+          Search runs on the server, keepers are backtested walk-forward, then the paper book takes the next trades.
         </p>
       </header>
+
+      <ol className="grid gap-3 md:grid-cols-3">
+        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">1 · Search</p>
+          <p className="mt-2 text-sm text-zinc-200">
+            {status?.background_search ? "Running now" : status?.hourly_enabled ? "Hourly, even if you leave" : "Manual"}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">Nasdaq + S&P, including reverse fades.</p>
+        </li>
+        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">2 · Backtest</p>
+          <p className="mt-2 text-sm text-zinc-200">{candidates.length} profitable keepers</p>
+          <p className="mt-1 text-xs text-zinc-500">Train, out-of-sample, then full sample.</p>
+        </li>
+        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">3 · Forward test</p>
+          <p className="mt-2 text-sm text-zinc-200">
+            {paper ? `$${paper.account.equity.toLocaleString(undefined, { maximumFractionDigits: 0 })} · ${paper.account.status}` : "Paper book"}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {paper ? `${paper.open_positions.length} open · ${paper.enrolled.length} enrolled` : "New bars every 5 minutes"}
+          </p>
+        </li>
+      </ol>
 
       <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
         <p className="text-sm leading-relaxed text-zinc-200">{status?.message}</p>
@@ -110,6 +148,28 @@ export default function HomePage() {
         </button>
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
       </section>
+
+      {paper && paper.open_positions.length > 0 ? (
+        <section>
+          <div className="flex items-end justify-between">
+            <h3 className="text-sm font-semibold text-zinc-100">Open paper trades</h3>
+            <Link href="/paper" className="text-xs text-emerald-500 hover:underline">
+              Prop book
+            </Link>
+          </div>
+          <ul className="mt-3 space-y-2">
+            {paper.open_positions.map((p) => (
+              <li key={p.slot_id} className="flex items-center justify-between rounded-lg border border-zinc-800 px-3 py-2 text-sm">
+                <span>
+                  {p.symbol} {p.direction} ×{p.quantity}
+                  <span className="ml-2 text-zinc-500">{p.strategy_name}</span>
+                </span>
+                <span className="tabular-nums text-zinc-300">{p.entry_price}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section>
         <div className="flex items-end justify-between gap-2">

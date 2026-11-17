@@ -27,5 +27,9 @@ celery_app.conf.update(
             "task": "app.worker.tasks.autonomous_prop_cycle",
             "schedule": 3600.0,
         },
+        "paper-forward-tick": {
+            "task": "app.worker.tasks.paper_forward_tick",
+            "schedule": 300.0,
+        },
     },
 )

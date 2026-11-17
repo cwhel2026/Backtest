@@ -301,3 +301,11 @@ def autonomous_prop_cycle() -> None:
         if find_active_prop_search_job(db):
             return
         run_autonomous_prop_cycle(db, actor="hourly_autopilot")
+
+
+@celery_app.task(name="app.worker.tasks.paper_forward_tick")
+def paper_forward_tick() -> None:
+    from app.services.paper_book import tick_paper_book
+
+    with SyncSession() as db:
+        tick_paper_book(db)

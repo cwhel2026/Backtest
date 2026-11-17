@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
 import { setStoredToken } from "@/lib/api";
 
 const NAV = [
-  { href: "/", label: "Autopilot", short: "Home" },
-  { href: "/backtests", label: "Results", short: "Results" },
-  { href: "/paper", label: "Live sim", short: "Sim" },
+  { href: "/", label: "Desk", short: "Desk" },
+  { href: "/paper", label: "Forward test", short: "Paper" },
+  { href: "/backtests", label: "Backtests", short: "Results" },
   { href: "/settings", label: "Settings", short: "Settings" },
   { href: "/market-data", label: "Market Data (advanced)", short: "Data" },
   { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
@@ -123,7 +123,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-64 shrink-0 border-r border-zinc-800 bg-[#0e1015] p-4 md:block">
         <div className="mb-8 px-2">
           <p className="text-xs font-semibold tracking-[0.2em] text-emerald-400">PROP EDGE</p>
-          <h1 className="text-lg font-medium text-zinc-50">Prop Autopilot</h1>
+          <h1 className="text-lg font-medium text-zinc-50">Prop desk</h1>
         </div>
         <NavLinks pathname={pathname} />
         <button
