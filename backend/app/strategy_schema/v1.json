@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PropEdgeStrategySpec",
+  "type": "object",
+  "required": ["name", "instrument_symbol", "timeframe", "session", "entry", "exit", "risk"],
+  "properties": {
+    "name": { "type": "string" },
+    "instrument_symbol": { "type": "string" },
+    "timeframe": { "enum": ["1m", "5m", "15m", "1h"] },
+    "category": { "type": "string" },
+    "session": {
+      "type": "object",
+      "properties": {
+        "allowed": { "type": "array", "items": { "type": "string" } },
+        "flatten_before_minutes_to_close": { "type": "integer" }
+      }
+    },
+    "entry": { "type": "object" },
+    "exit": { "type": "object" },
+    "risk": {
+      "type": "object",
+      "required": ["dollar_risk_per_trade"],
+      "properties": {
+        "dollar_risk_per_trade": { "type": "number", "minimum": 0 },
+        "max_contracts": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "additionalProperties": false
+}
