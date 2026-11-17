@@ -2,20 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
 import { apiFetch } from "@/lib/api";
 
 type AutopilotStatus = {
   hourly_enabled: boolean;
   ai_configured: boolean;
   message: string;
-  top_backtests: {
-    id: string;
-    strategy_id: string;
-    profit_factor?: number;
-    net_profit?: number;
-    trade_count?: number;
-  }[];
+  profitable_candidates: LeaderboardEntry[];
   recent_activity: { headline: string; detail: string; created_at: string }[];
+  cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
 };
 
 export default function HomePage() {
@@ -40,10 +36,10 @@ export default function HomePage() {
       const res = await apiFetch<{ status: string; mode: string }>("/api/v1/autopilot/run", { method: "POST" });
       setNote(
         res.mode === "inline"
-          ? "Cycle started on server — refresh in a minute for results."
-          : "Cycle queued — watch activity below."
+          ? "Searching ~24 strategy variants — refresh in 2–3 minutes."
+          : "Search queued on the server."
       );
-      setTimeout(refresh, 3000);
+      setTimeout(refresh, 5000);
     } catch (e) {
       setNote(String(e));
     } finally {
@@ -51,71 +47,74 @@ export default function HomePage() {
     }
   }
 
+  const candidates = status?.profitable_candidates ?? [];
+
   return (
     <div className="space-y-8">
       <header>
         <h2 className="page-title">Prop firm autopilot</h2>
-        <p className="page-sub">
-          Finds and backtests strategies on MES/MNQ using free market data, then simulates on the latest bars — no live
-          broker.
-        </p>
+        <p className="page-sub">Only profitable, named strategies appear below — losers are filtered out.</p>
       </header>
 
-      <section className="rounded-lg border border-emerald-900/40 bg-emerald-950/20 p-4 md:p-6">
-        <p className="text-sm leading-relaxed text-zinc-300">{status?.message}</p>
-        <p className="mt-2 text-xs text-zinc-500">
-          Hourly search: {status?.hourly_enabled ? "on" : "off"} · AI:{" "}
-          {status?.ai_configured ? "OpenAI" : "built-in rules (no key needed)"}
-        </p>
+      <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
+        <p className="text-sm leading-relaxed text-zinc-200">{status?.message}</p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+          <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
+          <span className="rounded-full border border-zinc-700 px-2 py-1">
+            AI: {status?.ai_configured ? "OpenAI" : "rules"}
+          </span>
+          {status?.cycle_stats.last_cycle_detail ? (
+            <span className="max-w-full truncate rounded-full border border-zinc-700 px-2 py-1">
+              Last: {status.cycle_stats.last_cycle_detail}
+            </span>
+          ) : null}
+        </div>
         <button
           type="button"
           disabled={running}
           onClick={runNow}
-          className="mt-4 w-full rounded-md bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 md:w-auto md:py-2"
+          className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 disabled:opacity-50 md:w-auto"
         >
-          {running ? "Starting…" : "Run search now"}
+          {running ? "Searching…" : "Run prop search"}
         </button>
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
       </section>
 
       <section>
-        <h3 className="text-sm font-medium text-zinc-200">Best backtests so far</h3>
-        {!status?.top_backtests.length ? (
-          <p className="mt-2 text-sm text-zinc-500">None yet — tap Run search now.</p>
+        <div className="flex items-end justify-between gap-2">
+          <h3 className="text-sm font-semibold text-zinc-100">Profitable candidates</h3>
+          <Link href="/backtests" className="text-xs text-emerald-500 hover:underline">
+            All results
+          </Link>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500">
+          Must have net &gt; $0, profit factor ≥ 1.1, ≥8 trades, drawdown under ~$3.5k (on $100k sim).
+        </p>
+        {!candidates.length ? (
+          <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
+            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests many
+            stop/target variants on MES &amp; MNQ.
+          </div>
         ) : (
-          <ul className="mt-3 space-y-2">
-            {status.top_backtests.map((r) => (
-              <li key={r.id} className="rounded-lg border border-zinc-800 bg-[#181b22] px-4 py-3 text-sm">
-                <Link href={`/backtests/${r.id}`} className="font-medium text-emerald-400 hover:underline">
-                  Run {r.id.slice(0, 8)}
-                </Link>
-                <span className="ml-2 text-zinc-500">
-                  PF {r.profit_factor ?? "—"} · net {r.net_profit ?? "—"} · {r.trade_count ?? 0} trades
-                </span>
-              </li>
+          <ul className="mt-4 space-y-4">
+            {candidates.map((r) => (
+              <LeaderboardCard key={r.run_id} row={r} />
             ))}
           </ul>
         )}
       </section>
 
       <section>
-        <h3 className="text-sm font-medium text-zinc-200">What the bot did</h3>
+        <h3 className="text-sm font-medium text-zinc-200">Activity</h3>
         <ul className="mt-3 space-y-3">
-          {(status?.recent_activity ?? []).map((a, i) => (
+          {(status?.recent_activity ?? []).slice(0, 6).map((a, i) => (
             <li key={i} className="border-b border-zinc-800/80 pb-2 text-sm">
               <p className="text-zinc-100">{a.headline}</p>
-              {a.detail ? <p className="text-xs text-zinc-500">{a.detail}</p> : null}
+              {a.detail ? <p className="text-xs leading-relaxed text-zinc-500">{a.detail}</p> : null}
             </li>
           ))}
         </ul>
       </section>
-
-      <p className="text-xs text-zinc-600">
-        Advanced:{" "}
-        <Link href="/backtests" className="text-zinc-400 underline">
-          all backtests
-        </Link>
-      </p>
     </div>
   );
 }
