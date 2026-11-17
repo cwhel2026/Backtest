@@ -12,6 +12,7 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.backtest_runner import execute_backtest_run
 from app.services.ai_research_runner import count_ai_jobs_today, run_ai_hypothesis_job
+from app.services.research_jobs import add_job_with_activity
 from app.services.autonomous_cycle import (
     PROP_SEARCH_JOB_TITLE,
     find_active_prop_search_job,
@@ -50,13 +51,11 @@ def create_ingestion_job(meta: dict, actor: str) -> str:
             message="Queued for worker",
             payload=meta,
         )
-        db.add(job)
-        db.add(
-            ResearchActivity(
-                headline=f"Queued ingestion for {meta.get('instrument_symbol')} ({meta.get('timeframe')})",
-                detail=f"Requested by {actor}",
-                job_id=job.id,
-            )
+        add_job_with_activity(
+            db,
+            job,
+            headline=f"Queued ingestion for {meta.get('instrument_symbol')} ({meta.get('timeframe')})",
+            detail=f"Requested by {actor}",
         )
         db.commit()
     return job_id
@@ -141,13 +140,11 @@ def enqueue_ai_hypothesis(meta: dict, actor: str) -> str:
             message="Queued",
             payload={**meta, "actor": actor},
         )
-        db.add(job)
-        db.add(
-            ResearchActivity(
-                headline=f"AI research queued for {meta.get('instrument_symbol')}",
-                detail=(meta.get("prompt") or "")[:280],
-                job_id=job.id,
-            )
+        add_job_with_activity(
+            db,
+            job,
+            headline=f"AI research queued for {meta.get('instrument_symbol')}",
+            detail=(meta.get("prompt") or "")[:280],
         )
         db.commit()
     run_ai_hypothesis_task.delay(job_id)
@@ -260,13 +257,11 @@ def create_prop_search_job(actor: str) -> str:
             message="Queued — runs on the server (safe to close the app)",
             payload={"actor": actor_label, "actor_display": actor, "source": "manual"},
         )
-        db.add(job)
-        db.add(
-            ResearchActivity(
-                headline="Deep search queued",
-                detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
-                job_id=job.id,
-            )
+        add_job_with_activity(
+            db,
+            job,
+            headline="Deep search queued",
+            detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
         )
         db.commit()
     return job_id

@@ -19,6 +19,7 @@ from app.schemas.autopilot import (
     LeaderboardEntry,
 )
 from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, job_is_stale, resolve_search_symbols
+from app.services.research_jobs import add_job_with_activity_async
 from app.services.leaderboard import leaderboard_entries_async
 from app.util.serde import enum_value, normalize_created_by
 from app.worker.tasks import run_prop_search_job
@@ -37,13 +38,11 @@ async def _queue_deep_prop_search(db: AsyncSession, actor: str) -> str:
         message="Queued — runs on the server (safe to close the app)",
         payload={"actor": actor_label, "actor_display": actor, "source": "manual"},
     )
-    db.add(job)
-    db.add(
-        ResearchActivity(
-            headline="Deep search queued",
-            detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
-            job_id=job.id,
-        )
+    await add_job_with_activity_async(
+        db,
+        job,
+        headline="Deep search queued",
+        detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
     )
     await db.flush()
     return str(job_id)
