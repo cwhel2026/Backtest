@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -33,5 +34,5 @@ def decode_access_token(token: str) -> str | None:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         sub = payload.get("sub")
         return str(sub) if sub else None
-    except JWTError:
+    except PyJWTError:
         return None
