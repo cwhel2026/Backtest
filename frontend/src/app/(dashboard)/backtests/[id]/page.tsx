@@ -43,14 +43,17 @@ export default function BacktestDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (!chartRef.current || trades.length === 0) return;
-    if (chartApi.current) chartApi.current.remove();
-    const chart = createChart(chartRef.current, {
+    const host = chartRef.current;
+    if (!host || trades.length === 0) return;
+
+    const chart = createChart(host, {
       layout: { background: { color: "#181b22" }, textColor: "#a1a1aa" },
       grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
-      width: chartRef.current.clientWidth,
+      width: host.clientWidth,
       height: 240,
     });
+    chartApi.current = chart;
+
     const series = chart.addSeries(LineSeries, { color: "#34d399" });
     let eq = 100000;
     const data = trades.map((t) => {
@@ -61,13 +64,22 @@ export default function BacktestDetailPage() {
       };
     });
     series.setData(data);
-    chartApi.current = chart;
+
     const onResize = () => {
-      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
+      const active = chartApi.current;
+      const el = chartRef.current;
+      if (!active || !el) return;
+      try {
+        active.applyOptions({ width: el.clientWidth });
+      } catch {
+        /* chart teardown can race the resize handler */
+      }
     };
     window.addEventListener("resize", onResize);
+
     return () => {
       window.removeEventListener("resize", onResize);
+      chartApi.current = null;
       chart.remove();
     };
   }, [trades]);
@@ -111,7 +123,13 @@ function MetricsGrid({ metrics }: { metrics: Record<string, number | null> }) {
         <div key={k} className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
           <p className="text-xs uppercase text-zinc-500">{k.replaceAll("_", " ")}</p>
           <p className="mt-1 text-xl text-white">
-            {metrics[k] == null ? "—" : typeof metrics[k] === "number" ? (metrics[k] as number).toFixed(4) : metrics[k]}
+            {metrics[k] == null
+              ? "—"
+              : k === "win_rate" && typeof metrics[k] === "number"
+                ? `${((metrics[k] as number) * 100).toFixed(1)}%`
+                : typeof metrics[k] === "number"
+                  ? (metrics[k] as number).toFixed(4)
+                  : metrics[k]}
           </p>
         </div>
       ))}
