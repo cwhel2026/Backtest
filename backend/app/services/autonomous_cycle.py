@@ -13,6 +13,7 @@ from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.market_data.ingestion_runner import run_yahoo_ingestion
+from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
 
 # Nasdaq micro + e-mini always included (even if SEARCH_SYMBOLS omits them).
@@ -127,7 +128,14 @@ def run_autonomous_prop_cycle(
         job.status = ResearchJobStatus.RUNNING
         job.message = "Loading market data"
         job.started_at = datetime.now(UTC)
-        job.payload = {**(job.payload or {}), "actor": actor, "budget_per_symbol": budget}
+        job.payload = {
+            **(job.payload or {}),
+            "actor": actor,
+            "budget_per_symbol": budget,
+            "search_progress": initial_search_progress(
+                symbols=symbols, budget=budget, history_days=history_days
+            ),
+        }
         session.flush()
     else:
         job = ResearchJob(
@@ -136,7 +144,13 @@ def run_autonomous_prop_cycle(
             title=PROP_SEARCH_JOB_TITLE,
             message="Loading market data",
             started_at=datetime.now(UTC),
-            payload={"actor": actor, "budget_per_symbol": budget},
+            payload={
+                "actor": actor,
+                "budget_per_symbol": budget,
+                "search_progress": initial_search_progress(
+                    symbols=symbols, budget=budget, history_days=history_days
+                ),
+            },
         )
         session.add(job)
         session.flush()
@@ -153,7 +167,16 @@ def run_autonomous_prop_cycle(
     try:
         datasets: dict[str, HistoricalDataset] = {}
         warnings: list[str] = []
-        for symbol in symbols:
+        for idx, symbol in enumerate(symbols):
+            job = _job()
+            merge_search_progress(
+                job,
+                phase="loading_data",
+                current_symbol=symbol,
+                symbol_index=idx,
+            )
+            job.message = f"Downloading Yahoo 5m bars for {symbol} ({history_days} days)"
+            session.commit()
             try:
                 with session.begin_nested():
                     ds = _ingest_yahoo(session, symbol, history_days)
@@ -172,15 +195,22 @@ def run_autonomous_prop_cycle(
                         "warning": str(exc),
                     }
             job = _job()
-            job.message = f"Loaded {symbol}" + (f" — {warnings[-1]}" if warnings else "")
+            loaded = list((job.payload or {}).get("search_progress", {}).get("markets_loaded") or [])
+            if symbol in datasets:
+                row_count = summary["symbols"][symbol].get("row_count")
+                loaded.append(f"{symbol} ({row_count} bars)" if row_count is not None else symbol)
+            merge_search_progress(job, markets_loaded=loaded)
+            job.message = f"Loaded {symbol}" + (f" — {warnings[-1]}" if warnings and warnings[-1].startswith(symbol) else "")
             session.commit()
 
         job = _job()
-        job.message = f"Scoring {len(datasets)} markets ({budget} tests each)"
+        merge_search_progress(job, phase="scoring", current_symbol=None)
+        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 6 families)"
         session.commit()
 
         all_winners: list[str] = []
         total_eval = 0
+        finished_symbols: list[str] = []
         for symbol in symbols:
             ds = datasets.get(symbol)
             if not ds:
@@ -188,13 +218,43 @@ def run_autonomous_prop_cycle(
             inst = session.get(Instrument, ds.instrument_id)
             if not inst:
                 continue
-            def _pulse(done: int, symbol: str = symbol) -> None:
+            sym_idx = list(symbols).index(symbol)
+
+            def _pulse(done: int, *, spec: dict | None = None, subphase: str = "walk_forward", symbol: str = symbol) -> None:
                 current = _job()
-                current.payload = {**(current.payload or {}), "heartbeat": datetime.now(UTC).isoformat()}
-                current.message = f"Scoring {symbol} · {done} tests" if done else f"Scoring {symbol}"
+                setup_name = (spec or {}).get("name") if spec else None
+                merge_search_progress(
+                    current,
+                    phase="scoring",
+                    current_symbol=symbol,
+                    symbol_index=sym_idx,
+                    tests_completed=done,
+                    tests_target_estimate=budget * 3,
+                    combos_per_symbol=budget,
+                    current_setup=setup_name,
+                    setup_family=entry_family_label(spec),
+                    scoring_subphase=subphase,
+                    winners_saved=len(all_winners),
+                    symbols_finished=list(finished_symbols),
+                )
+                bit = f" · {setup_name}" if setup_name else ""
+                fam = entry_family_label(spec)
+                fam_bit = f" [{fam}]" if fam else ""
+                phase_bit = subphase.replace("_", " ")
+                current.message = f"Scoring {symbol}{fam_bit} · {done} backtests · {phase_bit}{bit}"
+                current.progress_pct = min(
+                    94,
+                    int(
+                        100
+                        * (
+                            sym_idx / max(len(symbols), 1)
+                            + (min(done, budget * 3) / max(budget * 3, 1)) / max(len(symbols), 1)
+                        )
+                    ),
+                )
                 session.commit()
 
-            _pulse(0)
+            _pulse(0, subphase="start")
             hits, evaluated = run_deep_search(
                 session,
                 symbol=symbol,
@@ -205,6 +265,10 @@ def run_autonomous_prop_cycle(
                 on_progress=_pulse,
             )
             total_eval += evaluated
+            job = _job()
+            merge_search_progress(job, phase="saving", current_symbol=symbol, scoring_subphase="persist")
+            job.message = f"Saving {symbol} keepers ({len(hits)} hits to backtest)"
+            session.commit()
             winners = persist_search_hits(
                 session,
                 hits,
@@ -215,8 +279,15 @@ def run_autonomous_prop_cycle(
             )
             all_winners.extend(winners)
             summary["backtests"].extend([{"name": w, "symbol": symbol} for w in winners])
+            finished_symbols.append(symbol)
             job = _job()
-            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval} tests so far"
+            merge_search_progress(
+                job,
+                winners_saved=len(all_winners),
+                symbols_finished=list(finished_symbols),
+                tests_completed=total_eval,
+            )
+            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval + evaluated} tests so far"
             job.progress_pct = min(95, int(100 * (list(symbols).index(symbol) + 1) / max(len(symbols), 1)))
             session.add(
                 ResearchActivity(

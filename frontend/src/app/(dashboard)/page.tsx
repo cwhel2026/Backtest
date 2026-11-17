@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
+import { SearchLiveMonitor } from "@/components/SearchLiveMonitor";
 import { apiFetch } from "@/lib/api";
 
 type BackgroundSearch = {
@@ -12,6 +13,17 @@ type BackgroundSearch = {
   progress_pct: number;
   started_at: string | null;
   error?: string | null;
+  live?: Record<string, unknown> | null;
+  job_log?: { headline: string; detail: string; created_at: string }[];
+};
+
+type SearchPlan = {
+  symbols: string[];
+  combos_per_symbol: number;
+  history_days: number;
+  families: string[];
+  walk_forward: string;
+  reverse_fades: boolean;
 };
 
 type PaperDesk = {
@@ -36,6 +48,7 @@ type AutopilotStatus = {
   recent_activity: { headline: string; detail: string; created_at: string }[];
   cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
   search_symbols: string[];
+  search_plan: SearchPlan | null;
 };
 
 export default function HomePage() {
@@ -56,7 +69,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const busy = status?.background_search?.status === "queued" || status?.background_search?.status === "running";
-    const ms = busy ? 8000 : 15000;
+    const ms = busy ? 4000 : 15000;
     const t = setInterval(refresh, ms);
     return () => clearInterval(t);
   }, [status?.background_search?.status]);
@@ -168,6 +181,16 @@ export default function HomePage() {
         ) : null}
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
       </section>
+
+      <SearchLiveMonitor
+        status={status?.background_search?.status ?? "idle"}
+        message={status?.background_search?.message ?? "Press Run prop search to start a walk-forward scan."}
+        progressPct={status?.background_search?.progress_pct ?? 0}
+        live={(status?.background_search?.live as Record<string, unknown> | undefined) ?? null}
+        plan={status?.search_plan ?? null}
+        jobLog={status?.background_search?.job_log ?? []}
+        active={searching}
+      />
 
       {paper && paper.open_positions.length > 0 ? (
         <section>

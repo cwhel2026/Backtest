@@ -117,14 +117,15 @@ def run_deep_search(
             return
         closest.append((float(metrics.get("total_net_profit") or 0), spec, metrics))
 
-    def _tick() -> None:
-        if on_progress and evaluated % 20 == 0:
-            on_progress(evaluated)
+    def _tick(spec: dict | None = None, *, subphase: str = "walk_forward") -> None:
+        if on_progress and (evaluated == 0 or evaluated % 8 == 0):
+            on_progress(evaluated, spec=spec, subphase=subphase)
 
     for spec in specs:
+        _tick(spec, subphase="sample")
         train_m = _metrics_for_spec(spec, train, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(spec, subphase="train")
         if not train_m:
             continue
         _remember(spec, train_m)
@@ -138,12 +139,12 @@ def run_deep_search(
             continue
         test_m = _metrics_for_spec(spec, test, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(spec, subphase="oos")
         if not _passes_oos(test_m):
             continue
         full_m = _metrics_for_spec(spec, bars, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(spec, subphase="prop_screen")
         _consider(spec, train_m, test_m, full_m, origin="deep", original_metrics=None, leaderboard=leaderboard)
 
     for spec, orig_train in reverse_queue[: max(24, refine_top * 3)]:
@@ -152,18 +153,18 @@ def run_deep_search(
             continue
         train_m = _metrics_for_spec(rev, train, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(rev, subphase="reverse_train")
         if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
             continue
         test_m = _metrics_for_spec(rev, test, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(rev, subphase="reverse_oos")
         orig_wr = orig_train.get("win_rate")
         if not reverse_passes_oos(test_m, float(orig_wr) if orig_wr is not None else None):
             continue
         full_m = _metrics_for_spec(rev, bars, instrument, tf)
         evaluated += 1
-        _tick()
+        _tick(rev, subphase="reverse_full")
         _consider(
             rev,
             train_m,
@@ -178,17 +179,17 @@ def run_deep_search(
         for refined in refine_spec(base):
             train_m = _metrics_for_spec(refined, train, instrument, tf)
             evaluated += 1
-            _tick()
+            _tick(refined, subphase="refine_train")
             if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
                 continue
             test_m = _metrics_for_spec(refined, test, instrument, tf)
             evaluated += 1
-            _tick()
+            _tick(refined, subphase="refine_oos")
             if not _passes_oos(test_m):
                 continue
             full_m = _metrics_for_spec(refined, bars, instrument, tf)
             evaluated += 1
-            _tick()
+            _tick(refined, subphase="refine_full")
             _consider(
                 refined,
                 train_m,
