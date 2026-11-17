@@ -18,6 +18,9 @@ SEARCH_FAMILY_LABELS = (
     "FVG",
     "Bollinger",
     "Liquidity",
+    "Order block",
+    "Premium / discount",
+    "MTF pull",
 )
 
 _ENTRY_FAMILY = {
@@ -31,6 +34,9 @@ _ENTRY_FAMILY = {
     "bollinger_reversion": "Bollinger",
     "liquidity_sweep": "Liquidity",
     "ema_pullback": "EMA pull",
+    "order_block_retest": "Order block",
+    "premium_discount": "Premium / discount",
+    "mtf_ema_pullback": "MTF pull",
 }
 
 

@@ -12,7 +12,11 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
-from app.services.market_data.ingestion_runner import run_databento_ingestion, run_yahoo_ingestion
+from app.services.market_data.ingestion_runner import (
+    run_databento_ingestion,
+    run_ibkr_ingestion,
+    run_yahoo_ingestion,
+)
 from app.services.search_heartbeat import SearchJobHeartbeat
 from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
@@ -57,23 +61,35 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
-def _ingest_search_data(session: Session, symbol: str, days: int) -> tuple[HistoricalDataset, str]:
-    """Prefer Databento GLBX when configured; fall back to Yahoo 5m."""
+def _ingest_search_data(
+    session: Session,
+    symbol: str,
+    days: int,
+    *,
+    timeframe: str = "5m",
+) -> tuple[HistoricalDataset, str]:
+    """IBKR (if reachable) → Databento → Yahoo."""
     settings = get_settings()
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
     payload = {
         "instrument_symbol": symbol,
-        "timeframe": "5m",
+        "timeframe": timeframe,
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
-    if settings.databento_configured:
+    if settings.search_prefer_ibkr and settings.ibkr_configured:
         try:
-            return run_databento_ingestion(session, payload), "Databento GLBX 1m→5m"
+            return run_ibkr_ingestion(session, payload), f"IBKR {timeframe}"
         except Exception:
             session.rollback()
-    return run_yahoo_ingestion(session, payload), "Yahoo Finance 5m"
+    if settings.databento_configured:
+        try:
+            label = "Databento GLBX" + (" 1m→" + timeframe if timeframe != "1m" else f" →{timeframe}")
+            return run_databento_ingestion(session, payload), label
+        except Exception:
+            session.rollback()
+    return run_yahoo_ingestion(session, payload), f"Yahoo Finance {timeframe}"
 
 
 def _aware(value: datetime) -> datetime:
@@ -117,13 +133,13 @@ def find_active_prop_search_job(session: Session) -> ResearchJob | None:
     ).scalar_one_or_none()
 
 
-def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
+def _latest_dataset(session: Session, symbol: str, timeframe: str = "5m") -> HistoricalDataset | None:
     inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
     if not inst:
         return None
     return session.execute(
         select(HistoricalDataset)
-        .where(HistoricalDataset.instrument_id == inst.id, HistoricalDataset.timeframe == "5m")
+        .where(HistoricalDataset.instrument_id == inst.id, HistoricalDataset.timeframe == timeframe)
         .order_by(desc(HistoricalDataset.downloaded_at))
         .limit(1)
     ).scalar_one_or_none()
@@ -190,78 +206,94 @@ def run_autonomous_prop_cycle(
     heartbeat = SearchJobHeartbeat(job_pk)
     heartbeat.start()
     try:
-        datasets: dict[str, HistoricalDataset] = {}
+        timeframes = settings.search_timeframe_list()
+        datasets: dict[tuple[str, str], HistoricalDataset] = {}
         warnings: list[str] = []
         for idx, symbol in enumerate(symbols):
-            job = _job()
-            merge_search_progress(
-                job,
-                phase="loading_data",
-                current_symbol=symbol,
-                symbol_index=idx,
-            )
-            job.message = f"Downloading bars for {symbol} ({history_days} days)"
-            session.commit()
-            try:
-                with session.begin_nested():
-                    ds, provider_label = _ingest_search_data(session, symbol, history_days)
+            for tf in timeframes:
+                days = int(settings.search_1m_history_days) if tf == "1m" else history_days
+                job = _job()
+                merge_search_progress(
+                    job,
+                    phase="loading_data",
+                    current_symbol=symbol,
+                    symbol_index=idx,
+                )
+                job.message = f"Downloading {symbol} {tf} ({days} days)"
                 session.commit()
-                datasets[symbol] = ds
-                summary["symbols"][symbol] = {
-                    "dataset_id": str(ds.id),
-                    "row_count": ds.row_count,
-                    "provider": provider_label,
-                }
-            except Exception as exc:
-                session.rollback()
-                warnings.append(f"{symbol}: {exc}")
-                ds = _latest_dataset(session, symbol)
-                if ds:
-                    datasets[symbol] = ds
-                    summary["symbols"][symbol] = {
+                key = (symbol, tf)
+                try:
+                    with session.begin_nested():
+                        ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
+                    session.commit()
+                    datasets[key] = ds
+                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
                         "dataset_id": str(ds.id),
                         "row_count": ds.row_count,
-                        "warning": str(exc),
+                        "provider": provider_label,
                     }
-            job = _job()
-            loaded = list((job.payload or {}).get("search_progress", {}).get("markets_loaded") or [])
-            if symbol in datasets:
-                row_count = summary["symbols"][symbol].get("row_count")
-                loaded.append(f"{symbol} ({row_count} bars)" if row_count is not None else symbol)
-            merge_search_progress(job, markets_loaded=loaded)
-            job.message = f"Loaded {symbol}" + (f" — {warnings[-1]}" if warnings and warnings[-1].startswith(symbol) else "")
-            session.commit()
+                except Exception as exc:
+                    session.rollback()
+                    warnings.append(f"{symbol} {tf}: {exc}")
+                    ds = _latest_dataset(session, symbol, tf)
+                    if ds:
+                        datasets[key] = ds
+                        summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                            "dataset_id": str(ds.id),
+                            "row_count": ds.row_count,
+                            "warning": str(exc),
+                        }
+                job = _job()
+                loaded = list((job.payload or {}).get("search_progress", {}).get("markets_loaded") or [])
+                if key in datasets:
+                    row_count = summary["symbols"].get(symbol, {}).get(tf, {}).get("row_count")
+                    loaded.append(f"{symbol} {tf} ({row_count} bars)" if row_count is not None else f"{symbol} {tf}")
+                merge_search_progress(job, markets_loaded=loaded)
+                job.message = f"Loaded {symbol} {tf}" + (
+                    f" — {warnings[-1]}" if warnings and warnings[-1].startswith(f"{symbol} {tf}") else ""
+                )
+                session.commit()
 
         job = _job()
         merge_search_progress(job, phase="scoring", current_symbol=None)
         ai_bit = " + AI mutation rounds" if get_settings().ai_configured else ""
-        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 10 families{ai_bit})"
+        job.message = f"Scoring {len(symbols)} symbols × {timeframes} TFs ({budget} 5m combos{ai_bit})"
         session.commit()
 
         all_winners: list[str] = []
         total_eval = 0
         finished_symbols: list[str] = []
-        for symbol in symbols:
-            ds = datasets.get(symbol)
+        search_slots = [(s, tf) for s in symbols for tf in timeframes]
+        for slot_idx, (symbol, tf) in enumerate(search_slots):
+            ds = datasets.get((symbol, tf)) or _latest_dataset(session, symbol, tf)
             if not ds:
                 continue
             inst = session.get(Instrument, ds.instrument_id)
             if not inst:
                 continue
             sym_idx = list(symbols).index(symbol)
+            tf_budget = int(settings.search_1m_budget_per_symbol) if tf == "1m" else budget
 
-            def _pulse(done: int, *, spec: dict | None = None, subphase: str = "walk_forward", symbol: str = symbol) -> None:
+            def _pulse(
+                done: int,
+                *,
+                spec: dict | None = None,
+                subphase: str = "walk_forward",
+                symbol: str = symbol,
+                tf: str = tf,
+                tf_budget: int = tf_budget,
+            ) -> None:
                 current = _job()
                 setup_name = (spec or {}).get("name") if spec else None
-                combo_est = min(budget, max(0, done // 2))
+                combo_est = min(tf_budget, max(0, done // 2))
                 merge_search_progress(
                     current,
                     phase="scoring",
-                    current_symbol=symbol,
+                    current_symbol=f"{symbol} {tf}",
                     symbol_index=sym_idx,
                     tests_completed=done,
-                    tests_target_estimate=budget * 3,
-                    combos_per_symbol=budget,
+                    tests_target_estimate=tf_budget * 4,
+                    combos_per_symbol=tf_budget,
                     combos_completed=combo_est,
                     current_setup=setup_name,
                     setup_family=entry_family_label(spec),
@@ -273,18 +305,21 @@ def run_autonomous_prop_cycle(
                 fam = entry_family_label(spec)
                 fam_bit = f" [{fam}]" if fam else ""
                 phase_bit = subphase.replace("_", " ")
-                msg = f"Scoring {symbol}{fam_bit} · combo ~{combo_est}/{budget} · {done} backtests · {phase_bit}{bit}"
+                msg = (
+                    f"Scoring {symbol} {tf}{fam_bit} · combo ~{combo_est}/{tf_budget} · "
+                    f"{done} backtests · {phase_bit}{bit}"
+                )
                 current.message = msg
-                symbol_fraction = combo_est / max(budget, 1)
-                overall = (sym_idx + symbol_fraction) / max(len(symbols), 1)
+                symbol_fraction = combo_est / max(tf_budget, 1)
+                overall = (slot_idx + symbol_fraction) / max(len(search_slots), 1)
                 current.progress_pct = min(94, int(100 * overall))
                 heartbeat.snapshot = {
                     "phase": "scoring",
-                    "current_symbol": symbol,
+                    "current_symbol": f"{symbol} {tf}",
                     "symbol_index": sym_idx,
                     "tests_completed": done,
                     "combos_completed": combo_est,
-                    "combos_per_symbol": budget,
+                    "combos_per_symbol": tf_budget,
                     "current_setup": setup_name,
                     "setup_family": entry_family_label(spec),
                     "scoring_subphase": subphase,
@@ -298,8 +333,8 @@ def run_autonomous_prop_cycle(
                 symbol=symbol,
                 dataset=ds,
                 instrument=inst,
-                budget=budget,
-                seed=seed + hash(symbol) % 1000,
+                budget=tf_budget,
+                seed=seed + hash(f"{symbol}{tf}") % 1000,
                 on_progress=_pulse,
             )
             total_eval += evaluated
@@ -323,8 +358,8 @@ def run_autonomous_prop_cycle(
                 forward_sim=settings.autonomous_forward_sim,
             )
             all_winners.extend(winners)
-            summary["backtests"].extend([{"name": w, "symbol": symbol} for w in winners])
-            finished_symbols.append(symbol)
+            summary["backtests"].extend([{"name": w, "symbol": symbol, "timeframe": tf} for w in winners])
+            finished_symbols.append(f"{symbol}:{tf}")
             job = _job()
             merge_search_progress(
                 job,
@@ -332,7 +367,7 @@ def run_autonomous_prop_cycle(
                 symbols_finished=list(finished_symbols),
                 tests_completed=total_eval,
             )
-            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval} tests so far"
+            job.message = f"Finished {symbol} {tf}: {len(winners)} saved · {total_eval} tests so far"
             job.progress_pct = min(95, int(100 * (list(symbols).index(symbol) + 1) / max(len(symbols), 1)))
             session.add(
                 ResearchActivity(

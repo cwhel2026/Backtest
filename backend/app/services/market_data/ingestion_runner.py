@@ -10,6 +10,7 @@ from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.services.market_data.bar_storage import persist_bars_to_dataset
 from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m
+from app.services.market_data.ibkr_ingest import bar_size_for_timeframe, fetch_ibkr_bars
 from app.services.market_data.yahoo_ingest import bars_to_storage, fetch_yahoo_ohlcv
 
 
@@ -58,6 +59,36 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
             "databento_symbol": db_symbol,
             "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
             "bars_1m_downloaded": len(bars_1m),
+        },
+    )
+
+
+def run_ibkr_ingestion(session: Session, payload: dict) -> HistoricalDataset:
+    symbol = payload.get("instrument_symbol")
+    timeframe = payload.get("timeframe", "5m")
+    start = parse_job_datetime(payload["start"])
+    end = parse_job_datetime(payload["end"])
+
+    inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
+    if not inst:
+        raise ValueError(f"Unknown instrument {symbol}")
+
+    bars = fetch_ibkr_bars(
+        symbol,
+        start=start,
+        end=end,
+        bar_size=bar_size_for_timeframe(timeframe),
+    )
+    stored = bars_to_storage(bars, source_timeframe=timeframe, target_timeframe=timeframe)
+    return persist_bars_to_dataset(
+        session,
+        provider_slug="ibkr",
+        instrument_id=inst.id,
+        timeframe=timeframe,
+        bars=stored,
+        meta={
+            "source": "ibkr_gateway",
+            "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
         },
     )
 

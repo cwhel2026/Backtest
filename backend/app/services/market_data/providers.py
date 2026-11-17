@@ -124,18 +124,38 @@ class InteractiveBrokersProvider(MarketDataProvider):
     display_name = "Interactive Brokers"
 
     async def health(self) -> ProviderHealth:
+        settings = get_settings()
+        if not settings.ibkr_configured:
+            return ProviderHealth(
+                slug=self.slug,
+                display_name=self.display_name,
+                state=ProviderConnectionState.NOT_CONFIGURED,
+                message="Set IBKR_HOST (and IBKR_PORT) where the worker can reach your IB Gateway.",
+                capabilities={"ohlcv": True, "1m": True, "5m": True, "requires_same_network": True},
+            )
         return ProviderHealth(
             slug=self.slug,
             display_name=self.display_name,
-            state=ProviderConnectionState.NOT_CONFIGURED,
-            message="IBKR gateway credentials not configured.",
-            capabilities={"ohlcv": True, "1m": True},
+            state=ProviderConnectionState.CONFIGURED,
+            message=f"Gateway {settings.ibkr_host}:{settings.ibkr_port}. Enable SEARCH_PREFER_IBKR for prop search.",
+            capabilities={"ohlcv": True, "1m": True, "5m": True, "requires_same_network": True},
         )
 
     async def ingest_historical(
         self, instrument_symbol: str, timeframe: str, start: datetime, end: datetime
     ) -> dict:
-        raise ValueError("Interactive Brokers provider not configured.")
+        health = await self.health()
+        if health.state == ProviderConnectionState.NOT_CONFIGURED:
+            raise ValueError(health.message)
+        return {
+            "provider": self.slug,
+            "instrument_symbol": instrument_symbol,
+            "timeframe": timeframe,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "queued",
+            "note": "Worker must reach your IB Gateway on the same network/VPN.",
+        }
 
 
 PROVIDER_REGISTRY: dict[str, MarketDataProvider] = {

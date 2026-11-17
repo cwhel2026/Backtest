@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     )
 
     databento_api_key: str = ""
+    ibkr_host: str = Field(default="", validation_alias=AliasChoices("IBKR_HOST", "ibkr_host"))
+    ibkr_port: int = Field(default=7497, validation_alias=AliasChoices("IBKR_PORT", "ibkr_port"))
+    ibkr_client_id: int = Field(default=11, validation_alias=AliasChoices("IBKR_CLIENT_ID", "ibkr_client_id"))
     openai_api_key: str = ""
     openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
     ai_research_enabled: bool = False
@@ -78,6 +81,10 @@ class Settings(BaseSettings):
     search_oos_min_win_rate: float = Field(default=0.38, validation_alias="SEARCH_OOS_MIN_WIN_RATE")
     search_ai_rounds: int = Field(default=2, validation_alias="SEARCH_AI_ROUNDS")
     search_ai_specs_per_round: int = Field(default=14, validation_alias="SEARCH_AI_SPECS_PER_ROUND")
+    search_timeframes: str = Field(default="5m,1m", validation_alias="SEARCH_TIMEFRAMES")
+    search_1m_budget_per_symbol: int = Field(default=72, validation_alias="SEARCH_1M_BUDGET_PER_SYMBOL")
+    search_1m_history_days: int = Field(default=7, validation_alias="SEARCH_1M_HISTORY_DAYS")
+    search_prefer_ibkr: bool = Field(default=False, validation_alias="SEARCH_PREFER_IBKR")
     paper_starting_equity: float = Field(default=100_000, validation_alias="PAPER_STARTING_EQUITY")
     paper_daily_loss: float = Field(default=2_000, validation_alias="PAPER_DAILY_LOSS")
     paper_trailing_dd: float = Field(default=3_000, validation_alias="PAPER_TRAILING_DD")
@@ -127,6 +134,13 @@ class Settings(BaseSettings):
     @property
     def ai_configured(self) -> bool:
         return bool(self.openai_api_key.strip()) and self.ai_research_enabled
+
+    @property
+    def ibkr_configured(self) -> bool:
+        return bool(self.ibkr_host.strip())
+
+    def search_timeframe_list(self) -> list[str]:
+        return [t.strip() for t in self.search_timeframes.split(",") if t.strip()]
 
 
 @lru_cache

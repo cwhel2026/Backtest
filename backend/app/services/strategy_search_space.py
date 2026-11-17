@@ -194,6 +194,70 @@ def _streak_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]
         yield _with_exits(base, stop, target)
 
 
+def _order_block_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for disp, max_age, side, (stop, target) in product((10, 14, 16), (36, 48, 72), ("both", "long", "short"), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "order_block",
+            {
+                "type": "order_block_retest",
+                "displacement_ticks": disp,
+                "max_age_bars": max_age,
+                "side": side,
+            },
+            f"{symbol} OB {disp}t {max_age}b",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _premium_discount_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for dmax, pmin, zone, (stop, target) in product(
+        (0.32, 0.38),
+        (0.62, 0.68),
+        ("both", "discount", "premium"),
+        STOP_TARGETS[:6],
+    ):
+        base = _base(
+            symbol,
+            timeframe,
+            "premium_discount",
+            {
+                "type": "premium_discount",
+                "discount_max": dmax,
+                "premium_min": pmin,
+                "zone": zone,
+            },
+            f"{symbol} P/D {zone} {dmax}/{pmin}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _mtf_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    htf = "15m" if timeframe in ("1m", "5m") else "1h"
+    for (fast, slow), (stop, target) in product(((8, 21), (9, 26)), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "mtf_pullback",
+            {
+                "type": "mtf_ema_pullback",
+                "htf": htf,
+                "fast_period": fast,
+                "slow_period": slow,
+            },
+            f"{symbol} MTF {htf} pull {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _intraday_1m_specs(symbol: str) -> Iterator[dict[str, Any]]:
+    """Tighter families on 1m for scalping-style search."""
+    for builder in (_fvg_specs, _order_block_specs, _liquidity_sweep_specs, _premium_discount_specs):
+        for spec in builder(symbol, "1m"):
+            yield spec
+
+
 FAMILY_BUILDERS = {
     "orb": _orb_specs,
     "ema": _ema_specs,
@@ -205,26 +269,41 @@ FAMILY_BUILDERS = {
     "fvg": _fvg_specs,
     "bollinger": _bollinger_specs,
     "liquidity": _liquidity_sweep_specs,
+    "order_block": _order_block_specs,
+    "premium_discount": _premium_discount_specs,
+    "mtf_pullback": _mtf_pullback_specs,
 }
 
 
 def family_pools(symbol: str, timeframe: str = "5m") -> dict[str, list[dict[str, Any]]]:
+    if timeframe == "1m":
+        pool = list(_intraday_1m_specs(symbol))
+        return {"intraday_1m": pool}
     return {name: list(builder(symbol, timeframe)) for name, builder in FAMILY_BUILDERS.items()}
 
 
 def all_search_specs(symbol: str, timeframe: str = "5m") -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
+    if timeframe == "1m":
+        specs.extend(_intraday_1m_specs(symbol))
+        return specs
     for builder in FAMILY_BUILDERS.values():
         specs.extend(builder(symbol, timeframe))
     return specs
 
 
-def sample_search_specs(symbol: str, budget: int, *, seed: int | None = None) -> list[dict[str, Any]]:
+def sample_search_specs(
+    symbol: str,
+    budget: int,
+    *,
+    seed: int | None = None,
+    timeframe: str = "5m",
+) -> list[dict[str, Any]]:
     """Draw evenly from each family so ORB stop-grid doesn't crowd out RSI/Donchian."""
-    universe = all_search_specs(symbol)
+    universe = all_search_specs(symbol, timeframe)
     if budget >= len(universe):
         return universe
-    pools = family_pools(symbol)
+    pools = family_pools(symbol, timeframe)
     rng = random.Random(seed)
     families = [name for name, pool in pools.items() if pool]
     if not families or budget <= 0:
@@ -245,7 +324,7 @@ def sample_search_specs(symbol: str, budget: int, *, seed: int | None = None) ->
                 return out
     leftover = budget - len(out)
     if leftover > 0:
-        rest = [s for s in all_search_specs(symbol) if s["name"] not in seen]
+        rest = [s for s in all_search_specs(symbol, timeframe) if s["name"] not in seen]
         extra = rng.sample(rest, min(leftover, len(rest))) if rest else []
         out.extend(extra)
     return out[:budget]

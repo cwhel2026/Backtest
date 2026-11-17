@@ -19,7 +19,7 @@ Return JSON only with this shape:
     "timeframe": "5m",
     "category": "snake_case",
     "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
-    "entry": {"type": "ema_crossover|ema_pullback|opening_range_breakout|vwap_reversion|rsi_reversion|donchian_breakout|consecutive_closes|fair_value_gap|bollinger_reversion|liquidity_sweep", "...params", "invert": false},
+    "entry": {"type": "ema_crossover|ema_pullback|mtf_ema_pullback|opening_range_breakout|vwap_reversion|rsi_reversion|donchian_breakout|consecutive_closes|fair_value_gap|bollinger_reversion|liquidity_sweep|order_block_retest|premium_discount", "...params", "invert": false},
     "exit": {"stop_ticks": int, "target_ticks": int, "session_end_flatten": true},
     "risk": {"dollar_risk_per_trade": number, "max_contracts": int}
   }
