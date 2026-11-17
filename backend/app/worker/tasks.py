@@ -247,7 +247,10 @@ def health_pulse() -> None:
 
 
 def create_prop_search_job(actor: str) -> str:
+    from app.util.serde import normalize_created_by
+
     job_id = str(uuid.uuid4())
+    actor_label = normalize_created_by(actor)
     with SyncSession() as db:
         job = ResearchJob(
             id=uuid.UUID(job_id),
@@ -255,7 +258,7 @@ def create_prop_search_job(actor: str) -> str:
             status=ResearchJobStatus.QUEUED,
             title=PROP_SEARCH_JOB_TITLE,
             message="Queued — runs on the server (safe to close the app)",
-            payload={"actor": actor, "source": "manual"},
+            payload={"actor": actor_label, "actor_display": actor, "source": "manual"},
         )
         db.add(job)
         db.add(

@@ -6,6 +6,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.backtest import ENGINE_VERSION
+from app.util.serde import clamp_str
 from app.backtest.bars import load_bars
 from app.backtest.engine import BacktestAssumptions, run_backtest
 from app.backtest.reproducibility import build_reproducibility_id
@@ -83,7 +84,7 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
                     exit_price=t["exit_price"],
                     stop_price=t.get("stop_price"),
                     target_price=t.get("target_price"),
-                    exit_reason=t["exit_reason"],
+                    exit_reason=clamp_str(str(t["exit_reason"]), 64),
                     gross_pnl=t["gross_pnl"],
                     commissions=t["commissions"],
                     slippage=t["slippage"],

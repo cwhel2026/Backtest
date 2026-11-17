@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.backtest.dsl import validate_spec
-from app.util.serde import normalize_created_by
+from app.util.serde import clamp_str, normalize_created_by
 from app.models.enums import StrategyLifecycle
 from app.models.instrument import Instrument
 from app.models.strategy import StrategyDefinition, StrategyHypothesis, StrategyVersion
@@ -23,6 +23,9 @@ def _normalize_spec(spec: dict, instrument_symbol: str, timeframe: str) -> dict:
         out["category"] = out.get("entry", {}).get("type", "custom")
     if "name" not in out:
         out["name"] = f"{instrument_symbol} {timeframe} {out['category']}"
+    out["name"] = clamp_str(str(out["name"]), 128)
+    out["category"] = clamp_str(str(out.get("category") or "custom"), 64)
+    out["timeframe"] = clamp_str(str(out.get("timeframe") or "5m"), 16)
     return out
 
 

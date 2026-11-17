@@ -12,6 +12,7 @@ from app.models.research import ResearchJob
 from app.models.strategy import StrategyDefinition
 from app.services.ai_research import generate_hypothesis_and_spec
 from app.services.strategy_factory import create_strategy_sync
+from app.util.serde import provisional_reproducibility_id
 
 
 def run_ai_hypothesis_job(session: Session, job: ResearchJob) -> tuple[StrategyDefinition, str | None]:
@@ -45,7 +46,7 @@ def run_ai_hypothesis_job(session: Session, job: ResearchJob) -> tuple[StrategyD
             dataset_id=uuid.UUID(dataset_id),
             status="queued",
             engine_version="pending",
-            reproducibility_id="pending",
+            reproducibility_id=provisional_reproducibility_id(),
             assumptions={},
             parameters={},
         )

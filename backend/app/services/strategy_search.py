@@ -16,6 +16,7 @@ from app.models.research import ResearchActivity
 from app.services.backtest_runner import execute_backtest_run
 from app.services.forward_sim import run_forward_simulation
 from app.services.paper_book import enroll_strategy
+from app.util.serde import provisional_reproducibility_id
 from app.services.prop_screen import is_profitable_backtest, rank_score
 from app.services.strategy_factory import create_strategy_sync
 from app.services.strategy_reverse import is_anti_edge, reverse_passes_oos, reverse_spec
@@ -301,7 +302,7 @@ def _persist_one_hit(
         dataset_id=dataset.id,
         status="queued",
         engine_version="pending",
-        reproducibility_id="pending",
+        reproducibility_id=provisional_reproducibility_id(),
         assumptions={"slippage_ticks_per_side": 1},
         parameters={
             "search": hit.origin,
