@@ -40,8 +40,8 @@ export default function OverviewPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h2 className="text-2xl font-semibold text-white">Research overview</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <h2 className="page-title">Research overview</h2>
+        <p className="page-sub">
           Live counts from PostgreSQL — no fabricated performance.
         </p>
       </header>

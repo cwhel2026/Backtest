@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ScrollTable } from "@/components/ScrollTable";
 import { apiFetch } from "@/lib/api";
 
 type Strategy = {
@@ -23,8 +24,9 @@ export default function StrategiesPage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold text-white">Strategy Explorer</h2>
-      <p className="mt-1 text-sm text-zinc-500">All strategies stored in the research database.</p>
+      <h2 className="page-title">Strategy Explorer</h2>
+      <p className="page-sub">All strategies stored in the research database.</p>
+      <ScrollTable>
       <div className="mt-6 overflow-hidden rounded-lg border border-zinc-800">
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-900/80 text-xs uppercase text-zinc-500">
@@ -61,6 +63,7 @@ export default function StrategiesPage() {
           </tbody>
         </table>
       </div>
+      </ScrollTable>
     </div>
   );
 }

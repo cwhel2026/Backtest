@@ -13,4 +13,14 @@
 body {
   color: var(--foreground);
   background: var(--background);
+  -webkit-tap-highlight-color: transparent;
+}
+
+@layer utilities {
+  .page-title {
+    @apply text-xl font-semibold text-white md:text-2xl;
+  }
+  .page-sub {
+    @apply mt-1 text-xs text-zinc-500 md:text-sm;
+  }
 }

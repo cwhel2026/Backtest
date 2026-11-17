@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
+import { ScrollTable } from "@/components/ScrollTable";
 import { apiFetch } from "@/lib/api";
 
 type Dataset = { id: string; timeframe: string; row_count: number; meta?: { label?: string } };
@@ -60,20 +61,20 @@ export default function BacktestsPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h2 className="text-2xl font-semibold text-white">Backtest laboratory</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <h2 className="page-title">Backtest laboratory</h2>
+        <p className="page-sub">
           Event-driven simulation with reproducibility ID. Results are{" "}
           <span className="text-zinc-300">{runs[0]?.performance_category || "backtest"}</span> only.
         </p>
       </header>
 
-      <form onSubmit={onSubmit} className="rounded-lg border border-zinc-800 bg-[#181b22] p-6">
+      <form onSubmit={onSubmit} className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-200">Run backtest</h3>
-        <div className="mt-4 flex flex-wrap gap-4">
-          <label className="text-sm text-zinc-400">
+        <div className="mt-4 flex flex-col gap-4 md:flex-row md:flex-wrap">
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
             Strategy
             <select
-              className="ml-2 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
               value={strategyId}
               onChange={(e) => setStrategyId(e.target.value)}
             >
@@ -84,10 +85,10 @@ export default function BacktestsPage() {
               ))}
             </select>
           </label>
-          <label className="text-sm text-zinc-400">
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
             Dataset
             <select
-              className="ml-2 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
               value={datasetId}
               onChange={(e) => setDatasetId(e.target.value)}
             >
@@ -105,7 +106,7 @@ export default function BacktestsPage() {
           <button
             type="submit"
             disabled={!datasetId || !strategyId}
-            className="rounded-md bg-emerald-700 px-4 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-40"
+            className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 disabled:opacity-40 md:w-auto md:py-2"
           >
             Queue backtest
           </button>
@@ -113,6 +114,7 @@ export default function BacktestsPage() {
         {message ? <p className="mt-3 text-sm text-zinc-400">{message}</p> : null}
       </form>
 
+      <ScrollTable>
       <section className="overflow-hidden rounded-lg border border-zinc-800">
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-900/80 text-xs uppercase text-zinc-500">
@@ -147,6 +149,7 @@ export default function BacktestsPage() {
           </tbody>
         </table>
       </section>
+      </ScrollTable>
     </div>
   );
 }
