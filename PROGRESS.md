@@ -32,9 +32,13 @@ Last updated: 2025-11-17 (Europe/London)
 - [x] Celery worker persists datasets (aggregate to 1m/5m/15m/1h)
 - [x] Market Data UI: source selector + timeframe
 
+## Completed (Phase 3 — initial)
+
+- [x] AI / heuristic strategy generation (`POST /research/ai/generate`, Celery `ai_hypothesis` jobs)
+- [x] OpenAI JSON specs when `OPENAI_API_KEY` + `AI_RESEARCH_ENABLED`; heuristic fallback without key
+- [x] Custom strategy create (`POST /strategies`) + clone + **New strategy** UI
+
 ## In Progress / Next
-- [ ] Phase 3: AI hypothesis generation with structured strategy schema
-- [ ] Custom strategy create/edit API + UI (beyond seeded library)
 - [ ] WebSocket/SSE for dashboard live updates
 
 ## Known Issues

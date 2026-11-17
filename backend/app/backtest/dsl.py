@@ -19,14 +19,25 @@ class EntrySignal:
     reason: str
 
 
+ENTRY_TYPES = frozenset({"opening_range_breakout", "ema_crossover", "vwap_reversion"})
+SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
+
+
 def validate_spec(spec: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for key in ("name", "instrument_symbol", "timeframe", "entry", "exit", "risk"):
         if key not in spec:
             errors.append(f"Missing {key}")
+    if spec.get("timeframe") not in SUPPORTED_TIMEFRAMES:
+        errors.append(f"timeframe must be one of {sorted(SUPPORTED_TIMEFRAMES)}")
     entry = spec.get("entry") or {}
     if "type" not in entry:
         errors.append("entry.type required")
+    elif entry.get("type") not in ENTRY_TYPES:
+        errors.append(f"entry.type must be one of {sorted(ENTRY_TYPES)}")
+    exit_spec = spec.get("exit") or {}
+    if "stop_ticks" not in exit_spec or "target_ticks" not in exit_spec:
+        errors.append("exit.stop_ticks and exit.target_ticks required")
     return errors
 
 

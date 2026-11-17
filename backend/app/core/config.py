@@ -61,6 +61,7 @@ class Settings(BaseSettings):
 
     databento_api_key: str = ""
     openai_api_key: str = ""
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
     ai_research_enabled: bool = False
     max_experiments_per_day: int = 50
 
