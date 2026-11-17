@@ -1,0 +1,12 @@
+# EASY MODE — one backend service runs API + Celery worker together.
+# Railway: Root Directory = backend , Config file = railway.toml
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "bash scripts/railway-start-simple.sh"
+healthcheckPath = "/health"
+healthcheckTimeout = 180
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

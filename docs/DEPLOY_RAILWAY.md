@@ -1,6 +1,8 @@
-# Deploy PROP EDGE AI on Railway (GitHub-connected)
+# Deploy PROP EDGE AI on Railway (advanced — separate worker)
 
-Railway runs the platform **24/7** as separate services from one GitHub repo: API, Celery worker, Celery beat, frontend, plus managed Postgres and Redis.
+> **Most people should use [RAILWAY_EASY.md](./RAILWAY_EASY.md)** instead (one backend + one frontend).
+
+This guide splits API, Celery worker, and beat into **separate** Railway services for heavier production use.
 
 ## 1. Create the Railway project
 

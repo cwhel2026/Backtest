@@ -6,7 +6,9 @@ This repository implements **Phase 1–2**: foundation plus event-driven backtes
 
 ## Deploy on Railway (24/7 runner)
 
-GitHub-connected Railway setup (Postgres + Redis + API + worker + frontend) is documented in **[docs/DEPLOY_RAILWAY.md](./docs/DEPLOY_RAILWAY.md)**.
+**Start here:** **[docs/RAILWAY_EASY.md](./docs/RAILWAY_EASY.md)** — Postgres + Redis + **one backend** + **one frontend** (step-by-step).
+
+Advanced (separate worker service): [docs/DEPLOY_RAILWAY.md](./docs/DEPLOY_RAILWAY.md).
 
 ## Quick start (Docker)
 

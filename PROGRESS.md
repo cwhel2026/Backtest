@@ -36,6 +36,10 @@ Last updated: 2025-11-17 (Europe/London)
 - Paper trading, prop-firm rules, and live broker adapters are placeholder pages until later phases
 - Celery beat `health_pulse` is a no-op connectivity check (does not write fake activity)
 
+## Railway deployment
+
+See **[docs/DEPLOY_RAILWAY.md](./docs/DEPLOY_RAILWAY.md)** — API + worker + beat + frontend from one GitHub repo; Postgres/Redis plugins; `railway.*.toml` per service.
+
 ## How to Resume
 
 1. Read this file and `README.md`

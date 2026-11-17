@@ -45,8 +45,19 @@ class Settings(BaseSettings):
         validation_alias="ALLOWED_ORIGINS",
     )
 
-    initial_admin_email: str = "admin@propedge.local"
-    initial_admin_password: str = "PropEdge!ChangeMe123"
+    initial_admin_email: str = Field(
+        default="admin@propedge.local",
+        validation_alias=AliasChoices("INITIAL_ADMIN_EMAIL", "initial_admin_email", "ADMIN_EMAIL"),
+    )
+    initial_admin_password: str = Field(
+        default="PropEdge!ChangeMe123",
+        validation_alias=AliasChoices(
+            "INITIAL_ADMIN_PASSWORD",
+            "initial_admin_password",
+            "ADMIN_PASSWORD",
+            "PASSWORD",
+        ),
+    )
 
     databento_api_key: str = ""
     openai_api_key: str = ""
