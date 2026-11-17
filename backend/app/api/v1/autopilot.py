@@ -1,5 +1,3 @@
-import uuid
-
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,12 +5,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models.research import ResearchActivity
+from app.models.enums import ResearchJobStatus
+from app.models.research import ResearchActivity, ResearchJob
 from app.models.user import User
-from app.schemas.autopilot import AutopilotRunResponse, AutopilotStatus, CycleStats, LeaderboardEntry
-from app.services.autonomous_cycle import resolve_search_symbols, run_autonomous_prop_cycle
+from app.schemas.autopilot import (
+    AutopilotRunResponse,
+    AutopilotStatus,
+    BackgroundSearchStatus,
+    CycleStats,
+    LeaderboardEntry,
+)
+from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, resolve_search_symbols
 from app.services.leaderboard import leaderboard_entries_async
-from app.worker.tasks import autonomous_prop_cycle
+from app.worker.tasks import create_prop_search_job, run_prop_search_job
 
 router = APIRouter(prefix="/autopilot", tags=["autopilot"])
 
@@ -32,7 +37,28 @@ async def autopilot_status(
         {"headline": a.headline, "detail": a.detail, "created_at": a.created_at.isoformat()} for a in activity
     ]
 
-    last_cycle = next((a for a in activity if "cycle" in a.headline.lower()), None)
+    active_job = (
+        await db.execute(
+            select(ResearchJob)
+            .where(
+                ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+            )
+            .order_by(desc(ResearchJob.created_at))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    background_search = None
+    if active_job:
+        background_search = BackgroundSearchStatus(
+            job_id=str(active_job.id),
+            status=active_job.status.value,
+            message=active_job.message,
+            progress_pct=active_job.progress_pct,
+            started_at=active_job.started_at.isoformat() if active_job.started_at else None,
+        )
+
+    last_cycle = next((a for a in activity if "search" in a.headline.lower()), None)
     cycle_stats = CycleStats(
         last_cycle_detail=last_cycle.detail if last_cycle else None,
         profitable_count=len(profitable),
@@ -52,8 +78,10 @@ async def autopilot_status(
         search_symbols=list(resolve_search_symbols()),
         message=(
             "Deep search on S&P + Nasdaq (MES/MNQ/NQ/ES by default): 120+ combos per symbol, "
-            "35 days of 5m data, walk-forward validation, OOS-profitable only."
+            "35 days of 5m data, walk-forward validation, OOS-profitable only. "
+            "Runs on the server — hourly autopilot and manual searches continue if you close the app."
         ),
+        background_search=background_search,
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],
         recent_activity=recent,
         cycle_stats=cycle_stats,
@@ -75,21 +103,30 @@ async def prop_leaderboard(
 async def run_autopilot_now(
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> AutopilotRunResponse:
-    job_id = str(uuid.uuid4())
+    active_job = (
+        await db.execute(
+            select(ResearchJob)
+            .where(
+                ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+            )
+            .order_by(desc(ResearchJob.created_at))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active_job:
+        return AutopilotRunResponse(
+            job_id=str(active_job.id),
+            status=active_job.status.value,
+            mode="already_active",
+        )
+
+    job_id = create_prop_search_job(user.email)
     try:
-        autonomous_prop_cycle.delay()
+        run_prop_search_job.delay(job_id)
         return AutopilotRunResponse(job_id=job_id, status="queued", mode="celery")
     except Exception:
-        def _inline() -> None:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
-
-            settings = get_settings()
-            engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
-            Session = sessionmaker(bind=engine)
-            with Session() as session:
-                run_autonomous_prop_cycle(session, actor=user.email)
-
-        background_tasks.add_task(_inline)
-        return AutopilotRunResponse(job_id=None, status="running", mode="inline")
+        background_tasks.add_task(run_prop_search_job, job_id)
+        return AutopilotRunResponse(job_id=job_id, status="queued", mode="inline")

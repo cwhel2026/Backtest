@@ -12,6 +12,11 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.backtest_runner import execute_backtest_run
 from app.services.ai_research_runner import count_ai_jobs_today, run_ai_hypothesis_job
+from app.services.autonomous_cycle import (
+    PROP_SEARCH_JOB_TITLE,
+    find_active_prop_search_job,
+    run_autonomous_prop_cycle,
+)
 from app.services.market_data.ingestion_runner import run_databento_ingestion, run_yahoo_ingestion
 
 settings = get_settings()
@@ -241,12 +246,58 @@ def health_pulse() -> None:
     _ = SyncSession  # ensures DB connectivity on schedule
 
 
+def create_prop_search_job(actor: str) -> str:
+    job_id = str(uuid.uuid4())
+    with SyncSession() as db:
+        job = ResearchJob(
+            id=uuid.UUID(job_id),
+            kind=ResearchJobKind.VALIDATION,
+            status=ResearchJobStatus.QUEUED,
+            title=PROP_SEARCH_JOB_TITLE,
+            message="Queued — runs on the server (safe to close the app)",
+            payload={"actor": actor, "source": "manual"},
+        )
+        db.add(job)
+        db.add(
+            ResearchActivity(
+                headline="Deep search queued",
+                detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
+                job_id=job.id,
+            )
+        )
+        db.commit()
+    return job_id
+
+
+def enqueue_prop_search(actor: str) -> tuple[str, str]:
+    """Return (job_id, disposition) where disposition is queued | already_active."""
+    with SyncSession() as db:
+        active = find_active_prop_search_job(db)
+        if active:
+            return str(active.id), "already_active"
+    job_id = create_prop_search_job(actor)
+    run_prop_search_job.delay(job_id)
+    return job_id, "queued"
+
+
+@celery_app.task(name="app.worker.tasks.run_prop_search_job")
+def run_prop_search_job(job_id: str) -> None:
+    with SyncSession() as db:
+        job = db.get(ResearchJob, uuid.UUID(job_id))
+        if not job:
+            return
+        if job.status in (ResearchJobStatus.COMPLETED, ResearchJobStatus.FAILED):
+            return
+        actor = (job.payload or {}).get("actor", "autopilot")
+        run_autonomous_prop_cycle(db, actor=actor, job_id=job_id)
+
+
 @celery_app.task(name="app.worker.tasks.autonomous_prop_cycle")
 def autonomous_prop_cycle() -> None:
     settings_ref = get_settings()
     if not settings_ref.autonomous_hourly_enabled:
         return
-    from app.services.autonomous_cycle import run_autonomous_prop_cycle
-
     with SyncSession() as db:
+        if find_active_prop_search_job(db):
+            return
         run_autonomous_prop_cycle(db, actor="hourly_autopilot")

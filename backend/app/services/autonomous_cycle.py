@@ -18,6 +18,7 @@ from app.services.strategy_search import persist_search_hits, run_deep_search
 # Nasdaq micro + e-mini always included (even if SEARCH_SYMBOLS omits them).
 NASDAQ_SYMBOLS = ("MNQ", "NQ")
 DEFAULT_SEARCH_SYMBOLS = ("MNQ", "NQ", "MES", "ES")
+PROP_SEARCH_JOB_TITLE = "Deep prop search"
 
 
 def resolve_search_symbols() -> tuple[str, ...]:
@@ -54,6 +55,18 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
+def find_active_prop_search_job(session: Session) -> ResearchJob | None:
+    return session.execute(
+        select(ResearchJob)
+        .where(
+            ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+            ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+        )
+        .order_by(desc(ResearchJob.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
     inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
     if not inst:
@@ -66,7 +79,11 @@ def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
     ).scalar_one_or_none()
 
 
-def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dict:
+def run_autonomous_prop_cycle(
+    session: Session,
+    actor: str = "autopilot",
+    job_id: str | None = None,
+) -> dict:
     settings = get_settings()
     budget = int(getattr(settings, "search_budget_per_symbol", 120) or 120)
     history_days = int(getattr(settings, "search_history_days", 35) or 35)
@@ -75,16 +92,28 @@ def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dic
 
     summary: dict = {"symbols": {}, "backtests": [], "sims": [], "search_evaluations": 0}
 
-    job = ResearchJob(
-        kind=ResearchJobKind.VALIDATION,
-        status=ResearchJobStatus.RUNNING,
-        title="Deep prop search",
-        message="Loading market data",
-        started_at=datetime.now(UTC),
-        payload={"actor": actor, "budget_per_symbol": budget},
-    )
-    session.add(job)
-    session.flush()
+    if job_id:
+        from uuid import UUID
+
+        job = session.get(ResearchJob, UUID(job_id) if isinstance(job_id, str) else job_id)
+        if not job:
+            raise ValueError(f"Unknown prop search job {job_id}")
+        job.status = ResearchJobStatus.RUNNING
+        job.message = "Loading market data"
+        job.started_at = datetime.now(UTC)
+        job.payload = {**(job.payload or {}), "actor": actor, "budget_per_symbol": budget}
+        session.flush()
+    else:
+        job = ResearchJob(
+            kind=ResearchJobKind.VALIDATION,
+            status=ResearchJobStatus.RUNNING,
+            title=PROP_SEARCH_JOB_TITLE,
+            message="Loading market data",
+            started_at=datetime.now(UTC),
+            payload={"actor": actor, "budget_per_symbol": budget},
+        )
+        session.add(job)
+        session.flush()
 
     try:
         datasets: dict[str, HistoricalDataset] = {}

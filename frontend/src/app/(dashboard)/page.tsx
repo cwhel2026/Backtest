@@ -5,10 +5,19 @@ import { useEffect, useState } from "react";
 import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
 import { apiFetch } from "@/lib/api";
 
+type BackgroundSearch = {
+  job_id: string;
+  status: string;
+  message: string;
+  progress_pct: number;
+  started_at: string | null;
+};
+
 type AutopilotStatus = {
   hourly_enabled: boolean;
   ai_configured: boolean;
   message: string;
+  background_search: BackgroundSearch | null;
   profitable_candidates: LeaderboardEntry[];
   recent_activity: { headline: string; detail: string; created_at: string }[];
   cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
@@ -26,20 +35,31 @@ export default function HomePage() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 15000);
-    return () => clearInterval(t);
+    return () => undefined;
   }, []);
+
+  useEffect(() => {
+    const busy = status?.background_search?.status === "queued" || status?.background_search?.status === "running";
+    const ms = busy ? 8000 : 15000;
+    const t = setInterval(refresh, ms);
+    return () => clearInterval(t);
+  }, [status?.background_search?.status]);
 
   async function runNow() {
     setRunning(true);
     setNote(null);
     try {
-      const res = await apiFetch<{ status: string; mode: string }>("/api/v1/autopilot/run", { method: "POST" });
-      setNote(
-        res.mode === "inline"
-          ? "Deep search running (100s of combos per symbol) — allow 5–8 minutes, then refresh."
-          : "Deep search queued — allow several minutes, then refresh."
+      const res = await apiFetch<{ status: string; mode: string; job_id: string | null }>(
+        "/api/v1/autopilot/run",
+        { method: "POST" }
       );
+      if (res.mode === "already_active") {
+        setNote("Search already running on the server — you can leave this page; results will appear when it finishes.");
+      } else {
+        setNote(
+          "Search queued on the server (5–8 min). You can close the app or switch tabs — hourly research also runs in the background."
+        );
+      }
       setTimeout(refresh, 5000);
     } catch (e) {
       setNote(String(e));
@@ -63,6 +83,11 @@ export default function HomePage() {
           <span className="rounded-full border border-violet-900/50 bg-violet-950/30 px-2 py-1 text-violet-200/90">
             Markets: {(status?.search_symbols ?? ["MNQ", "NQ", "MES", "ES"]).join(" · ")}
           </span>
+          {status?.background_search ? (
+            <span className="rounded-full border border-amber-800/60 bg-amber-950/40 px-2 py-1 text-amber-200/90">
+              {status.background_search.status === "queued" ? "Queued" : "Searching"} on server — safe to leave
+            </span>
+          ) : null}
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
           <span className="rounded-full border border-zinc-700 px-2 py-1">
             AI: {status?.ai_configured ? "OpenAI" : "rules"}
