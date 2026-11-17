@@ -80,4 +80,10 @@ def format_metric_display(metrics: dict[str, Any] | None) -> dict[str, str | int
         "expectancy_usd": round(float(metrics.get("expectancy_per_trade") or 0), 2)
         if metrics.get("expectancy_per_trade") is not None
         else None,
+        "avg_win_usd": round(float(metrics.get("average_win") or 0), 2)
+        if metrics.get("average_win") is not None
+        else None,
+        "avg_loss_usd": round(float(metrics.get("average_loss") or 0), 2)
+        if metrics.get("average_loss") is not None
+        else None,
     }

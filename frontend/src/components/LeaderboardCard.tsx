@@ -8,6 +8,7 @@ export type LeaderboardEntry = {
   category: string;
   timeframe: string;
   origin?: string;
+  passes_prop_screen?: boolean;
   prop_ready_score: number;
   metrics: {
     net_profit_usd?: number;
@@ -16,6 +17,8 @@ export type LeaderboardEntry = {
     win_rate_pct?: number | null;
     max_drawdown_usd?: number;
     expectancy_usd?: number | null;
+    avg_win_usd?: number | null;
+    avg_loss_usd?: number | null;
   };
 };
 
@@ -29,6 +32,8 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
   const m = row.metrics;
   const reversed = row.origin === "reverse" || row.category.startsWith("reversed_");
   const nearMiss = row.origin === "near_miss";
+  const lowHitRate = (m.win_rate_pct ?? 100) < 42;
+  const swingStyle = lowHitRate && (m.net_profit_usd ?? 0) > 0;
   return (
     <li className="rounded-xl border border-zinc-800 bg-gradient-to-br from-[#1a1d26] to-[#14171e] p-4 shadow-lg">
       <div className="flex items-start justify-between gap-3">
@@ -37,6 +42,7 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
             {reversed ? " · reverse fade" : ""}
             {nearMiss ? " · did not pass prop screen" : ""}
+            {swingStyle && row.prop_ready_score === 0 ? " · swing-style R:R" : ""}
           </p>
           <Link
             href={`/backtests/${row.run_id}`}
@@ -64,7 +70,14 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           </p>
         </div>
       </div>
-      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
+      {swingStyle ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
+          Expectancy is average $ per trade (net P&amp;L ÷ trades). A low win rate can still be positive when
+          winners are much larger than losers — that is wide R:R, not a typical intraday prop profile (keepers
+          need ≥42% hit rate).
+        </p>
+      ) : null}
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
         <Metric label="Net P&L" value={fmtUsd(m.net_profit_usd)} positive={(m.net_profit_usd ?? 0) > 0} />
         <Metric
           label="Profit factor"
@@ -72,9 +85,15 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           positive={(m.profit_factor ?? 0) >= 1.1}
         />
         <Metric label="Trades" value={String(m.trade_count ?? "—")} />
-        <Metric label="Win rate" value={m.win_rate_pct != null ? `${m.win_rate_pct}%` : "—"} />
+        <Metric
+          label="Win rate"
+          value={m.win_rate_pct != null ? `${m.win_rate_pct}%` : "—"}
+          positive={!lowHitRate}
+        />
         <Metric label="Max DD" value={m.max_drawdown_usd != null ? fmtUsd(-m.max_drawdown_usd) : "—"} />
-        <Metric label="Expectancy" value={fmtUsd(m.expectancy_usd)} positive={(m.expectancy_usd ?? 0) > 0} />
+        <Metric label="Expectancy / trade" value={fmtUsd(m.expectancy_usd)} positive={(m.expectancy_usd ?? 0) > 0} />
+        <Metric label="Avg win" value={fmtUsd(m.avg_win_usd)} positive />
+        <Metric label="Avg loss" value={m.avg_loss_usd != null ? fmtUsd(-Math.abs(m.avg_loss_usd)) : "—"} positive={false} />
       </dl>
     </li>
   );
