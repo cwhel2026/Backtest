@@ -172,8 +172,10 @@ def run_autonomous_prop_cycle(
         job.completed_at = datetime.now(UTC)
         if all_winners:
             job.message = f"Found {len(all_winners)} walk-forward winners"
+            reverse_n = sum(1 for w in all_winners if w.startswith("REV "))
             detail = (
-                f"Scored {total_eval}+ backtests · {len(all_winners)} passed OOS: "
+                f"Scored {total_eval}+ backtests · {len(all_winners)} passed OOS"
+                f"{f' ({reverse_n} reverse fades)' if reverse_n else ''}: "
                 f"{', '.join(all_winners[:6])}"
             )
         else:

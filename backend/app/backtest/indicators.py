@@ -19,6 +19,41 @@ def ema_series(values: list[Decimal], period: int) -> list[Decimal | None]:
     return out
 
 
+def rsi_series(values: list[Decimal], period: int = 14) -> list[Decimal | None]:
+    """Wilder RSI. Index i uses closes through i (no lookahead)."""
+    if period <= 0:
+        raise ValueError("period must be positive")
+    out: list[Decimal | None] = [None] * len(values)
+    if len(values) < period + 1:
+        return out
+    avg_gain = Decimal(0)
+    avg_loss = Decimal(0)
+    for i in range(1, period + 1):
+        delta = values[i] - values[i - 1]
+        if delta >= 0:
+            avg_gain += delta
+        else:
+            avg_loss += -delta
+    avg_gain /= Decimal(period)
+    avg_loss /= Decimal(period)
+
+    def _rsi(gain: Decimal, loss: Decimal) -> Decimal:
+        if loss == 0:
+            return Decimal(100)
+        rs = gain / loss
+        return Decimal(100) - (Decimal(100) / (Decimal(1) + rs))
+
+    out[period] = _rsi(avg_gain, avg_loss)
+    for i in range(period + 1, len(values)):
+        delta = values[i] - values[i - 1]
+        gain = delta if delta > 0 else Decimal(0)
+        loss = -delta if delta < 0 else Decimal(0)
+        avg_gain = (avg_gain * Decimal(period - 1) + gain) / Decimal(period)
+        avg_loss = (avg_loss * Decimal(period - 1) + loss) / Decimal(period)
+        out[i] = _rsi(avg_gain, avg_loss)
+    return out
+
+
 def session_vwap(bars: list[Bar], session_date_key: list[str]) -> list[Decimal | None]:
     """session_date_key[i] groups bars into session buckets for VWAP."""
     out: list[Decimal | None] = [None] * len(bars)

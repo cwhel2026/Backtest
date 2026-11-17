@@ -77,9 +77,10 @@ async def autopilot_status(
         ai_configured=settings.ai_configured,
         search_symbols=list(resolve_search_symbols()),
         message=(
-            "Deep search on S&P + Nasdaq (MES/MNQ/NQ/ES by default): 120+ combos per symbol, "
-            "35 days of 5m data, walk-forward validation, OOS-profitable only. "
-            "Runs on the server — hourly autopilot and manual searches continue if you close the app."
+            "Server-side search on Nasdaq + S&P (MNQ, NQ, MES, ES): RSI, Donchian, ORB, EMA, VWAP, "
+            "streak setups, walk-forward validation. Anti-edge systems (e.g. 8% win rate) are "
+            "reversed (fade + swap stop/target) and kept only if OOS actually inverts. "
+            "Safe to close the app — hourly autopilot continues on the worker."
         ),
         background_search=background_search,
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],

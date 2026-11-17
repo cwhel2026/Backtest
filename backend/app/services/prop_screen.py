@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def is_profitable_backtest(metrics: dict[str, Any] | None) -> bool:
+def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = False) -> bool:
     if not metrics:
         return False
     net = float(metrics.get("total_net_profit") or 0)
@@ -13,9 +13,11 @@ def is_profitable_backtest(metrics: dict[str, Any] | None) -> bool:
     trades = int(metrics.get("trade_count") or 0)
     if net <= 0:
         return False
-    if pf is None or float(pf) < 1.1:
+    min_pf = 1.05 if reverse else 1.1
+    min_trades = 6 if reverse else 8
+    if pf is None or float(pf) < min_pf:
         return False
-    if trades < 8:
+    if trades < min_trades:
         return False
     max_dd = float(metrics.get("max_drawdown") or 0)
     if max_dd > 3500:

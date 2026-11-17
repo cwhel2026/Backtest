@@ -19,13 +19,14 @@ Return JSON only with this shape:
     "timeframe": "5m",
     "category": "snake_case",
     "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
-    "entry": {"type": "ema_crossover|opening_range_breakout|vwap_reversion", "...params"},
+    "entry": {"type": "ema_crossover|opening_range_breakout|vwap_reversion|rsi_reversion|donchian_breakout|consecutive_closes", "...params", "invert": false},
     "exit": {"stop_ticks": int, "target_ticks": int, "session_end_flatten": true},
     "risk": {"dollar_risk_per_trade": number, "max_contracts": int}
   }
 }
 entry types: ema_crossover (fast_period, slow_period), opening_range_breakout (range_minutes, side),
-vwap_reversion (deviation_ticks).
+vwap_reversion (deviation_ticks), rsi_reversion (period, oversold, overbought),
+donchian_breakout (lookback), consecutive_closes (count). invert=true fades the signal.
 timeframes: 1m, 5m, 15m, 1h only.
 """
 
@@ -36,7 +37,17 @@ def _heuristic_generate(instrument_symbol: str, timeframe: str, prompt: str) -> 
     if timeframe not in SUPPORTED_TIMEFRAMES:
         timeframe = "5m"
 
-    if any(w in text for w in ("vwap", "reversion", "mean revert", "fade")):
+    if "rsi" in text.split() or "rsi" in text.replace("-", " ").split():
+        entry_type = "rsi_reversion"
+        category = "rsi_reversion"
+        entry = {"type": entry_type, "period": 14, "oversold": 30, "overbought": 70}
+        rationale = f"Heuristic: RSI stretch mean-reversion on {symbol}."
+    elif any(w in text for w in ("donchian", "channel", "turtle")):
+        entry_type = "donchian_breakout"
+        category = "donchian_breakout"
+        entry = {"type": entry_type, "lookback": 20}
+        rationale = f"Heuristic: Donchian breakout on {symbol}."
+    elif any(w in text for w in ("vwap", "reversion", "mean revert", "fade")):
         entry_type = "vwap_reversion"
         category = "vwap_mean_reversion"
         entry = {"type": entry_type, "deviation_ticks": 16}

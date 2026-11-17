@@ -74,7 +74,9 @@ export default function HomePage() {
     <div className="space-y-8">
       <header>
         <h2 className="page-title">Prop firm autopilot</h2>
-        <p className="page-sub">Only profitable, named strategies appear below — losers are filtered out.</p>
+        <p className="page-sub">
+          Profitable named strategies only. Anti-edge setups (very low win rate) are reversed and re-tested.
+        </p>
       </header>
 
       <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
@@ -117,12 +119,14 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Must have net &gt; $0, profit factor ≥ 1.1, ≥8 trades, drawdown under ~$3.5k (on $100k sim).
+          Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, DD under ~$3.5k. Reverse fades can keep a slightly
+          lower PF if win rate actually inverted out of sample.
         </p>
         {!candidates.length ? (
           <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
-            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests many
-            combos across Nasdaq (MNQ, NQ) and S&amp;P (MES, ES).
+            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests RSI,
+            Donchian, ORB, EMA, VWAP and streak systems on Nasdaq + S&amp;P, then fades any anti-edge
+            (e.g. 8% WR → reverse ~92% WR) if walk-forward still holds.
           </div>
         ) : (
           <ul className="mt-4 space-y-4">

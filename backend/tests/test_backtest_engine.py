@@ -61,6 +61,57 @@ def test_backtest_no_lookahead_uses_next_bar_open():
         assert t["entry_ts"] > t["signal_ts"]
 
 
+def test_invert_flips_trade_direction():
+    spec = {
+        "name": "test ema",
+        "instrument_symbol": "MES",
+        "timeframe": "5m",
+        "category": "trend",
+        "session": {"allowed": ["RTH"]},
+        "entry": {"type": "ema_crossover", "fast_period": 3, "slow_period": 5},
+        "exit": {"stop_ticks": 40, "target_ticks": 40, "session_end_flatten": True},
+        "risk": {"dollar_risk_per_trade": 50, "max_contracts": 1},
+    }
+    bars = _synthetic_rth_bars()
+    inst = _mes()
+    original = run_backtest(spec, bars, inst, "5m", BacktestAssumptions())
+    inverted = dict(spec)
+    inverted["entry"] = {**spec["entry"], "invert": True}
+    flipped = run_backtest(inverted, bars, inst, "5m", BacktestAssumptions())
+    assert len(original.trades) == len(flipped.trades)
+    if original.trades:
+        assert original.trades[0]["direction"] != flipped.trades[0]["direction"]
+
+
+def test_rsi_and_donchian_specs_validate_and_run():
+    bars = _synthetic_rth_bars()
+    inst = _mes()
+    rsi = {
+        "name": "rsi",
+        "instrument_symbol": "MES",
+        "timeframe": "5m",
+        "category": "rsi_reversion",
+        "session": {"allowed": ["RTH"]},
+        "entry": {"type": "rsi_reversion", "period": 5, "oversold": 40, "overbought": 60},
+        "exit": {"stop_ticks": 20, "target_ticks": 20, "session_end_flatten": True},
+        "risk": {"dollar_risk_per_trade": 50, "max_contracts": 1},
+    }
+    don = {
+        "name": "don",
+        "instrument_symbol": "MES",
+        "timeframe": "5m",
+        "category": "donchian_breakout",
+        "session": {"allowed": ["RTH"]},
+        "entry": {"type": "donchian_breakout", "lookback": 5},
+        "exit": {"stop_ticks": 20, "target_ticks": 20, "session_end_flatten": True},
+        "risk": {"dollar_risk_per_trade": 50, "max_contracts": 1},
+    }
+    r = run_backtest(rsi, bars, inst, "5m", BacktestAssumptions())
+    d = run_backtest(don, bars, inst, "5m", BacktestAssumptions())
+    assert "trade_count" in r.metrics
+    assert "trade_count" in d.metrics
+
+
 def test_backtest_reproducible_trade_count():
     spec = {
         "name": "test ema",

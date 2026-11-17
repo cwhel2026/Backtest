@@ -9,6 +9,7 @@ class LeaderboardEntry(BaseModel):
     category: str
     timeframe: str
     entry_type: str | None = None
+    origin: str = "deep"
     completed_at: str | None = None
     prop_ready_score: int
     passes_prop_screen: bool
