@@ -49,4 +49,6 @@ def integrity_hint(exc: Exception) -> str | None:
         return "Duplicate provisional backtest id."
     if "duplicate key" in text or "unique constraint" in text:
         return "Duplicate key conflict."
+    if "foreign key" in text or "job_id" in text:
+        return "Search job row was not saved before its activity feed row."
     return None
