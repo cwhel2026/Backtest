@@ -11,7 +11,7 @@ from app.core.config import get_settings
 from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.backtest_runner import execute_backtest_run
-from app.services.market_data.ingestion_runner import run_databento_ingestion
+from app.services.market_data.ingestion_runner import run_databento_ingestion, run_yahoo_ingestion
 
 settings = get_settings()
 sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
@@ -74,7 +74,7 @@ def run_data_ingestion(job_id: str) -> None:
             _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
             return
 
-        if provider != "databento":
+        if provider not in ("yahoo", "databento"):
             _fail_ingestion(
                 db,
                 job,
@@ -83,12 +83,16 @@ def run_data_ingestion(job_id: str) -> None:
             )
             return
 
-        job.message = "Downloading OHLCV from Databento"
+        label = "Yahoo Finance" if provider == "yahoo" else "Databento"
+        job.message = f"Downloading OHLCV from {label}"
         job.progress_pct = 10
         db.commit()
 
         try:
-            dataset = run_databento_ingestion(db, job.payload)
+            if provider == "yahoo":
+                dataset = run_yahoo_ingestion(db, job.payload)
+            else:
+                dataset = run_databento_ingestion(db, job.payload)
             db.commit()
             job.status = ResearchJobStatus.COMPLETED
             job.progress_pct = 100

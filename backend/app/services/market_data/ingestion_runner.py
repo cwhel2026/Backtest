@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
-from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m
 from app.services.market_data.bar_storage import persist_bars_to_dataset
+from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m
+from app.services.market_data.yahoo_ingest import bars_to_storage, fetch_yahoo_ohlcv
 
 
 def parse_job_datetime(value: str | datetime) -> datetime:
@@ -57,5 +58,47 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
             "databento_symbol": db_symbol,
             "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
             "bars_1m_downloaded": len(bars_1m),
+        },
+    )
+
+
+def run_yahoo_ingestion(session: Session, payload: dict) -> HistoricalDataset:
+    symbol = payload.get("instrument_symbol")
+    timeframe = payload.get("timeframe", "5m")
+    start = parse_job_datetime(payload["start"])
+    end = parse_job_datetime(payload["end"])
+
+    inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
+    if not inst:
+        raise ValueError(f"Unknown instrument {symbol}")
+
+    bars, yahoo_ticker, download_tf = fetch_yahoo_ohlcv(
+        instrument_symbol=symbol,
+        start=start,
+        end=end,
+        target_timeframe=timeframe,
+    )
+    if not bars:
+        raise ValueError(
+            f"No Yahoo Finance bars for {yahoo_ticker} ({start.isoformat()} → {end.isoformat()}). "
+            "Check symbol or try a shorter range."
+        )
+
+    stored = bars_to_storage(bars, source_timeframe=download_tf, target_timeframe=timeframe)
+
+    return persist_bars_to_dataset(
+        session,
+        provider_slug="yahoo",
+        instrument_id=inst.id,
+        timeframe=timeframe,
+        bars=stored,
+        meta={
+            "source": "yahoo_finance",
+            "yahoo_ticker": yahoo_ticker,
+            "license": "free_delayed_research_only",
+            "disclaimer": "Yahoo data is not exchange-licensed and may be delayed or adjusted.",
+            "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
+            "yahoo_download_timeframe": download_tf,
+            "bars_downloaded": len(bars),
         },
     )

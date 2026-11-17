@@ -83,6 +83,42 @@ class DatabentoProvider(MarketDataProvider):
         }
 
 
+class YahooFinanceProvider(MarketDataProvider):
+    slug = "yahoo"
+    display_name = "Yahoo Finance (free)"
+
+    async def health(self) -> ProviderHealth:
+        return ProviderHealth(
+            slug=self.slug,
+            display_name=self.display_name,
+            state=ProviderConnectionState.CONNECTED,
+            message="No API key required. Delayed CME futures via Yahoo (e.g. MES=F). Research-only — not licensed.",
+            capabilities={
+                "ohlcv": True,
+                "1m": True,
+                "5m": True,
+                "15m": True,
+                "1h": True,
+                "cost": "free",
+                "max_range_days_1m": 7,
+                "max_range_days_5m": 60,
+            },
+        )
+
+    async def ingest_historical(
+        self, instrument_symbol: str, timeframe: str, start: datetime, end: datetime
+    ) -> dict:
+        return {
+            "provider": self.slug,
+            "instrument_symbol": instrument_symbol,
+            "timeframe": timeframe,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "queued",
+            "note": "Worker pulls delayed Yahoo futures OHLCV and stores your timeframe.",
+        }
+
+
 class InteractiveBrokersProvider(MarketDataProvider):
     slug = "ibkr"
     display_name = "Interactive Brokers"
@@ -103,6 +139,7 @@ class InteractiveBrokersProvider(MarketDataProvider):
 
 
 PROVIDER_REGISTRY: dict[str, MarketDataProvider] = {
+    YahooFinanceProvider.slug: YahooFinanceProvider(),
     DatabentoProvider.slug: DatabentoProvider(),
     InteractiveBrokersProvider.slug: InteractiveBrokersProvider(),
 }

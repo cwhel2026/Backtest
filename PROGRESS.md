@@ -25,11 +25,12 @@ Last updated: 2025-11-17 (Europe/London)
 - [x] Backtest Laboratory UI, strategy detail, equity curve chart, trade table
 - [x] Automated tests (synthetic bars only in tests)
 
-## Completed (Phase 1.5 — Licensed market data)
+## Completed (Phase 1.5 — Market data ingestion)
 
-- [x] Databento historical OHLCV download (`GLBX.MDP3`, continuous `*.c.0` symbols)
-- [x] Celery worker persists datasets (1m download, aggregate to 1m/5m/15m/1h)
-- [x] Market Data UI timeframe selector for ingestion jobs
+- [x] **Yahoo Finance (free)** — delayed CME futures (`MES=F`, etc.), no API key
+- [x] Databento historical OHLCV (optional, `DATABENTO_API_KEY` + GLBX.MDP3)
+- [x] Celery worker persists datasets (aggregate to 1m/5m/15m/1h)
+- [x] Market Data UI: source selector + timeframe
 
 ## In Progress / Next
 - [ ] Phase 3: AI hypothesis generation with structured strategy schema
@@ -38,7 +39,8 @@ Last updated: 2025-11-17 (Europe/London)
 
 ## Known Issues
 
-- Historical ingestion jobs fail until Databento (or other) SDK integration is completed — by design
+- Yahoo data is delayed and not suitable for live trading or prop-firm compliance
+- Databento requires a paid license (`DATABENTO_API_KEY`); Yahoo is the default free path
 - Paper trading, prop-firm rules, and live broker adapters are placeholder pages until later phases
 - Celery beat `health_pulse` is a no-op connectivity check (does not write fake activity)
 
