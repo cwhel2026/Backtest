@@ -183,6 +183,7 @@ Browsers block the site unless the API allows your frontend URL.
 
 ## Optional later
 
+- **FinzData:** add `FINZDATA_API_KEY` on the backend. Free plan is daily bars; 1m/5m search needs a paid market, otherwise Yahoo is used.  
 - **Databento:** add `DATABENTO_API_KEY` on the backend.  
 - **Full split deploy** (separate worker): see [DEPLOY_RAILWAY.md](./DEPLOY_RAILWAY.md).
 
