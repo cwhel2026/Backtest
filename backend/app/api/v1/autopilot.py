@@ -50,8 +50,8 @@ async def autopilot_status(
         hourly_enabled=settings.autonomous_hourly_enabled,
         ai_configured=settings.ai_configured,
         message=(
-            "Searches MES/MNQ with varied stops/targets, keeps only profitable backtests for your leaderboard, "
-            "then forward-sims winners on the latest bars (no broker)."
+            "Deep search: 120+ random combos per symbol (ORB/EMA/VWAP grids), 35 days of 5m data, "
+            "walk-forward validation, then only OOS-profitable strategies are saved."
         ),
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],
         recent_activity=recent,

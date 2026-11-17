@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     max_experiments_per_day: int = 50
     autonomous_hourly_enabled: bool = Field(default=True, validation_alias="AUTONOMOUS_HOURLY_ENABLED")
     autonomous_forward_sim: bool = True
+    search_budget_per_symbol: int = Field(default=120, validation_alias="SEARCH_BUDGET_PER_SYMBOL")
+    search_history_days: int = Field(default=35, validation_alias="SEARCH_HISTORY_DAYS")
+    search_symbols: str = Field(default="MES,MNQ,ES,NQ", validation_alias="SEARCH_SYMBOLS")
 
     api_v1_prefix: str = "/api/v1"
 

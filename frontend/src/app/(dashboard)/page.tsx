@@ -36,8 +36,8 @@ export default function HomePage() {
       const res = await apiFetch<{ status: string; mode: string }>("/api/v1/autopilot/run", { method: "POST" });
       setNote(
         res.mode === "inline"
-          ? "Searching ~24 strategy variants — refresh in 2–3 minutes."
-          : "Search queued on the server."
+          ? "Deep search running (100s of combos per symbol) — allow 5–8 minutes, then refresh."
+          : "Deep search queued — allow several minutes, then refresh."
       );
       setTimeout(refresh, 5000);
     } catch (e) {
