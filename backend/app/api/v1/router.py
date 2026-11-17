@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, autopilot, backtests, instruments, market_data, overview, research, strategies
+from app.api.v1 import auth, autopilot, backtests, instruments, market_data, overview, paper, research, strategies
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(overview.router)
 api_router.include_router(autopilot.router)
+api_router.include_router(paper.router)
 api_router.include_router(instruments.router)
 api_router.include_router(market_data.router)
 api_router.include_router(strategies.router)

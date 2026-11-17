@@ -15,6 +15,7 @@ from app.models.market_data import HistoricalDataset
 from app.models.research import ResearchActivity
 from app.services.backtest_runner import execute_backtest_run
 from app.services.forward_sim import run_forward_simulation
+from app.services.paper_book import enroll_strategy
 from app.services.prop_screen import is_profitable_backtest, rank_score
 from app.services.strategy_factory import create_strategy_sync
 from app.services.strategy_reverse import is_anti_edge, reverse_passes_oos, reverse_spec
@@ -250,6 +251,8 @@ def persist_search_hits(
         session.add(run)
         session.flush()
         execute_backtest_run(session, run.id)
+        if run.status == "completed":
+            enroll_strategy(session, strategy, symbol)
         session.commit()
         winners.append(strategy.name)
 

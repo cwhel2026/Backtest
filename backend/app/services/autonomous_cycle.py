@@ -167,6 +167,9 @@ def run_autonomous_prop_cycle(
             summary["backtests"].extend([{"name": w, "symbol": symbol} for w in winners])
 
         summary["search_evaluations"] = total_eval
+        from app.services.paper_book import tick_paper_book
+
+        summary["paper"] = tick_paper_book(session)
         job.status = ResearchJobStatus.COMPLETED
         job.progress_pct = 100
         job.completed_at = datetime.now(UTC)

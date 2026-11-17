@@ -77,10 +77,10 @@ async def autopilot_status(
         ai_configured=settings.ai_configured,
         search_symbols=list(resolve_search_symbols()),
         message=(
-            "Server-side search on Nasdaq + S&P (MNQ, NQ, MES, ES): RSI, Donchian, ORB, EMA, VWAP, "
-            "streak setups, walk-forward validation. Anti-edge systems (e.g. 8% win rate) are "
-            "reversed (fade + swap stop/target) and kept only if OOS actually inverts. "
-            "Safe to close the app — hourly autopilot continues on the worker."
+            "Always-on prop desk: hourly search on Nasdaq + S&P, walk-forward backtests, "
+            "then a paper book that opens and closes trades on new 5-minute bars under "
+            "prop-style daily loss, trailing drawdown, and profit target. "
+            "Simulated only — delayed data, not a broker."
         ),
         background_search=background_search,
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],

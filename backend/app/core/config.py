@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     search_symbols: str = Field(default="MNQ,NQ,MES,ES", validation_alias="SEARCH_SYMBOLS")
     reverse_search_enabled: bool = Field(default=True, validation_alias="REVERSE_SEARCH_ENABLED")
     reverse_winrate_max: float = Field(default=0.20, validation_alias="REVERSE_WINRATE_MAX")
+    paper_starting_equity: float = Field(default=100_000, validation_alias="PAPER_STARTING_EQUITY")
+    paper_daily_loss: float = Field(default=2_000, validation_alias="PAPER_DAILY_LOSS")
+    paper_trailing_dd: float = Field(default=3_000, validation_alias="PAPER_TRAILING_DD")
+    paper_profit_target: float = Field(default=6_000, validation_alias="PAPER_PROFIT_TARGET")
+    paper_max_slots: int = Field(default=4, validation_alias="PAPER_MAX_SLOTS")
 
     api_v1_prefix: str = "/api/v1"
 
