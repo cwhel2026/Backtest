@@ -10,6 +10,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.services.bootstrap import bootstrap_database
+from app.util.serde import integrity_hint
 
 logger = structlog.get_logger()
 
@@ -40,16 +41,13 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(IntegrityError)
     async def db_integrity_error(_request: Request, exc: IntegrityError) -> JSONResponse:
-        logger.exception("db_integrity_error", error=str(exc))
-        return JSONResponse(
-            status_code=500,
-            content={
-                "detail": (
-                    "Database could not save this run (often a text field was too long). "
-                    "Pull the latest deploy, then press Run prop search again."
-                )
-            },
-        )
+        hint = integrity_hint(exc)
+        logger.exception("db_integrity_error", error=str(exc), hint=hint)
+        detail = "Database could not save this run."
+        if hint:
+            detail += f" {hint}"
+        detail += " Wait for the deploy to finish, then press Run prop search again."
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     @app.exception_handler(PendingRollbackError)
     async def db_pending_rollback(_request: Request, exc: PendingRollbackError) -> JSONResponse:

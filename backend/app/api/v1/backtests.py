@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.models.backtest import BacktestRun, BacktestTrade
 from app.models.user import User
 from app.schemas.backtest import BacktestCreateRequest, BacktestRunSummary, BacktestTradeOut
-from app.util.serde import enum_value
+from app.util.serde import enum_value, provisional_reproducibility_id
 from app.worker.tasks import enqueue_backtest
 
 router = APIRouter(prefix="/backtests", tags=["backtests"])
@@ -42,7 +42,7 @@ async def create_backtest(
         dataset_id=uuid.UUID(body.dataset_id),
         status="queued",
         engine_version="pending",
-        reproducibility_id="pending",
+        reproducibility_id=provisional_reproducibility_id(),
         assumptions=body.assumptions,
         parameters=body.parameters,
     )

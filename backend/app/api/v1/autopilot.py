@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models.enums import ResearchJobStatus
+from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.models.user import User
 from app.schemas.autopilot import (
@@ -19,10 +20,33 @@ from app.schemas.autopilot import (
 )
 from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, job_is_stale, resolve_search_symbols
 from app.services.leaderboard import leaderboard_entries_async
-from app.util.serde import enum_value
-from app.worker.tasks import create_prop_search_job, run_prop_search_job
+from app.util.serde import enum_value, normalize_created_by
+from app.worker.tasks import run_prop_search_job
 
 router = APIRouter(prefix="/autopilot", tags=["autopilot"])
+
+
+async def _queue_deep_prop_search(db: AsyncSession, actor: str) -> str:
+    job_id = uuid.uuid4()
+    actor_label = normalize_created_by(actor)
+    job = ResearchJob(
+        id=job_id,
+        kind=ResearchJobKind.VALIDATION,
+        status=ResearchJobStatus.QUEUED,
+        title=PROP_SEARCH_JOB_TITLE,
+        message="Queued — runs on the server (safe to close the app)",
+        payload={"actor": actor_label, "actor_display": actor, "source": "manual"},
+    )
+    db.add(job)
+    db.add(
+        ResearchActivity(
+            headline="Deep search queued",
+            detail=f"Requested by {actor}. Worker will run walk-forward search in the background.",
+            job_id=job.id,
+        )
+    )
+    await db.flush()
+    return str(job_id)
 
 
 @router.get("/status", response_model=AutopilotStatus)
@@ -159,7 +183,7 @@ async def run_autopilot_now(
             mode="already_active",
         )
 
-    job_id = create_prop_search_job(user.email)
+    job_id = await _queue_deep_prop_search(db, user.email)
     # Keep the heavy search off the web process. Running it inline was stalling
     # every other request and the proxy answered "Internal Server Error".
     try:
