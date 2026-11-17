@@ -22,6 +22,10 @@ const SUBPHASE_LABELS: Record<string, string> = {
   refine_train: "Refine · train",
   refine_oos: "Refine · OOS",
   refine_full: "Refine · full",
+  ai_propose: "AI · proposing specs",
+  ai_train: "AI · train",
+  ai_oos: "AI · multi-fold OOS",
+  ai_prop: "AI · prop screen",
   persist: "Writing backtests",
 };
 
@@ -44,6 +48,8 @@ type Live = {
   winners_saved?: number;
   symbols_finished?: string[];
   heartbeat_at?: string | null;
+  experiments_recorded?: number;
+  ai_round?: number;
 };
 
 type SearchPlan = {
@@ -190,6 +196,8 @@ export function SearchLiveMonitor({ status, message, progressPct, live, plan, jo
                 {live.tests_target_estimate
                   ? ` (est. up to ${live.tests_target_estimate.toLocaleString()} for this symbol)`
                   : ""}
+                {live.experiments_recorded ? ` · ${live.experiments_recorded} trials logged` : ""}
+                {live.ai_round ? ` · ${live.ai_round} AI rounds` : ""}
               </dd>
             ) : null}
           </div>

@@ -211,7 +211,8 @@ def run_autonomous_prop_cycle(
 
         job = _job()
         merge_search_progress(job, phase="scoring", current_symbol=None)
-        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 6 families)"
+        ai_bit = " + AI mutation rounds" if get_settings().ai_configured else ""
+        job.message = f"Scoring {len(datasets)} markets ({budget} combos each, 6 families{ai_bit})"
         session.commit()
 
         all_winners: list[str] = []
@@ -269,7 +270,7 @@ def run_autonomous_prop_cycle(
                 session.commit()
 
             _pulse(0, subphase="start")
-            hits, evaluated = run_deep_search(
+            hits, evaluated, search_stats = run_deep_search(
                 session,
                 symbol=symbol,
                 dataset=ds,
@@ -279,6 +280,13 @@ def run_autonomous_prop_cycle(
                 on_progress=_pulse,
             )
             total_eval += evaluated
+            job = _job()
+            merge_search_progress(
+                job,
+                experiments_recorded=search_stats.get("trials_recorded", 0),
+                ai_round=search_stats.get("ai_rounds", 0),
+            )
+            session.commit()
             job = _job()
             merge_search_progress(job, phase="saving", current_symbol=symbol, scoring_subphase="persist")
             job.message = f"Saving {symbol} keepers ({len(hits)} hits to backtest)"
