@@ -19,10 +19,17 @@ export default function LoginPage() {
       const token = await login(email, password);
       setStoredToken(token.access_token);
       router.push("/");
-    } catch {
-      setError(
-        "Invalid credentials. Use INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD from Railway (backend), then redeploy backend.",
-      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg === "INVALID_CREDENTIALS") {
+        setError(
+          "Password or email does not match the backend database. On Railway backend: re-save INITIAL_ADMIN_PASSWORD (no spaces), redeploy backend, wait 1 minute, try again.",
+        );
+      } else {
+        setError(
+          `Cannot reach API at build-time URL. In Railway frontend: set NEXT_PUBLIC_API_URL to https://backtest-production-39b9045c.up.railway.app then Redeploy frontend (not just backend). (${msg})`,
+        );
+      }
     } finally {
       setLoading(false);
     }

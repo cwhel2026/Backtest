@@ -66,7 +66,13 @@ class Settings(BaseSettings):
 
     api_v1_prefix: str = "/api/v1"
 
-    @field_validator("database_url", "database_url_sync", mode="before")
+    @field_validator(
+        "database_url",
+        "database_url_sync",
+        "initial_admin_email",
+        "initial_admin_password",
+        mode="before",
+    )
     @classmethod
     def _strip_wrapping_quotes(cls, v: object) -> object:
         if isinstance(v, str):

@@ -41,6 +41,9 @@ export async function login(email: string, password: string): Promise<TokenRespo
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) throw new Error("Login failed");
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("INVALID_CREDENTIALS");
+    throw new Error(`API_ERROR_${res.status}`);
+  }
   return res.json();
 }
