@@ -14,7 +14,7 @@ from app.backtest.ict import (
     range_position,
     session_dealing_ranges,
 )
-from app.backtest.indicators import bollinger_series, ema_series, rsi_series, session_vwap
+from app.backtest.indicators import atr_series, bollinger_series, ema_series, rsi_series, session_vwap
 from app.backtest.mtf import htf_bars_from_ltf, ltf_to_htf_index, series_on_ltf
 
 
@@ -114,6 +114,8 @@ class SignalContext:
     order_blocks: list | None = None
     htf_fast_ltf: list[Decimal | None] | None = None
     htf_slow_ltf: list[Decimal | None] | None = None
+    atr: list[Decimal | None] | None = None
+    filter_htf_ema: list[Decimal | None] | None = None
 
 
 def build_signal_context(
@@ -173,6 +175,23 @@ def build_signal_context(
         closes = [b.close for b in bars]
         ctx.fast_e = ema_series(closes, fast)
         ctx.slow_e = ema_series(closes, slow)
+
+    filters = spec.get("filters") or {}
+    exit_spec = spec.get("exit") or {}
+    needs_atr = any(
+        exit_spec.get(k) is not None for k in ("stop_atr", "target_atr", "trail_atr")
+    ) or filters.get("atr_min_ticks") is not None or filters.get("atr_max_ticks") is not None
+    if needs_atr:
+        period = int(exit_spec.get("atr_period") or filters.get("atr_period") or 14)
+        ctx.atr = atr_series(bars, period)
+    if filters.get("vwap_align") and ctx.vwap is None:
+        ctx.vwap = session_vwap(bars, session_keys)
+    if filters.get("htf"):
+        htf = str(filters.get("htf") or "15m")
+        period = int(filters.get("htf_ema") or 21)
+        htf_bars = htf_bars_from_ltf(bars, htf)
+        idx = ltf_to_htf_index(bars, htf_bars)
+        ctx.filter_htf_ema = series_on_ltf(ema_series([b.close for b in htf_bars], period), idx)
     return ctx
 
 
@@ -201,6 +220,84 @@ def _pack_signal(
     return EntrySignal(direction, ts, stop, target, reason)
 
 
+def _hhmm_minutes(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except (TypeError, ValueError):
+        return None
+    return hour * 60 + minute
+
+
+def _apply_filters(
+    spec: dict,
+    bars: list[Bar],
+    i: int,
+    ctx: SignalContext,
+    tick: Decimal,
+    sig: EntrySignal,
+) -> EntrySignal | None:
+    filters = spec.get("filters") or {}
+    if not filters:
+        return sig
+    bar = bars[i]
+    tz_name = str((spec.get("session") or {}).get("timezone") or "America/Chicago")
+    local = bar.ts.astimezone(ZoneInfo(tz_name))
+    mins = local.hour * 60 + local.minute
+    start = _hhmm_minutes(filters.get("start_hhmm"))
+    end = _hhmm_minutes(filters.get("end_hhmm"))
+    if start is not None and mins < start:
+        return None
+    if end is not None and mins >= end:
+        return None
+
+    if ctx.atr is not None and (filters.get("atr_min_ticks") is not None or filters.get("atr_max_ticks") is not None):
+        atr = ctx.atr[i]
+        if atr is None or tick <= 0:
+            return None
+        atr_ticks = atr / tick
+        min_ticks = filters.get("atr_min_ticks")
+        max_ticks = filters.get("atr_max_ticks")
+        if min_ticks is not None and atr_ticks < Decimal(str(min_ticks)):
+            return None
+        if max_ticks is not None and atr_ticks > Decimal(str(max_ticks)):
+            return None
+
+    align = filters.get("vwap_align")
+    if align and ctx.vwap is not None:
+        vwap = ctx.vwap[i]
+        if vwap is None:
+            return None
+        above = bar.close >= vwap
+        if align == "with":
+            if sig.direction == "long" and not above:
+                return None
+            if sig.direction == "short" and above:
+                return None
+        elif align == "against":
+            if sig.direction == "long" and above:
+                return None
+            if sig.direction == "short" and not above:
+                return None
+
+    if filters.get("htf") and ctx.filter_htf_ema is not None:
+        ema = ctx.filter_htf_ema[i]
+        if ema is None:
+            return None
+        up = bar.close >= ema
+        if sig.direction == "long" and not up:
+            return None
+        if sig.direction == "short" and up:
+            return None
+    return sig
+
+
 def signal_at_bar(
     spec: dict,
     bars: list[Bar],
@@ -221,8 +318,8 @@ def signal_at_bar(
     bar = bars[i]
     tick = instrument_tick
 
-    def pack(direction: str, reason: str, target_override: Decimal | None = None) -> EntrySignal:
-        return _pack_signal(
+    def pack(direction: str, reason: str, target_override: Decimal | None = None) -> EntrySignal | None:
+        sig = _pack_signal(
             direction=direction,
             ts=bar.ts,
             entry_px=bar.close,
@@ -233,6 +330,7 @@ def signal_at_bar(
             invert=invert,
             target_override=target_override,
         )
+        return _apply_filters(spec, bars, i, ctx, tick, sig)
 
     if entry_type == "ema_crossover":
         fast_e = ctx.fast_e
