@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getStoredToken } from "@/lib/api";
 
 type Provider = { slug: string; display_name: string; state: string; message: string };
 type Instrument = { id: string; symbol: string; name: string };
@@ -43,9 +43,8 @@ export default function MarketDataPage() {
     form.append("timeframe", "5m");
     form.append("label", csvLabel);
     form.append("file", csvFile);
-    const token = localStorage.getItem("propedge_token");
-    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const res = await fetch(`${base}/api/v1/market-data/import-csv`, {
+    const token = getStoredToken();
+    const res = await fetch("/api/v1/market-data/import-csv", {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
@@ -83,25 +82,25 @@ export default function MarketDataPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-2xl font-semibold text-white">Market data</h2>
-        <p className="mt-1 text-sm text-zinc-500">Provider status and dataset registry.</p>
+        <h2 className="page-title">Market data</h2>
+        <p className="page-sub">Provider status and dataset registry.</p>
       </div>
 
-      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6">
+      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Import OHLCV CSV</h3>
         <p className="mt-1 text-xs text-zinc-500">
           Columns: timestamp, open, high, low, close, volume (UTC ISO timestamps). Your file is stored as a dataset —
           not mixed with provider feeds.
         </p>
-        <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <input
             type="file"
             accept=".csv"
-            className="text-sm text-zinc-400"
+            className="w-full text-sm text-zinc-400 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-700 file:px-3 file:py-2 file:text-sm file:text-white"
             onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
           />
           <input
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm md:w-auto md:py-1"
             value={csvLabel}
             onChange={(e) => setCsvLabel(e.target.value)}
             placeholder="label"
@@ -110,23 +109,23 @@ export default function MarketDataPage() {
             type="button"
             onClick={uploadCsv}
             disabled={!csvFile}
-            className="rounded-md bg-zinc-700 px-4 py-2 text-sm text-white hover:bg-zinc-600 disabled:opacity-40"
+            className="w-full rounded-md bg-zinc-700 px-4 py-3 text-sm text-white hover:bg-zinc-600 disabled:opacity-40 md:w-auto md:py-2"
           >
             Upload CSV
           </button>
         </div>
       </section>
 
-      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6">
+      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
         <p className="mt-1 text-xs text-zinc-500">
           Requires a licensed provider key. The worker records real job status — no synthetic bars.
         </p>
-        <div className="mt-4 flex flex-wrap items-end gap-3">
-          <label className="text-sm text-zinc-400">
+        <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
             Instrument
             <select
-              className="ml-2 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
             >
@@ -140,7 +139,7 @@ export default function MarketDataPage() {
           <button
             type="button"
             onClick={queueIngestion}
-            className="rounded-md bg-emerald-700 px-4 py-2 text-sm text-white hover:bg-emerald-600"
+            className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 md:w-auto md:py-2"
           >
             Queue Databento ingestion (7d)
           </button>

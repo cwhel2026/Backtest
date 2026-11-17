@@ -30,8 +30,8 @@ export default function StrategyDetailPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <header>
-        <h2 className="text-2xl font-semibold text-white">{detail.name}</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <h2 className="page-title">{detail.name}</h2>
+        <p className="page-sub">
           {detail.symbol} · {detail.category} · {detail.timeframe} · {detail.lifecycle}
         </p>
       </header>

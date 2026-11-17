@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { LineSeries, createChart, type IChartApi, type UTCTimestamp } from "lightweight-charts";
+import { ScrollTable } from "@/components/ScrollTable";
 import { apiFetch } from "@/lib/api";
 
 type Backtest = {
@@ -61,7 +62,14 @@ export default function BacktestDetailPage() {
     });
     series.setData(data);
     chartApi.current = chart;
-    return () => chart.remove();
+    const onResize = () => {
+      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth });
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.remove();
+    };
   }, [trades]);
 
   if (!run) return <p className="text-zinc-500">Loading backtest…</p>;
@@ -69,10 +77,13 @@ export default function BacktestDetailPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h2 className="text-2xl font-semibold text-white">Backtest {id?.slice(0, 8)}</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <h2 className="page-title">Backtest {id?.slice(0, 8)}</h2>
+        <p className="page-sub break-words">
           Category: <span className="text-zinc-300">{run.performance_category}</span> · Engine{" "}
-          {run.engine_version} · Repro {run.reproducibility_id}
+          {run.engine_version}
+        </p>
+        <p className="mt-1 break-all font-mono text-[10px] text-zinc-500 md:text-xs">
+          Repro {run.reproducibility_id}
         </p>
       </header>
 
@@ -110,7 +121,8 @@ function MetricsGrid({ metrics }: { metrics: Record<string, number | null> }) {
 
 function TradesTable({ trades }: { trades: Trade[] }) {
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-zinc-800">
+    <ScrollTable className="mt-3">
+    <div className="overflow-hidden rounded-lg border border-zinc-800">
       <table className="w-full text-left text-sm">
         <thead className="bg-zinc-900/80 text-xs uppercase text-zinc-500">
           <tr>
@@ -136,5 +148,6 @@ function TradesTable({ trades }: { trades: Trade[] }) {
         </tbody>
       </table>
     </div>
+    </ScrollTable>
   );
 }

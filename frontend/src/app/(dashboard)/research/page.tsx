@@ -25,8 +25,8 @@ export default function ResearchPage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold text-white">Live research monitor</h2>
-      <p className="mt-1 text-sm text-zinc-500">Background jobs from Celery workers (refreshes every 5s).</p>
+      <h2 className="page-title">Live research monitor</h2>
+      <p className="page-sub">Background jobs from Celery workers (refreshes every 5s).</p>
       <div className="mt-6 space-y-3">
         {jobs.length === 0 ? (
           <p className="text-zinc-500">No jobs in queue.</p>

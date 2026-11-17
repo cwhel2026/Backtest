@@ -18,6 +18,11 @@ const NAV = [
 
 const MOBILE_TABS = NAV.slice(0, 4);
 
+function isNavActive(pathname: string, href: string): boolean {
+  if (href === "/") return pathname === "/";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 function NavLinks({
   pathname,
   onNavigate,
@@ -30,7 +35,7 @@ function NavLinks({
   return (
     <nav className={`flex flex-col gap-1 ${className}`}>
       {NAV.map((item) => {
-        const active = pathname === item.href;
+        const active = isNavActive(pathname, item.href);
         return (
           <Link
             key={item.href}
@@ -136,11 +141,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Mobile bottom navigation */}
         <nav
-          className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 border-t border-zinc-800 bg-[#0e1015]/95 backdrop-blur md:hidden"
+          className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 border-t border-zinc-800 bg-[#0e1015]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
           aria-label="Primary"
         >
           {MOBILE_TABS.map((item) => {
-            const active = pathname === item.href;
+            const active = isNavActive(pathname, item.href);
             return (
               <Link
                 key={item.href}
