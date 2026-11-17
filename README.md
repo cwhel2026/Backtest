@@ -4,6 +4,10 @@ Autonomous AI futures strategy research, backtesting, tracking and prop-firm tra
 
 This repository implements **Phase 1–2**: foundation plus event-driven backtesting, CSV OHLCV import, strategy DSL, trade ledger, and the Backtest Laboratory. No fabricated market data or backtest results are shown unless **you** import CSV or connect a licensed provider.
 
+## Deploy on Railway (24/7 runner)
+
+GitHub-connected Railway setup (Postgres + Redis + API + worker + frontend) is documented in **[docs/DEPLOY_RAILWAY.md](./docs/DEPLOY_RAILWAY.md)**.
+
 ## Quick start (Docker)
 
 **Requirements:** Docker and Docker Compose.

@@ -1,0 +1,10 @@
+# Railway — Celery worker (same repo root /backend, Config file = railway.worker.toml)
+# Variables: PROP_EDGE_ROLE=worker (optional — start script defaults to api only when using api toml)
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "PROP_EDGE_ROLE=worker bash scripts/railway-start.sh"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

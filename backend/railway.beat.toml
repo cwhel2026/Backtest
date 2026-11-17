@@ -1,0 +1,8 @@
+# Railway — Celery beat scheduler (Root Directory = /backend)
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "PROP_EDGE_ROLE=beat bash scripts/railway-start.sh"
+restartPolicyType = "ON_FAILURE"
