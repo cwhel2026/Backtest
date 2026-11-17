@@ -125,7 +125,11 @@ async def get_strategy(
             "id": str(latest.id),
             "reproducibility_id": latest.reproducibility_id,
             "metrics": latest.metrics,
-            "performance_category": latest.performance_category.value,
+            "performance_category": (
+                latest.performance_category.value
+                if hasattr(latest.performance_category, "value")
+                else str(latest.performance_category)
+            ),
         }
     return StrategyDetail(
         id=str(defn.id),

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.backtest.dsl import validate_spec
+from app.util.serde import normalize_created_by
 from app.models.enums import StrategyLifecycle
 from app.models.instrument import Instrument
 from app.models.strategy import StrategyDefinition, StrategyHypothesis, StrategyVersion
@@ -40,6 +41,8 @@ def create_strategy_sync(
     errors = validate_spec(spec)
     if errors:
         raise ValueError("; ".join(errors))
+
+    created_by = normalize_created_by(created_by)
 
     inst = session.execute(
         select(Instrument).where(Instrument.symbol == spec["instrument_symbol"])
@@ -96,6 +99,8 @@ async def create_strategy_async(
     errors = validate_spec(spec)
     if errors:
         raise ValueError("; ".join(errors))
+
+    created_by = normalize_created_by(created_by)
 
     inst = (
         await session.execute(select(Instrument).where(Instrument.symbol == spec["instrument_symbol"]))
