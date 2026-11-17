@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,7 @@ from app.models.user import User
 from app.schemas.market_data import HistoricalDatasetOut, OhlcvBarOut, ProviderHealthOut
 from app.services.market_data.csv_import import import_csv_bars
 from app.services.market_data.providers import PROVIDER_REGISTRY, all_provider_health
-from app.worker.tasks import enqueue_data_ingestion
+from app.worker.tasks import create_ingestion_job, run_data_ingestion
 
 settings = get_settings()
 _sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
@@ -149,6 +149,7 @@ async def dataset_bars(
 @router.post("/ingest")
 async def request_ingestion(
     body: IngestionRequest,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
 ) -> dict:
     provider = PROVIDER_REGISTRY.get(body.provider_slug)
@@ -160,5 +161,11 @@ async def request_ingestion(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    job_id = enqueue_data_ingestion(meta, actor=user.email)
-    return {"job_id": job_id, "status": "queued", "meta": meta}
+    job_id = create_ingestion_job(meta, actor=user.email)
+    try:
+        run_data_ingestion.delay(job_id)
+        status = "queued"
+    except Exception:
+        background_tasks.add_task(run_data_ingestion, job_id)
+        status = "processing"
+    return {"job_id": job_id, "status": status, "meta": meta}

@@ -23,5 +23,9 @@ celery_app.conf.update(
             "task": "app.worker.tasks.health_pulse",
             "schedule": 300.0,
         },
+        "autonomous-prop-hourly": {
+            "task": "app.worker.tasks.autonomous_prop_cycle",
+            "schedule": 3600.0,
+        },
     },
 )
