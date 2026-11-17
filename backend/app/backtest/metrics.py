@@ -49,7 +49,9 @@ def compute_metrics(trades: list[SimulatedTrade], starting_equity: Decimal = Dec
 
     sharpe = None
     if len(nets) > 1:
-        sharpe = float(mean([float(x) for x in nets]) / pstdev([float(x) for x in nets]))
+        stdev = pstdev([float(x) for x in nets])
+        if stdev > 0:
+            sharpe = float(mean([float(x) for x in nets]) / stdev)
 
     return {
         "total_net_profit": float(sum(nets, Decimal(0))),
