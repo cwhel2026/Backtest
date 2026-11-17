@@ -73,7 +73,9 @@ cd backend && source .venv/bin/activate && pytest
 
 ## Market data
 
-Set `DATABENTO_API_KEY` in `.env` after obtaining a licensed Databento account. Until the Phase 1.5 ingestion implementation lands, jobs are queued and recorded but **do not import bars** without a connected provider.
+**Free data:** **Market Data → Queue download** with **Yahoo Finance (free)** — no API key (7-day window for 1m, up to 60 days at 5m). Delayed, not exchange-licensed; fine for building and backtesting workflows.
+
+**Licensed data (optional):** set `DATABENTO_API_KEY` on the backend for Databento **GLBX.MDP3** ingestion.
 
 ## Project status
 

@@ -24,8 +24,18 @@ export default function StrategiesPage() {
 
   return (
     <div>
-      <h2 className="page-title">Strategy Explorer</h2>
-      <p className="page-sub">All strategies stored in the research database.</p>
+      <header className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 className="page-title">Strategy Explorer</h2>
+          <p className="page-sub">All strategies stored in the research database.</p>
+        </div>
+        <Link
+          href="/strategies/new"
+          className="rounded-md bg-emerald-700 px-4 py-2.5 text-center text-sm text-white hover:bg-emerald-600 md:py-2"
+        >
+          New strategy
+        </Link>
+      </header>
       <ScrollTable>
       <div className="mt-6 overflow-hidden rounded-lg border border-zinc-800">
         <table className="w-full text-left text-sm">

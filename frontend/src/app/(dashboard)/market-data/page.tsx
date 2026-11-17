@@ -19,6 +19,8 @@ export default function MarketDataPage() {
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [symbol, setSymbol] = useState("MES");
+  const [ingestTf, setIngestTf] = useState("5m");
+  const [ingestProvider, setIngestProvider] = useState("yahoo");
   const [message, setMessage] = useState<string | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvLabel, setCsvLabel] = useState("user_csv");
@@ -66,9 +68,9 @@ export default function MarketDataPage() {
       const res = await apiFetch<{ job_id: string; status: string }>("/api/v1/market-data/ingest", {
         method: "POST",
         body: JSON.stringify({
-          provider_slug: "databento",
+          provider_slug: ingestProvider,
           instrument_symbol: symbol,
-          timeframe: "1m",
+          timeframe: ingestTf,
           start: start.toISOString(),
           end: end.toISOString(),
         }),
@@ -119,9 +121,21 @@ export default function MarketDataPage() {
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Requires a licensed provider key. The worker records real job status — no synthetic bars.
+          Default: free Yahoo futures data (no key). Databento is optional when you add a licensed key on the
+          backend.
         </p>
         <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
+            Source
+            <select
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+              value={ingestProvider}
+              onChange={(e) => setIngestProvider(e.target.value)}
+            >
+              <option value="yahoo">Yahoo Finance (free)</option>
+              <option value="databento">Databento (licensed)</option>
+            </select>
+          </label>
           <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
             Instrument
             <select
@@ -136,12 +150,25 @@ export default function MarketDataPage() {
               ))}
             </select>
           </label>
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
+            Store as
+            <select
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+              value={ingestTf}
+              onChange={(e) => setIngestTf(e.target.value)}
+            >
+              <option value="1m">1 minute</option>
+              <option value="5m">5 minutes</option>
+              <option value="15m">15 minutes</option>
+              <option value="1h">1 hour</option>
+            </select>
+          </label>
           <button
             type="button"
             onClick={queueIngestion}
             className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 md:w-auto md:py-2"
           >
-            Queue Databento ingestion (7d)
+            Queue download (last 7 days)
           </button>
         </div>
         {message ? <p className="mt-3 text-sm text-zinc-400">{message}</p> : null}

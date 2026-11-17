@@ -11,10 +11,27 @@ from app.core.config import get_settings
 from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.backtest_runner import execute_backtest_run
+from app.services.ai_research_runner import count_ai_jobs_today, run_ai_hypothesis_job
+from app.services.market_data.ingestion_runner import run_databento_ingestion, run_yahoo_ingestion
 
 settings = get_settings()
 sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
 SyncSession = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False)
+
+
+def _fail_ingestion(db: Session, job: ResearchJob, error: str, headline: str) -> None:
+    job.status = ResearchJobStatus.FAILED
+    job.error = error
+    job.message = error
+    job.completed_at = datetime.now(UTC)
+    db.add(
+        ResearchActivity(
+            headline=headline,
+            detail=error,
+            job_id=job.id,
+        )
+    )
+    db.commit()
 
 
 def enqueue_data_ingestion(meta: dict, actor: str) -> str:
@@ -55,32 +72,124 @@ def run_data_ingestion(job_id: str) -> None:
         provider = job.payload.get("provider")
         settings_ref = get_settings()
         if provider == "databento" and not settings_ref.databento_api_key:
-            job.status = ResearchJobStatus.FAILED
-            job.error = "Databento API key not configured"
-            job.message = job.error
+            _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
+            return
+
+        if provider not in ("yahoo", "databento"):
+            _fail_ingestion(
+                db,
+                job,
+                f"Provider {provider} is not supported for automated ingestion yet.",
+                "Ingestion failed: provider not supported",
+            )
+            return
+
+        label = "Yahoo Finance" if provider == "yahoo" else "Databento"
+        job.message = f"Downloading OHLCV from {label}"
+        job.progress_pct = 10
+        db.commit()
+
+        try:
+            if provider == "yahoo":
+                dataset = run_yahoo_ingestion(db, job.payload)
+            else:
+                dataset = run_databento_ingestion(db, job.payload)
+            db.commit()
+            job.status = ResearchJobStatus.COMPLETED
+            job.progress_pct = 100
+            job.message = f"Imported {dataset.row_count} bars ({dataset.timeframe})"
             job.completed_at = datetime.now(UTC)
+            job.payload = {**job.payload, "dataset_id": str(dataset.id), "row_count": dataset.row_count}
             db.add(
                 ResearchActivity(
-                    headline="Ingestion failed: Databento not configured",
-                    detail=job.error,
+                    headline=f"Dataset ready: {job.payload.get('instrument_symbol')} {dataset.timeframe}",
+                    detail=f"{dataset.row_count} bars · id {dataset.id}",
                     job_id=job.id,
+                    meta={"dataset_id": str(dataset.id)},
                 )
             )
             db.commit()
-            return
+        except Exception as exc:
+            db.rollback()
+            job = db.get(ResearchJob, uuid.UUID(job_id))
+            if job:
+                _fail_ingestion(db, job, str(exc), "Ingestion failed")
 
-        job.status = ResearchJobStatus.FAILED
-        job.error = "Provider SDK integration pending (Phase 1 framework). No synthetic data imported."
-        job.message = job.error
-        job.completed_at = datetime.now(UTC)
+
+def enqueue_ai_hypothesis(meta: dict, actor: str) -> str:
+    job_id = str(uuid.uuid4())
+    with SyncSession() as db:
+        settings_ref = get_settings()
+        if count_ai_jobs_today(db) >= settings_ref.max_experiments_per_day:
+            raise ValueError(f"Daily AI experiment limit ({settings_ref.max_experiments_per_day}) reached")
+
+        job = ResearchJob(
+            id=uuid.UUID(job_id),
+            kind=ResearchJobKind.AI_HYPOTHESIS,
+            status=ResearchJobStatus.QUEUED,
+            title=f"AI hypothesis: {meta.get('instrument_symbol')}",
+            message="Queued",
+            payload={**meta, "actor": actor},
+        )
+        db.add(job)
         db.add(
             ResearchActivity(
-                headline="Ingestion blocked until provider integration is completed",
-                detail=job.error,
+                headline=f"AI research queued for {meta.get('instrument_symbol')}",
+                detail=(meta.get("prompt") or "")[:280],
                 job_id=job.id,
             )
         )
         db.commit()
+    run_ai_hypothesis_task.delay(job_id)
+    return job_id
+
+
+@celery_app.task(name="app.worker.tasks.run_ai_hypothesis_task")
+def run_ai_hypothesis_task(job_id: str) -> None:
+    with SyncSession() as db:
+        job = db.get(ResearchJob, uuid.UUID(job_id))
+        if not job:
+            return
+        job.status = ResearchJobStatus.RUNNING
+        job.started_at = datetime.now(UTC)
+        job.message = "Generating DSL specification"
+        job.progress_pct = 20
+        db.commit()
+        try:
+            strategy, backtest_run_id = run_ai_hypothesis_job(db, job)
+            actor = job.payload.get("actor", "system")
+            if backtest_run_id:
+                db.commit()
+                enqueue_backtest(backtest_run_id, actor=actor)
+            job.status = ResearchJobStatus.COMPLETED
+            job.progress_pct = 100
+            job.message = f"Strategy created: {strategy.name}"
+            job.completed_at = datetime.now(UTC)
+            db.add(
+                ResearchActivity(
+                    headline=f"Strategy generated: {strategy.name}",
+                    detail=f"Mode {job.payload.get('generation_mode', 'heuristic')} · id {strategy.id}",
+                    job_id=job.id,
+                    meta={"strategy_id": str(strategy.id)},
+                )
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            job = db.get(ResearchJob, uuid.UUID(job_id))
+            if job:
+                job.status = ResearchJobStatus.FAILED
+                job.error = str(exc)
+                job.message = str(exc)
+                job.completed_at = datetime.now(UTC)
+                db.add(
+                    ResearchActivity(
+                        headline="AI research failed",
+                        detail=str(exc),
+                        job_id=job.id,
+                    )
+                )
+                db.commit()
 
 
 def enqueue_backtest(run_id: str, actor: str) -> str:

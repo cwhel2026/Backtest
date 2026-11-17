@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
@@ -18,7 +18,23 @@ type StrategyDetail = {
 
 export default function StrategyDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [detail, setDetail] = useState<StrategyDetail | null>(null);
+  const [cloning, setCloning] = useState(false);
+
+  async function cloneStrategy() {
+    if (!id) return;
+    setCloning(true);
+    try {
+      const copy = await apiFetch<StrategyDetail>(`/api/v1/strategies/${id}/clone`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      router.push(`/strategies/${copy.id}`);
+    } finally {
+      setCloning(false);
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -29,11 +45,21 @@ export default function StrategyDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <header>
-        <h2 className="page-title">{detail.name}</h2>
-        <p className="page-sub">
-          {detail.symbol} · {detail.category} · {detail.timeframe} · {detail.lifecycle}
-        </p>
+      <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="page-title">{detail.name}</h2>
+          <p className="page-sub">
+            {detail.symbol} · {detail.category} · {detail.timeframe} · {detail.lifecycle}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={cloning}
+          onClick={cloneStrategy}
+          className="rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900 disabled:opacity-50"
+        >
+          {cloning ? "Cloning…" : "Clone"}
+        </button>
       </header>
 
       {detail.latest_backtest ? (
