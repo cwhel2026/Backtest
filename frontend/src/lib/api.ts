@@ -40,16 +40,22 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!res.ok) {
     const text = await res.text();
+    let detail = "";
     try {
       const parsed = JSON.parse(text) as { detail?: string | { msg?: string }[] };
-      if (typeof parsed.detail === "string") throw new Error(parsed.detail);
-      if (Array.isArray(parsed.detail)) {
-        throw new Error(parsed.detail.map((d) => d.msg).filter(Boolean).join("; ") || text);
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+      else if (Array.isArray(parsed.detail)) {
+        detail = parsed.detail.map((d) => d.msg).filter(Boolean).join("; ");
       }
-    } catch (e) {
-      if (e instanceof Error && e.message !== text) throw e;
+    } catch {
+      detail = "";
     }
-    throw new Error(text || res.statusText || "Request failed");
+    if (!detail) {
+      detail = text.trim().startsWith("Internal")
+        ? "The server hit an error. Wait a few seconds and press Run prop search again."
+        : text.trim().slice(0, 240) || res.statusText || "Request failed";
+    }
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }
