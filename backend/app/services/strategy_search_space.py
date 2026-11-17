@@ -251,9 +251,102 @@ def _mtf_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str
         yield _with_exits(base, stop, target)
 
 
+def _orb_vwap_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    """Opening-range break only when aligned with session VWAP, NY morning only."""
+    for minutes, side, (stop, target) in product((10, 15, 20), ("both", "long", "short"), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "orb_vwap",
+            {"type": "opening_range_breakout", "range_minutes": minutes, "side": side},
+            f"{symbol} ORB VWAP {minutes}m {side}",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _killzone_fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for min_gap, side, (stop, target) in product((2, 4, 6), ("both", "long", "short"), STOP_TARGETS[:5]):
+        base = _base(
+            symbol,
+            timeframe,
+            "killzone_fvg",
+            {"type": "fair_value_gap", "min_gap_ticks": min_gap, "max_age_bars": 36, "side": side},
+            f"{symbol} KZ FVG {min_gap}t {side}",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "htf": "15m" if timeframe in ("1m", "5m") else "1h",
+            "htf_ema": 21,
+            "max_trades_per_day": 3,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _atr_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for (fast, slow), stop_atr, target_atr in product(((8, 21), (9, 26)), (1.0, 1.5), (1.5, 2.0)):
+        base = _base(
+            symbol,
+            timeframe,
+            "atr_pullback",
+            {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+            f"{symbol} ATR pull {fast}/{slow} {stop_atr}/{target_atr}A",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "14:30",
+            "atr_min_ticks": 6,
+            "max_trades_per_day": 3,
+        }
+        base["exit"] = {
+            "stop_ticks": 16,
+            "target_ticks": 24,
+            "stop_atr": stop_atr,
+            "target_atr": target_atr,
+            "breakeven_r": 1.0,
+            "trail_atr": 1.0,
+            "max_bars": 18,
+            "session_end_flatten": True,
+        }
+        yield base
+
+
+def _sweep_discount_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, sweep, (stop, target) in product((8, 12), (1, 2), STOP_TARGETS[:5]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_discount",
+            {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": sweep},
+            f"{symbol} sweep+disc {lookback}/{sweep}t",
+        )
+        base["filters"] = {
+            "vwap_align": "against",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:30",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
 def _intraday_1m_specs(symbol: str) -> Iterator[dict[str, Any]]:
     """Tighter families on 1m for scalping-style search."""
-    for builder in (_fvg_specs, _order_block_specs, _liquidity_sweep_specs, _premium_discount_specs):
+    for builder in (
+        _fvg_specs,
+        _order_block_specs,
+        _liquidity_sweep_specs,
+        _premium_discount_specs,
+        _killzone_fvg_specs,
+        _orb_vwap_specs,
+        _atr_pullback_specs,
+    ):
         for spec in builder(symbol, "1m"):
             yield spec
 
@@ -272,6 +365,10 @@ FAMILY_BUILDERS = {
     "order_block": _order_block_specs,
     "premium_discount": _premium_discount_specs,
     "mtf_pullback": _mtf_pullback_specs,
+    "orb_vwap": _orb_vwap_specs,
+    "killzone_fvg": _killzone_fvg_specs,
+    "atr_pullback": _atr_pullback_specs,
+    "sweep_discount": _sweep_discount_specs,
 }
 
 

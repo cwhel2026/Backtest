@@ -8,6 +8,13 @@ from decimal import Decimal
 
 from app.backtest.bars import Bar
 from app.backtest.dsl import build_signal_context, session_keys_rth, signal_at_bar
+from app.backtest.exits import (
+    ManagedPosition,
+    check_intrabar_exit,
+    manage_at_bar_close,
+    resolve_stop_target,
+    time_stop_hit,
+)
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
 
@@ -20,6 +27,8 @@ class OpenTrade:
     stop: Decimal
     target: Decimal
     entry_ts: datetime
+    bars_held: int = 0
+    initial_risk: Decimal = Decimal(0)
 
 
 @dataclass
@@ -114,20 +123,26 @@ def advance_slot(
     for bar in new_bars:
         i = index[bar.ts]
         if pos is not None:
-            exit_px = None
-            reason = None
-            if pos.direction == "long":
-                if bar.low <= pos.stop:
-                    exit_px, reason = pos.stop, "stop_loss"
-                elif bar.high >= pos.target:
-                    exit_px, reason = pos.target, "take_profit"
-            else:
-                if bar.high >= pos.stop:
-                    exit_px, reason = pos.stop, "stop_loss"
-                elif bar.low <= pos.target:
-                    exit_px, reason = pos.target, "take_profit"
+            exit_px, reason = check_intrabar_exit(pos.direction, pos.stop, pos.target, bar)
             if exit_px is None and i + 1 < len(bars) and keys[i + 1] != keys[i]:
                 exit_px, reason = bar.close, "session_flatten"
+            if exit_px is None:
+                atr_now = signal_ctx.atr[i] if signal_ctx.atr else None
+                managed = ManagedPosition(
+                    direction=pos.direction,
+                    entry=pos.entry_price,
+                    stop=pos.stop,
+                    target=pos.target,
+                    bars_held=pos.bars_held,
+                    initial_risk=pos.initial_risk or abs(pos.entry_price - pos.stop),
+                )
+                managed = manage_at_bar_close(managed, bar, spec, tick, atr_now)
+                pos.stop = managed.stop
+                pos.target = managed.target
+                pos.bars_held = managed.bars_held
+                pos.initial_risk = managed.initial_risk
+                if time_stop_hit(managed, spec):
+                    exit_px, reason = bar.close, "time_stop"
             if exit_px is not None and reason is not None:
                 slipped = _slip(exit_px, pos.direction, "exit", tick, slip_ticks)
                 fills.append(
@@ -153,20 +168,30 @@ def advance_slot(
                 qty = min(max(qty, 1 if qty > 0 else 0), max_qty)
                 if qty >= 1:
                     entry_px = _slip(raw, sig.direction, "entry", tick, slip_ticks)
-                    shift = entry_px - raw
+                    atr_sig = signal_ctx.atr[i - 1] if signal_ctx.atr else None
+                    stop, target = resolve_stop_target(
+                        spec,
+                        direction=sig.direction,
+                        entry_px=entry_px,
+                        tick=tick,
+                        atr=atr_sig,
+                        fallback_stop=sig.stop_price + (entry_px - raw),
+                        fallback_target=sig.target_price + (entry_px - raw),
+                    )
                     pos = OpenTrade(
                         sig.direction,
                         qty,
                         entry_px,
-                        sig.stop_price + shift,
-                        sig.target_price + shift,
+                        stop,
+                        target,
                         bar.ts,
+                        0,
+                        abs(entry_px - stop),
                     )
-                    stop_hit = bar.low <= pos.stop if pos.direction == "long" else bar.high >= pos.stop
-                    target_hit = bar.high >= pos.target if pos.direction == "long" else bar.low <= pos.target
-                    if stop_hit or target_hit:
-                        reason = "stop_loss" if stop_hit else "take_profit"
-                        raw_exit = pos.stop if stop_hit else pos.target
+                    hit_px, hit_reason = check_intrabar_exit(pos.direction, pos.stop, pos.target, bar)
+                    if hit_px is not None and hit_reason is not None:
+                        reason = hit_reason
+                        raw_exit = hit_px
                         slipped = _slip(raw_exit, pos.direction, "exit", tick, slip_ticks)
                         fills.append(
                             ClosedFill(
@@ -181,6 +206,35 @@ def advance_slot(
                             )
                         )
                         pos = None
+                    else:
+                        atr_now = signal_ctx.atr[i] if signal_ctx.atr else None
+                        managed = ManagedPosition(
+                            direction=pos.direction,
+                            entry=pos.entry_price,
+                            stop=pos.stop,
+                            target=pos.target,
+                            bars_held=pos.bars_held,
+                            initial_risk=pos.initial_risk,
+                        )
+                        managed = manage_at_bar_close(managed, bar, spec, tick, atr_now)
+                        pos.stop = managed.stop
+                        pos.target = managed.target
+                        pos.bars_held = managed.bars_held
+                        if time_stop_hit(managed, spec):
+                            slipped = _slip(bar.close, pos.direction, "exit", tick, slip_ticks)
+                            fills.append(
+                                ClosedFill(
+                                    pos.direction,
+                                    pos.qty,
+                                    pos.entry_ts,
+                                    pos.entry_price,
+                                    bar.ts,
+                                    slipped,
+                                    "time_stop",
+                                    _net_pnl(pos.entry_price, slipped, pos.direction, pos.qty, instrument, slip_ticks),
+                                )
+                            )
+                            pos = None
 
         cursor.last_bar_ts = bar.ts
 

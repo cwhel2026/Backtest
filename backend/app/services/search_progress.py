@@ -21,6 +21,10 @@ SEARCH_FAMILY_LABELS = (
     "Order block",
     "Premium / discount",
     "MTF pull",
+    "ORB VWAP",
+    "Killzone FVG",
+    "ATR pull",
+    "Sweep fade",
 )
 
 _ENTRY_FAMILY = {
@@ -40,13 +44,23 @@ _ENTRY_FAMILY = {
 }
 
 
+_CATEGORY_FAMILY = {
+    "orb_vwap": "ORB VWAP",
+    "killzone_fvg": "Killzone FVG",
+    "atr_pullback": "ATR pull",
+    "sweep_discount": "Sweep fade",
+}
+
+
 def entry_family_label(spec: dict | None) -> str | None:
     if not spec:
         return None
     cat = str(spec.get("category") or "")
     if cat.startswith("reversed_"):
         base = cat.removeprefix("reversed_")
-        return f"Fade {_ENTRY_FAMILY.get(base, base)}"
+        return f"Fade {_CATEGORY_FAMILY.get(base) or _ENTRY_FAMILY.get(base, base)}"
+    if cat in _CATEGORY_FAMILY:
+        return _CATEGORY_FAMILY[cat]
     entry = spec.get("entry") or {}
     etype = entry.get("type")
     if isinstance(etype, str) and etype in _ENTRY_FAMILY:

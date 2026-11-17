@@ -77,6 +77,27 @@ def bollinger_series(
     return mid, upper, lower
 
 
+def atr_series(bars: list[Bar], period: int = 14) -> list[Decimal | None]:
+    """Wilder ATR. Index i uses bars through i (no lookahead)."""
+    out: list[Decimal | None] = [None] * len(bars)
+    if period <= 0 or len(bars) < period:
+        return out
+    trs: list[Decimal] = []
+    for i, b in enumerate(bars):
+        if i == 0:
+            trs.append(b.high - b.low)
+            continue
+        prev = bars[i - 1].close
+        tr = max(b.high - b.low, abs(b.high - prev), abs(b.low - prev))
+        trs.append(tr)
+    atr = sum(trs[:period]) / Decimal(period)
+    out[period - 1] = atr
+    for i in range(period, len(bars)):
+        atr = (atr * Decimal(period - 1) + trs[i]) / Decimal(period)
+        out[i] = atr
+    return out
+
+
 def session_vwap(bars: list[Bar], session_date_key: list[str]) -> list[Decimal | None]:
     """session_date_key[i] groups bars into session buckets for VWAP."""
     out: list[Decimal | None] = [None] * len(bars)

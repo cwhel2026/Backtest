@@ -59,16 +59,76 @@ LIBRARY: list[dict] = [
             "risk": {"dollar_risk_per_trade": 100, "max_contracts": 2},
         },
     },
+    {
+        "name": "MNQ 5m ORB with VWAP",
+        "symbol": "MNQ",
+        "category": "orb_vwap",
+        "timeframe": "5m",
+        "hypothesis": "RTH opening-range break only when price is on the VWAP side of the move, first 2.5h.",
+        "spec": {
+            "name": "MNQ 5m ORB with VWAP",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "orb_vwap",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {"type": "opening_range_breakout", "range_minutes": 15, "side": "both"},
+            "filters": {
+                "vwap_align": "with",
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "max_trades_per_day": 2,
+            },
+            "exit": {
+                "stop_ticks": 16,
+                "target_ticks": 24,
+                "breakeven_r": 1.0,
+                "max_bars": 18,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
+    {
+        "name": "MNQ 5m Killzone FVG",
+        "symbol": "MNQ",
+        "category": "killzone_fvg",
+        "timeframe": "5m",
+        "hypothesis": "FVG retests only in the NY morning window, with 15m EMA bias.",
+        "spec": {
+            "name": "MNQ 5m Killzone FVG",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "killzone_fvg",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {"type": "fair_value_gap", "min_gap_ticks": 4, "max_age_bars": 36, "side": "both"},
+            "filters": {
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "htf": "15m",
+                "htf_ema": 21,
+                "max_trades_per_day": 3,
+            },
+            "exit": {
+                "stop_ticks": 12,
+                "target_ticks": 20,
+                "stop_atr": 1.2,
+                "target_atr": 1.8,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
 ]
 
 
 async def seed_strategy_library(session: AsyncSession) -> int:
-    existing = await session.execute(select(StrategyDefinition).limit(1))
-    if existing.scalar_one_or_none():
-        return 0
-
     created = 0
     for item in LIBRARY:
+        already = (
+            await session.execute(select(StrategyDefinition).where(StrategyDefinition.name == item["name"]))
+        ).scalar_one_or_none()
+        if already:
+            continue
         inst = (
             await session.execute(select(Instrument).where(Instrument.symbol == item["symbol"]))
         ).scalar_one_or_none()

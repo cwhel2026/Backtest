@@ -3,7 +3,14 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.backtest.bars import Bar, resample_if_needed
-from app.backtest.dsl import EntrySignal, build_signal_context, session_keys_rth, signal_at_bar, validate_spec
+from app.backtest.dsl import build_signal_context, session_keys_rth, signal_at_bar, validate_spec
+from app.backtest.exits import (
+    ManagedPosition,
+    check_intrabar_exit,
+    manage_at_bar_close,
+    resolve_stop_target,
+    time_stop_hit,
+)
 from app.backtest.metrics import SimulatedTrade, compute_metrics
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
@@ -74,8 +81,14 @@ def run_backtest(
     equity = starting_equity
     equity_curve = [{"ts": bars[0].ts.isoformat(), "equity": float(equity)}]
 
+    trades_by_session: dict[str, int] = {}
+    max_trades_day = int((spec.get("filters") or {}).get("max_trades_per_day") or 0)
+
     i = 0
     while i < len(bars) - 2:
+        if max_trades_day and trades_by_session.get(session_keys[i], 0) >= max_trades_day:
+            i += 1
+            continue
         sig = signal_at_bar(spec, bars, i, session_keys, tick, signal_ctx)
         if not sig:
             i += 1
@@ -90,8 +103,24 @@ def run_backtest(
             continue
 
         entry_px = _apply_slippage(raw_entry, sig.direction, "entry", tick, slip)
-        stop = sig.stop_price
-        target = sig.target_price
+        atr_now = signal_ctx.atr[i] if signal_ctx.atr else None
+        stop, target = resolve_stop_target(
+            spec,
+            direction=sig.direction,
+            entry_px=entry_px,
+            tick=tick,
+            atr=atr_now,
+            fallback_stop=sig.stop_price,
+            fallback_target=sig.target_price,
+        )
+        position = ManagedPosition(
+            direction=sig.direction,
+            entry=entry_px,
+            stop=stop,
+            target=target,
+            bars_held=0,
+            initial_risk=abs(entry_px - stop),
+        )
 
         exit_px = entry_px
         exit_ts = entry_bar.ts
@@ -102,31 +131,21 @@ def run_backtest(
         j = i + 1
         while j < len(bars):
             b = bars[j]
-            bar_mae = Decimal(0)
-            bar_mfe = Decimal(0)
             if sig.direction == "long":
                 bar_mfe = max(Decimal(0), (b.high - entry_px) * instrument.multiplier * qty)
                 bar_mae = max(Decimal(0), (entry_px - b.low) * instrument.multiplier * qty)
-                stop_hit = b.low <= stop
-                target_hit = b.high >= target
             else:
                 bar_mfe = max(Decimal(0), (entry_px - b.low) * instrument.multiplier * qty)
                 bar_mae = max(Decimal(0), (b.high - entry_px) * instrument.multiplier * qty)
-                stop_hit = b.high >= stop
-                target_hit = b.low <= target
-
             mae = max(mae, bar_mae)
             mfe = max(mfe, bar_mfe)
 
-            if stop_hit:
-                exit_px = _apply_slippage(stop, sig.direction, "exit", tick, slip)
+            hit_px, hit_reason = check_intrabar_exit(sig.direction, position.stop, position.target, b)
+            if hit_px is not None and hit_reason is not None:
+                exit_px = _apply_slippage(hit_px, sig.direction, "exit", tick, slip)
                 exit_ts = b.ts
-                exit_reason = "stop_loss"
-                break
-            if target_hit:
-                exit_px = _apply_slippage(target, sig.direction, "exit", tick, slip)
-                exit_ts = b.ts
-                exit_reason = "take_profit"
+                exit_reason = hit_reason
+                stop, target = position.stop, position.target
                 break
 
             if j + 1 < len(bars) and session_keys[j + 1] != session_keys[j] and spec.get("exit", {}).get(
@@ -135,7 +154,18 @@ def run_backtest(
                 exit_px = _apply_slippage(b.close, sig.direction, "exit", tick, slip)
                 exit_ts = b.ts
                 exit_reason = "session_flatten"
+                stop, target = position.stop, position.target
                 break
+
+            atr_j = signal_ctx.atr[j] if signal_ctx.atr else None
+            position = manage_at_bar_close(position, b, spec, tick, atr_j)
+            if time_stop_hit(position, spec):
+                exit_px = _apply_slippage(b.close, sig.direction, "exit", tick, slip)
+                exit_ts = b.ts
+                exit_reason = "time_stop"
+                stop, target = position.stop, position.target
+                break
+            stop, target = position.stop, position.target
             j += 1
 
         gross = _pnl_points(entry_px, exit_px, sig.direction, qty, instrument.multiplier)
@@ -181,6 +211,7 @@ def run_backtest(
         )
         equity += net
         equity_curve.append({"ts": exit_ts.isoformat(), "equity": float(equity)})
+        trades_by_session[session_keys[i]] = trades_by_session.get(session_keys[i], 0) + 1
         i = j + 1
 
     metrics = compute_metrics(simulated, starting_equity)
