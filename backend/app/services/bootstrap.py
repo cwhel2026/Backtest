@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -51,10 +51,14 @@ async def _seed_admin_user(session: AsyncSession) -> None:
     result = await session.execute(select(User).where(func.lower(User.email) == email))
     users = result.scalars().all()
     hashed = hash_password(settings.initial_admin_password)
-    if len(users) > 1:
-        for extra in users[1:]:
-            await session.delete(extra)
-    user = users[0] if users else None
+    keeper = next((u for u in users if u.email == email), None)
+    if keeper is None and users:
+        keeper = users[0]
+    if keeper and len(users) > 1:
+        doomed = [u.id for u in users if u.id != keeper.id]
+        await session.execute(delete(User).where(User.id.in_(doomed)))
+        await session.flush()
+    user = keeper
     if user:
         user.email = email
         user.hashed_password = hashed
