@@ -106,8 +106,8 @@ def advance_slot(
         return cursor, []
 
     keys = session_keys_rth(bars)
-    signal_ctx = build_signal_context(spec, bars, keys)
     tick = instrument.tick_size
+    signal_ctx = build_signal_context(spec, bars, keys, instrument_tick=tick)
     fills: list[ClosedFill] = []
     pos = cursor.position
 

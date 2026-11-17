@@ -19,14 +19,16 @@ Return JSON only with this shape:
     "timeframe": "5m",
     "category": "snake_case",
     "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
-    "entry": {"type": "ema_crossover|opening_range_breakout|vwap_reversion|rsi_reversion|donchian_breakout|consecutive_closes", "...params", "invert": false},
+    "entry": {"type": "ema_crossover|ema_pullback|opening_range_breakout|vwap_reversion|rsi_reversion|donchian_breakout|consecutive_closes|fair_value_gap|bollinger_reversion|liquidity_sweep", "...params", "invert": false},
     "exit": {"stop_ticks": int, "target_ticks": int, "session_end_flatten": true},
     "risk": {"dollar_risk_per_trade": number, "max_contracts": int}
   }
 }
 entry types: ema_crossover (fast_period, slow_period), opening_range_breakout (range_minutes, side),
 vwap_reversion (deviation_ticks), rsi_reversion (period, oversold, overbought),
-donchian_breakout (lookback), consecutive_closes (count). invert=true fades the signal.
+donchian_breakout (lookback), consecutive_closes (count),
+fair_value_gap (min_gap_ticks, max_age_bars, side), bollinger_reversion (period, std_mult),
+liquidity_sweep (lookback, sweep_ticks), ema_pullback (fast_period, slow_period). invert=true fades.
 timeframes: 1m, 5m, 15m, 1h only.
 """
 

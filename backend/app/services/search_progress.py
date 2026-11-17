@@ -7,7 +7,18 @@ from typing import Any
 
 from app.models.research import ResearchJob
 
-SEARCH_FAMILY_LABELS = ("ORB", "EMA", "VWAP", "RSI", "Donchian", "Streak")
+SEARCH_FAMILY_LABELS = (
+    "ORB",
+    "EMA",
+    "EMA pull",
+    "VWAP",
+    "RSI",
+    "Donchian",
+    "Streak",
+    "FVG",
+    "Bollinger",
+    "Liquidity",
+)
 
 _ENTRY_FAMILY = {
     "opening_range_breakout": "ORB",
@@ -16,6 +27,10 @@ _ENTRY_FAMILY = {
     "rsi_reversion": "RSI",
     "donchian_breakout": "Donchian",
     "consecutive_closes": "Streak",
+    "fair_value_gap": "FVG",
+    "bollinger_reversion": "Bollinger",
+    "liquidity_sweep": "Liquidity",
+    "ema_pullback": "EMA pull",
 }
 
 

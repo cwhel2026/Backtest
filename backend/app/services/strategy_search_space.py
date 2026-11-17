@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from decimal import Decimal
 from itertools import product
 from typing import Any, Iterator
 
@@ -120,6 +121,67 @@ def _donchian_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, An
         yield _with_exits(base, stop, target)
 
 
+def _fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for min_gap, max_age, side, (stop, target) in product(
+        (2, 4, 6),
+        (24, 36, 48),
+        ("both", "long", "short"),
+        STOP_TARGETS[:6],
+    ):
+        base = _base(
+            symbol,
+            timeframe,
+            "fair_value_gap",
+            {
+                "type": "fair_value_gap",
+                "min_gap_ticks": min_gap,
+                "max_age_bars": max_age,
+                "side": side,
+            },
+            f"{symbol} FVG {min_gap}t {max_age}b {side}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _bollinger_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for period, mult, (stop, target) in product((14, 20), (Decimal("1.5"), Decimal("2"), Decimal("2.5")), STOP_TARGETS[:7]):
+        base = _base(
+            symbol,
+            timeframe,
+            "bollinger_reversion",
+            {"type": "bollinger_reversion", "period": period, "std_mult": float(mult)},
+            f"{symbol} BB {period} {mult}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _liquidity_sweep_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, sweep, (stop, target) in product((8, 12, 16), (1, 2, 3), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "liquidity_sweep",
+            {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": sweep},
+            f"{symbol} liq sweep {lookback}/{sweep}t",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _ema_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    pairs = ((8, 21), (9, 26), (12, 26))
+    for (fast, slow), (stop, target) in product(pairs, STOP_TARGETS[:8]):
+        if fast >= slow:
+            continue
+        base = _base(
+            symbol,
+            timeframe,
+            "ema_pullback",
+            {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+            f"{symbol} EMA pull {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
+
+
 def _streak_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
     for count, (stop, target) in product((3, 4, 5), STOP_TARGETS):
         base = _base(
@@ -135,10 +197,14 @@ def _streak_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]
 FAMILY_BUILDERS = {
     "orb": _orb_specs,
     "ema": _ema_specs,
+    "ema_pullback": _ema_pullback_specs,
     "vwap": _vwap_specs,
     "rsi": _rsi_specs,
     "donchian": _donchian_specs,
     "streak": _streak_specs,
+    "fvg": _fvg_specs,
+    "bollinger": _bollinger_specs,
+    "liquidity": _liquidity_sweep_specs,
 }
 
 
