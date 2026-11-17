@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
     ai_research_enabled: bool = False
     max_experiments_per_day: int = 50
+    autonomous_hourly_enabled: bool = Field(default=True, validation_alias="AUTONOMOUS_HOURLY_ENABLED")
+    autonomous_forward_sim: bool = True
 
     api_v1_prefix: str = "/api/v1"
 

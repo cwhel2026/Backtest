@@ -6,17 +6,16 @@ import { useEffect, useState } from "react";
 import { setStoredToken } from "@/lib/api";
 
 const NAV = [
-  { href: "/", label: "Overview", short: "Home" },
-  { href: "/strategies", label: "Strategy Explorer", short: "Strategies" },
-  { href: "/backtests", label: "Backtest Laboratory", short: "Backtests" },
-  { href: "/market-data", label: "Market Data", short: "Data" },
-  { href: "/research", label: "Live Research", short: "Research" },
-  { href: "/paper", label: "Paper Trading", short: "Paper" },
-  { href: "/prop-firms", label: "Prop-Firm Centre", short: "Prop" },
+  { href: "/", label: "Autopilot", short: "Home" },
+  { href: "/backtests", label: "Results", short: "Results" },
+  { href: "/paper", label: "Live sim", short: "Sim" },
   { href: "/settings", label: "Settings", short: "Settings" },
+  { href: "/market-data", label: "Market Data (advanced)", short: "Data" },
+  { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
+  { href: "/research", label: "Jobs (advanced)", short: "Jobs" },
 ];
 
-const MOBILE_TABS = NAV.slice(0, 4);
+const MOBILE_TABS = NAV.slice(0, 3);
 
 function isNavActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
@@ -124,7 +123,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-64 shrink-0 border-r border-zinc-800 bg-[#0e1015] p-4 md:block">
         <div className="mb-8 px-2">
           <p className="text-xs font-semibold tracking-[0.2em] text-emerald-400">PROP EDGE</p>
-          <h1 className="text-lg font-medium text-zinc-50">AI Research Terminal</h1>
+          <h1 className="text-lg font-medium text-zinc-50">Prop Autopilot</h1>
         </div>
         <NavLinks pathname={pathname} />
         <button
@@ -141,7 +140,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Mobile bottom navigation */}
         <nav
-          className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 border-t border-zinc-800 bg-[#0e1015]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+          className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-3 border-t border-zinc-800 bg-[#0e1015]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
           aria-label="Primary"
         >
           {MOBILE_TABS.map((item) => {

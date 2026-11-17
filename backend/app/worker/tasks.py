@@ -34,7 +34,7 @@ def _fail_ingestion(db: Session, job: ResearchJob, error: str, headline: str) ->
     db.commit()
 
 
-def enqueue_data_ingestion(meta: dict, actor: str) -> str:
+def create_ingestion_job(meta: dict, actor: str) -> str:
     job_id = str(uuid.uuid4())
     with SyncSession() as db:
         job = ResearchJob(
@@ -54,6 +54,11 @@ def enqueue_data_ingestion(meta: dict, actor: str) -> str:
             )
         )
         db.commit()
+    return job_id
+
+
+def enqueue_data_ingestion(meta: dict, actor: str) -> str:
+    job_id = create_ingestion_job(meta, actor)
     run_data_ingestion.delay(job_id)
     return job_id
 
@@ -234,3 +239,14 @@ def run_backtest_task(run_id: str) -> None:
 def health_pulse() -> None:
     """Periodic worker heartbeat — no fabricated research activity."""
     _ = SyncSession  # ensures DB connectivity on schedule
+
+
+@celery_app.task(name="app.worker.tasks.autonomous_prop_cycle")
+def autonomous_prop_cycle() -> None:
+    settings_ref = get_settings()
+    if not settings_ref.autonomous_hourly_enabled:
+        return
+    from app.services.autonomous_cycle import run_autonomous_prop_cycle
+
+    with SyncSession() as db:
+        run_autonomous_prop_cycle(db, actor="hourly_autopilot")
