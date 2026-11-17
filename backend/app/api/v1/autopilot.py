@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +17,7 @@ from app.schemas.autopilot import (
     CycleStats,
     LeaderboardEntry,
 )
-from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, resolve_search_symbols
+from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, job_is_stale, resolve_search_symbols
 from app.services.leaderboard import leaderboard_entries_async
 from app.worker.tasks import create_prop_search_job, run_prop_search_job
 
@@ -28,7 +30,32 @@ async def autopilot_status(
     db: AsyncSession = Depends(get_db),
 ) -> AutopilotStatus:
     settings = get_settings()
+    active_rows = (
+        await db.execute(
+            select(ResearchJob)
+            .where(
+                ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+            )
+        )
+    ).scalars().all()
+    for stale in active_rows:
+        if job_is_stale(stale):
+            stale.status = ResearchJobStatus.FAILED
+            stale.error = "Search stalled before it finished. Press Run prop search again."
+            stale.completed_at = datetime.now(UTC)
+            db.add(
+                ResearchActivity(
+                    headline="Deep search stalled",
+                    detail=stale.error,
+                    job_id=stale.id,
+                )
+            )
+    if active_rows:
+        await db.commit()
+
     profitable = await leaderboard_entries_async(db, limit=12, profitable_only=True)
+    recent_tests = await leaderboard_entries_async(db, limit=6, profitable_only=False)
 
     activity = (
         await db.execute(select(ResearchActivity).order_by(desc(ResearchActivity.created_at)).limit(10))
@@ -37,25 +64,23 @@ async def autopilot_status(
         {"headline": a.headline, "detail": a.detail, "created_at": a.created_at.isoformat()} for a in activity
     ]
 
-    active_job = (
+    latest_job = (
         await db.execute(
             select(ResearchJob)
-            .where(
-                ResearchJob.title == PROP_SEARCH_JOB_TITLE,
-                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
-            )
+            .where(ResearchJob.title == PROP_SEARCH_JOB_TITLE)
             .order_by(desc(ResearchJob.created_at))
             .limit(1)
         )
     ).scalar_one_or_none()
     background_search = None
-    if active_job:
+    if latest_job:
         background_search = BackgroundSearchStatus(
-            job_id=str(active_job.id),
-            status=active_job.status.value,
-            message=active_job.message,
-            progress_pct=active_job.progress_pct,
-            started_at=active_job.started_at.isoformat() if active_job.started_at else None,
+            job_id=str(latest_job.id),
+            status=latest_job.status.value,
+            message=latest_job.message,
+            progress_pct=latest_job.progress_pct,
+            started_at=latest_job.started_at.isoformat() if latest_job.started_at else None,
+            error=latest_job.error,
         )
 
     last_cycle = next((a for a in activity if "search" in a.headline.lower()), None)
@@ -84,6 +109,7 @@ async def autopilot_status(
         ),
         background_search=background_search,
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],
+        recent_tests=[LeaderboardEntry(**e) for e in recent_tests],
         recent_activity=recent,
         cycle_stats=cycle_stats,
     )
@@ -117,6 +143,12 @@ async def run_autopilot_now(
             .limit(1)
         )
     ).scalar_one_or_none()
+    if active_job and job_is_stale(active_job):
+        active_job.status = ResearchJobStatus.FAILED
+        active_job.error = "Search stalled before it finished. Starting a new one."
+        active_job.completed_at = datetime.now(UTC)
+        await db.commit()
+        active_job = None
     if active_job:
         return AutopilotRunResponse(
             job_id=str(active_job.id),
@@ -125,9 +157,13 @@ async def run_autopilot_now(
         )
 
     job_id = create_prop_search_job(user.email)
+    # Run inside this API process as well as Celery. Only the first claim executes,
+    # so a missing worker cannot leave the search stuck on "queued" with a blank page.
+    background_tasks.add_task(run_prop_search_job, job_id)
+    mode = "server"
     try:
         run_prop_search_job.delay(job_id)
-        return AutopilotRunResponse(job_id=job_id, status="queued", mode="celery")
+        mode = "celery"
     except Exception:
-        background_tasks.add_task(run_prop_search_job, job_id)
-        return AutopilotRunResponse(job_id=job_id, status="queued", mode="inline")
+        mode = "inline"
+    return AutopilotRunResponse(job_id=job_id, status="queued", mode=mode)
