@@ -27,12 +27,15 @@ def test_manual_search_task_does_not_require_hourly_flag(monkeypatch):
         called.append(actor)
 
     mock_db = MagicMock()
-    mock_db.get.return_value = job
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = job
+    mock_db.execute.return_value = mock_result
 
     with patch("app.worker.tasks.SyncSession") as mock_session:
         mock_session.return_value.__enter__.return_value = mock_db
         with patch("app.worker.tasks.run_autonomous_prop_cycle", side_effect=fake_cycle):
-            run_prop_search_job(job_id)
+            with patch("app.services.search_progress.merge_search_progress"):
+                run_prop_search_job(job_id)
 
     assert called == ["user@test"]
     get_settings.cache_clear()

@@ -84,6 +84,7 @@ async def autopilot_status(
         if job_is_stale(stale):
             stale.status = ResearchJobStatus.FAILED
             stale.error = "Search stalled before it finished. Press Run prop search again."
+            stale.message = stale.error
             stale.completed_at = datetime.now(UTC)
             db.add(
                 ResearchActivity(
@@ -215,6 +216,7 @@ async def run_autopilot_now(
     if active_job and (restart or job_is_stale(active_job)):
         active_job.status = ResearchJobStatus.FAILED
         active_job.error = "Replaced by a new search."
+        active_job.message = active_job.error
         active_job.completed_at = datetime.now(UTC)
         await db.commit()
         active_job = None

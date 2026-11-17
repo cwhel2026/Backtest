@@ -149,7 +149,9 @@ export default function HomePage() {
                     : "border-amber-800/60 bg-amber-950/40 text-amber-200"
               }`}
             >
-              {status.background_search.status}: {status.background_search.message}
+              {status.background_search.status === "failed"
+                ? status.background_search.error || status.background_search.message
+                : `${status.background_search.status}: ${status.background_search.message}`}
             </span>
           ) : null}
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>

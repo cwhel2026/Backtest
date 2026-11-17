@@ -6,7 +6,7 @@ from app.services.autonomous_cycle import job_is_stale, resolve_search_symbols
 
 
 def test_running_search_without_heartbeat_is_stale():
-    started = datetime.now(UTC) - timedelta(minutes=10)
+    started = datetime.now(UTC) - timedelta(minutes=30)
     job = SimpleNamespace(
         status=ResearchJobStatus.RUNNING,
         created_at=started,
