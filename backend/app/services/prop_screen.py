@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# Intraday RTH strategies: wide R:R scalps with ~20% WR are not prop-desk ready.
+INTRADAY_MIN_WIN_RATE = 0.42
+
 
 def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = False) -> bool:
     if not metrics:
@@ -22,6 +25,10 @@ def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = Fa
     max_dd = float(metrics.get("max_drawdown") or 0)
     if max_dd > 3500:
         return False
+    if not reverse:
+        wr = metrics.get("win_rate")
+        if wr is not None and float(wr) < INTRADAY_MIN_WIN_RATE:
+            return False
     return True
 
 
@@ -35,21 +42,27 @@ def rank_score(metrics: dict[str, Any] | None) -> float:
     if net <= 0:
         return -1e9
     # Higher PF and net, more trades (diminishing), penalize drawdown
-    return pf * 1000 + net * 0.5 + min(trades, 80) * 2 - dd * 0.1
+    wr = float(metrics.get("win_rate") or 0)
+    return pf * 1000 + net * 0.5 + min(trades, 80) * 2 - dd * 0.1 + wr * 600
 
 
 def prop_readiness_score(metrics: dict[str, Any] | None) -> int:
     """0–100 score for UI badge."""
+    if not metrics:
+        return 0
+    wr = float(metrics.get("win_rate") or 0)
+    if wr < INTRADAY_MIN_WIN_RATE:
+        return 0
     if not is_profitable_backtest(metrics):
         return 0
     pf = float(metrics.get("profit_factor") or 1)
     net = float(metrics.get("total_net_profit") or 0)
-    wr = float(metrics.get("win_rate") or 0)
     dd = float(metrics.get("max_drawdown") or 0)
-    score = 40
-    score += min(30, (pf - 1) * 25)
-    score += min(20, net / 500)
-    score += min(15, wr * 20)
+    score = 25
+    score += min(25, (pf - 1) * 22)
+    score += min(15, net / 600)
+    # Win rate is primary for intraday prop (not swing-style PF with tiny hit rate).
+    score += min(40, max(0.0, (wr - INTRADAY_MIN_WIN_RATE) * 110))
     score -= min(25, dd / 200)
     return max(0, min(100, int(round(score))))
 
