@@ -16,9 +16,13 @@ from app.schemas.autopilot import (
     AutopilotStatus,
     BackgroundSearchStatus,
     CycleStats,
+    JobLogLine,
     LeaderboardEntry,
+    SearchLiveProgress,
+    SearchPlan,
 )
 from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, job_is_stale, resolve_search_symbols
+from app.services.search_progress import SEARCH_FAMILY_LABELS, initial_search_progress
 from app.services.research_jobs import add_job_with_activity_async
 from app.services.leaderboard import leaderboard_entries_async
 from app.util.serde import enum_value, normalize_created_by
@@ -36,7 +40,19 @@ async def _queue_deep_prop_search(db: AsyncSession, actor: str) -> str:
         status=ResearchJobStatus.QUEUED,
         title=PROP_SEARCH_JOB_TITLE,
         message="Queued — runs on the server (safe to close the app)",
-        payload={"actor": actor_label, "actor_display": actor, "source": "manual"},
+        payload={
+            "actor": actor_label,
+            "actor_display": actor,
+            "source": "manual",
+            "search_progress": {
+                **initial_search_progress(
+                    symbols=resolve_search_symbols(),
+                    budget=int(get_settings().search_budget_per_symbol),
+                    history_days=int(get_settings().search_history_days),
+                ),
+                "phase": "queued",
+            },
+        },
     )
     await add_job_with_activity_async(
         db,
@@ -99,7 +115,22 @@ async def autopilot_status(
         )
     ).scalar_one_or_none()
     background_search = None
+    job_log: list[JobLogLine] = []
     if latest_job:
+        raw_progress = (latest_job.payload or {}).get("search_progress") or {}
+        live = SearchLiveProgress(**raw_progress) if raw_progress else None
+        log_rows = (
+            await db.execute(
+                select(ResearchActivity)
+                .where(ResearchActivity.job_id == latest_job.id)
+                .order_by(desc(ResearchActivity.created_at))
+                .limit(12)
+            )
+        ).scalars().all()
+        job_log = [
+            JobLogLine(headline=a.headline, detail=a.detail or "", created_at=a.created_at.isoformat())
+            for a in reversed(log_rows)
+        ]
         background_search = BackgroundSearchStatus(
             job_id=str(latest_job.id),
             status=enum_value(latest_job.status),
@@ -107,6 +138,8 @@ async def autopilot_status(
             progress_pct=latest_job.progress_pct or 0,
             started_at=latest_job.started_at.isoformat() if latest_job.started_at else None,
             error=latest_job.error,
+            live=live,
+            job_log=job_log,
         )
 
     last_cycle = next((a for a in activity if "search" in a.headline.lower()), None)
@@ -123,10 +156,20 @@ async def autopilot_status(
             except ValueError:
                 pass
 
+    sym_list = list(resolve_search_symbols())
+    search_plan = SearchPlan(
+        symbols=sym_list,
+        combos_per_symbol=int(settings.search_budget_per_symbol),
+        history_days=int(settings.search_history_days),
+        families=list(SEARCH_FAMILY_LABELS),
+        reverse_fades=bool(getattr(settings, "reverse_search_enabled", True)),
+    )
+
     return AutopilotStatus(
         hourly_enabled=settings.autonomous_hourly_enabled,
         ai_configured=settings.ai_configured,
-        search_symbols=list(resolve_search_symbols()),
+        search_symbols=sym_list,
+        search_plan=search_plan,
         message=(
             "Always-on prop desk: hourly search on Nasdaq + S&P, walk-forward backtests, "
             "then a paper book that opens and closes trades on new 5-minute bars under "
