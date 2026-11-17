@@ -19,6 +19,8 @@ from app.services.ai_research import generate_hypothesis_and_spec
 from app.services.backtest_runner import execute_backtest_run
 from app.services.market_data.ingestion_runner import run_yahoo_ingestion
 from app.services.forward_sim import run_forward_simulation
+from app.services.prop_screen import is_profitable_backtest
+from app.services.spec_variants import risk_variants
 from app.services.strategy_factory import create_strategy_sync
 
 PROP_SYMBOLS = ("MES", "MNQ")
@@ -92,66 +94,85 @@ def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dic
         job.message = "Generating and testing strategies"
         session.commit()
 
-        for idx, symbol in enumerate(PROP_SYMBOLS):
+        winners: list[str] = []
+        tested = 0
+        for symbol in PROP_SYMBOLS:
             ds = datasets.get(symbol)
             if not ds:
                 continue
-            prompt = PROMPTS[idx % len(PROMPTS)]
-            rationale, spec = generate_hypothesis_and_spec(symbol, "5m", prompt)
-            strategy = create_strategy_sync(
-                session,
-                specification=spec,
-                economic_rationale=rationale,
-                created_by="autopilot",
-            )
-            session.flush()
-            summary["strategies"].append({"id": str(strategy.id), "name": strategy.name})
-
-            run = BacktestRun(
-                strategy_id=strategy.id,
-                strategy_version_id=strategy.current_version_id,
-                dataset_id=ds.id,
-                status="queued",
-                engine_version="pending",
-                reproducibility_id="pending",
-                assumptions={"slippage_ticks_per_side": 1},
-                parameters={},
-            )
-            session.add(run)
-            session.flush()
-            execute_backtest_run(session, run.id)
-            session.commit()
-            summary["backtests"].append(
-                {
-                    "id": str(run.id),
-                    "strategy_id": str(strategy.id),
-                    "metrics": run.metrics,
-                    "status": run.status,
-                }
-            )
-
-            if run.status == "completed" and settings.autonomous_forward_sim:
-                sim = run_forward_simulation(session, strategy, run, tail_bars=120)
-                summary["sims"].append(sim)
-                session.add(
-                    ResearchActivity(
-                        headline=f"Live sim (no broker): {strategy.name}",
-                        detail=sim.get("summary", ""),
-                        meta={"strategy_id": str(strategy.id), "run_id": str(run.id), "sim": sim},
+            for prompt in PROMPTS:
+                rationale, spec = generate_hypothesis_and_spec(symbol, "5m", prompt)
+                for variant_spec in risk_variants(spec, max_variants=4):
+                    strategy = create_strategy_sync(
+                        session,
+                        specification=variant_spec,
+                        economic_rationale=rationale,
+                        created_by="autopilot",
                     )
-                )
+                    session.flush()
+                    summary["strategies"].append({"id": str(strategy.id), "name": strategy.name})
+
+                    run = BacktestRun(
+                        strategy_id=strategy.id,
+                        strategy_version_id=strategy.current_version_id,
+                        dataset_id=ds.id,
+                        status="queued",
+                        engine_version="pending",
+                        reproducibility_id="pending",
+                        assumptions={"slippage_ticks_per_side": 1},
+                        parameters={"search_prompt": prompt},
+                    )
+                    session.add(run)
+                    session.flush()
+                    execute_backtest_run(session, run.id)
+                    session.commit()
+                    tested += 1
+                    summary["backtests"].append(
+                        {
+                            "id": str(run.id),
+                            "name": strategy.name,
+                            "strategy_id": str(strategy.id),
+                            "metrics": run.metrics,
+                            "status": run.status,
+                            "profitable": is_profitable_backtest(run.metrics),
+                        }
+                    )
+
+                    if run.status != "completed" or not is_profitable_backtest(run.metrics):
+                        continue
+
+                    winners.append(strategy.name)
+                    if settings.autonomous_forward_sim:
+                        sim = run_forward_simulation(session, strategy, run, tail_bars=120)
+                        summary["sims"].append(sim)
+                        session.add(
+                            ResearchActivity(
+                                headline=f"Prop candidate · {strategy.name}",
+                                detail=(
+                                    f"{symbol} 5m · net ${float((run.metrics or {}).get('total_net_profit') or 0):.0f} · "
+                                    f"PF {float((run.metrics or {}).get('profit_factor') or 0):.2f} · "
+                                    f"live sim: {sim.get('summary', '')}"
+                                ),
+                                meta={"strategy_id": str(strategy.id), "run_id": str(run.id), "sim": sim},
+                            )
+                        )
 
         job.status = ResearchJobStatus.COMPLETED
         job.progress_pct = 100
         job.message = "Cycle complete"
         job.completed_at = datetime.now(UTC)
         job.payload = {**job.payload, "summary": summary}
+        if winners:
+            detail = f"Tested {tested} variants · {len(winners)} profitable: {', '.join(winners[:5])}"
+        else:
+            detail = f"Tested {tested} variants · no prop candidates this hour (try again or widen search)"
+
         session.add(
             ResearchActivity(
                 headline="Autonomous cycle finished",
-                detail=f"Tested {len(summary['backtests'])} strategies on MES/MNQ",
+                detail=detail,
                 job_id=job.id,
-                meta=summary,
+                meta={**summary, "winners": winners},
             )
         )
         session.commit()

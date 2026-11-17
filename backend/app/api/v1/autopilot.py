@@ -1,17 +1,17 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models.backtest import BacktestRun
 from app.models.research import ResearchActivity
 from app.models.user import User
-from app.schemas.autopilot import AutopilotRunResponse, AutopilotStatus
+from app.schemas.autopilot import AutopilotRunResponse, AutopilotStatus, CycleStats, LeaderboardEntry
 from app.services.autonomous_cycle import run_autonomous_prop_cycle
+from app.services.leaderboard import leaderboard_entries_async
 from app.worker.tasks import autonomous_prop_cycle
 
 router = APIRouter(prefix="/autopilot", tags=["autopilot"])
@@ -23,51 +23,51 @@ async def autopilot_status(
     db: AsyncSession = Depends(get_db),
 ) -> AutopilotStatus:
     settings = get_settings()
-    runs = (
-        await db.execute(
-            select(BacktestRun)
-            .where(BacktestRun.status == "completed")
-            .order_by(desc(BacktestRun.completed_at))
-            .limit(20)
-        )
-    ).scalars().all()
-
-    def score(r: BacktestRun) -> float:
-        m = r.metrics or {}
-        pf = m.get("profit_factor")
-        if pf is not None:
-            return float(pf)
-        return float(m.get("total_net_profit") or 0)
-
-    ranked = sorted(runs, key=score, reverse=True)[:5]
-    top = [
-        {
-            "id": str(r.id),
-            "strategy_id": str(r.strategy_id),
-            "profit_factor": (r.metrics or {}).get("profit_factor"),
-            "net_profit": (r.metrics or {}).get("total_net_profit"),
-            "trade_count": (r.metrics or {}).get("trade_count"),
-        }
-        for r in ranked
-    ]
+    profitable = await leaderboard_entries_async(db, limit=12, profitable_only=True)
 
     activity = (
-        await db.execute(select(ResearchActivity).order_by(desc(ResearchActivity.created_at)).limit(8))
+        await db.execute(select(ResearchActivity).order_by(desc(ResearchActivity.created_at)).limit(10))
     ).scalars().all()
     recent = [
         {"headline": a.headline, "detail": a.detail, "created_at": a.created_at.isoformat()} for a in activity
     ]
 
+    last_cycle = next((a for a in activity if "cycle" in a.headline.lower()), None)
+    cycle_stats = CycleStats(
+        last_cycle_detail=last_cycle.detail if last_cycle else None,
+        profitable_count=len(profitable),
+        tests_run=0,
+    )
+    if last_cycle and last_cycle.detail:
+        if "Tested " in last_cycle.detail:
+            try:
+                part = last_cycle.detail.split("Tested ", 1)[1].split(" variants", 1)[0]
+                cycle_stats.tests_run = int(part)
+            except ValueError:
+                pass
+
     return AutopilotStatus(
         hourly_enabled=settings.autonomous_hourly_enabled,
         ai_configured=settings.ai_configured,
         message=(
-            "Autopilot refreshes Yahoo data hourly, tests new strategies on MES/MNQ, "
-            "and runs a live-style sim on recent bars — no broker account."
+            "Searches MES/MNQ with varied stops/targets, keeps only profitable backtests for your leaderboard, "
+            "then forward-sims winners on the latest bars (no broker)."
         ),
-        top_backtests=top,
+        profitable_candidates=[LeaderboardEntry(**e) for e in profitable],
         recent_activity=recent,
+        cycle_stats=cycle_stats,
     )
+
+
+@router.get("/leaderboard", response_model=list[LeaderboardEntry])
+async def prop_leaderboard(
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    profitable_only: bool = Query(True),
+    limit: int = Query(25, le=100),
+) -> list[LeaderboardEntry]:
+    rows = await leaderboard_entries_async(db, limit=limit, profitable_only=profitable_only)
+    return [LeaderboardEntry(**e) for e in rows]
 
 
 @router.post("/run", response_model=AutopilotRunResponse)
