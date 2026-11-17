@@ -42,6 +42,7 @@ class SearchLiveProgress(BaseModel):
     budget_per_symbol: int = 0
     history_days: int = 0
     combos_per_symbol: int = 0
+    combos_completed: int = 0
     tests_completed: int = 0
     tests_target_estimate: int = 0
     current_setup: str | None = None

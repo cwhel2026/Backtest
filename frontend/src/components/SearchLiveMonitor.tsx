@@ -31,6 +31,7 @@ type Live = {
   symbol_index?: number;
   current_symbol?: string | null;
   combos_per_symbol?: number;
+  combos_completed?: number;
   history_days?: number;
   tests_completed?: number;
   tests_target_estimate?: number;
@@ -71,12 +72,26 @@ function phaseLabel(phase: string | null | undefined): string {
   return PHASE_LABELS[phase] ?? phase.replace(/_/g, " ");
 }
 
+function secondsSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 1000));
+}
+
 export function SearchLiveMonitor({ status, message, progressPct, live, plan, jobLog, active }: Props) {
   const symbols = live?.symbols?.length ? live.symbols : plan?.symbols ?? [];
   const families = live?.search_families?.length ? live.search_families : plan?.families ?? [];
   const combos = live?.combos_per_symbol ?? plan?.combos_per_symbol ?? 0;
   const history = live?.history_days ?? plan?.history_days ?? 0;
   const subphase = live?.scoring_subphase ? SUBPHASE_LABELS[live.scoring_subphase] ?? live.scoring_subphase : null;
+  const heartbeatAge = secondsSince(live?.heartbeat_at ?? null);
+  const combosDone = live?.combos_completed ?? 0;
+  const stallWarning =
+    active &&
+    heartbeatAge != null &&
+    heartbeatAge > 75 &&
+    (live?.phase === "scoring" || live?.phase === "loading_data");
 
   return (
     <section className="rounded-xl border border-amber-900/40 bg-[#151820] p-4 md:p-5">
@@ -94,11 +109,25 @@ export function SearchLiveMonitor({ status, message, progressPct, live, plan, jo
 
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-amber-600 to-emerald-500 transition-all duration-500"
-          style={{ width: `${Math.min(100, Math.max(active ? 2 : 0, progressPct))}%` }}
+          className={`h-full rounded-full bg-gradient-to-r from-amber-600 to-emerald-500 transition-all duration-500 ${
+            active ? "animate-pulse" : ""
+          }`}
+          style={{ width: `${Math.min(100, Math.max(active ? 3 : 0, progressPct))}%` }}
         />
       </div>
       <p className="mt-2 text-sm text-zinc-200">{message}</p>
+      {active && heartbeatAge != null ? (
+        <p className="mt-1 text-xs text-zinc-500">
+          Server heartbeat {heartbeatAge}s ago
+          {combos > 0 ? ` · combo ${combosDone} / ${combos} on this market` : ""}
+        </p>
+      ) : null}
+      {stallWarning ? (
+        <p className="mt-2 text-xs text-amber-200">
+          Still crunching one heavy backtest (up to ~90s per combo). The counter may pause briefly — if this
+          line is over 3 minutes old, press Restart search.
+        </p>
+      ) : null}
 
       <dl className="mt-4 grid gap-3 text-xs md:grid-cols-2">
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
