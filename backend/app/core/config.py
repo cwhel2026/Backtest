@@ -106,6 +106,30 @@ class Settings(BaseSettings):
             return v.strip().strip('"').strip("'")
         return v
 
+    @field_validator(
+        "search_budget_per_symbol",
+        "search_history_days",
+        "search_stale_queued_minutes",
+        "search_stale_running_minutes",
+        "search_backtest_timeout_s",
+        "search_walkforward_folds",
+        "search_ai_rounds",
+        "search_ai_specs_per_round",
+        "search_1m_budget_per_symbol",
+        "search_1m_history_days",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_env_int(cls, v: object) -> object:
+        """Railway env values are sometimes set as \"60+\" — strip trailing plus signs."""
+        if isinstance(v, str):
+            s = v.strip().strip('"').strip("'")
+            while s.endswith("+"):
+                s = s[:-1].strip()
+            if s.isdigit():
+                return int(s)
+        return v
+
     @model_validator(mode="after")
     def _railway_compatibility(self) -> "Settings":
         self.database_url = to_async_database_url(self.database_url)

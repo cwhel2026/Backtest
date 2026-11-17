@@ -1,12 +1,20 @@
 import os
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 
 
 def test_postgres_url_normalized_for_asyncpg():
     s = Settings(database_url="postgres://user:pass@host:5432/railway")
     assert s.database_url.startswith("postgresql+asyncpg://")
     assert s.database_url_sync.startswith("postgresql://")
+
+
+def test_search_history_days_accepts_trailing_plus(monkeypatch):
+    monkeypatch.setenv("SEARCH_HISTORY_DAYS", "60+")
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.search_history_days == 60
+    get_settings.cache_clear()
 
 
 def test_railway_celery_uses_redis_url(monkeypatch):
