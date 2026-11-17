@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     search_symbols: str = Field(default="MNQ,NQ,MES,ES", validation_alias="SEARCH_SYMBOLS")
     search_stale_queued_minutes: int = Field(default=12, validation_alias="SEARCH_STALE_QUEUED_MINUTES")
     search_stale_running_minutes: int = Field(default=25, validation_alias="SEARCH_STALE_RUNNING_MINUTES")
+    search_backtest_timeout_s: int = Field(default=90, validation_alias="SEARCH_BACKTEST_TIMEOUT_S")
     reverse_search_enabled: bool = Field(default=True, validation_alias="REVERSE_SEARCH_ENABLED")
     reverse_winrate_max: float = Field(default=0.20, validation_alias="REVERSE_WINRATE_MAX")
     paper_starting_equity: float = Field(default=100_000, validation_alias="PAPER_STARTING_EQUITY")

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
+
+_BT_SEARCH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bt-search")
 
 from app.backtest.bars import load_bars
 from app.backtest.engine import BacktestAssumptions, run_backtest
@@ -33,7 +36,10 @@ def _split_train_test(bars: list, train_ratio: float = 0.65):
 def _metrics_for_spec(spec: dict, bars, instrument: Instrument, dataset_tf: str) -> dict | None:
     if len(bars) < 40:
         return None
-    try:
+    settings = get_settings()
+    timeout = int(getattr(settings, "search_backtest_timeout_s", 90) or 90)
+
+    def _run() -> dict:
         result = run_backtest(
             spec,
             bars,
@@ -42,7 +48,11 @@ def _metrics_for_spec(spec: dict, bars, instrument: Instrument, dataset_tf: str)
             BacktestAssumptions(slippage_ticks_per_side=1),
         )
         return result.metrics
-    except (ValueError, KeyError):
+
+    try:
+        future = _BT_SEARCH_POOL.submit(_run)
+        return future.result(timeout=timeout)
+    except (FuturesTimeout, ValueError, KeyError):
         return None
 
 
@@ -118,11 +128,13 @@ def run_deep_search(
         closest.append((float(metrics.get("total_net_profit") or 0), spec, metrics))
 
     def _tick(spec: dict | None = None, *, subphase: str = "walk_forward") -> None:
-        if on_progress and (evaluated == 0 or evaluated % 8 == 0):
-            on_progress(evaluated, spec=spec, subphase=subphase)
+        if not on_progress:
+            return
+        if evaluated > 0 and evaluated % 4 != 0 and evaluated > 24:
+            return
+        on_progress(evaluated, spec=spec, subphase=subphase)
 
     for spec in specs:
-        _tick(spec, subphase="sample")
         train_m = _metrics_for_spec(spec, train, instrument, tf)
         evaluated += 1
         _tick(spec, subphase="train")

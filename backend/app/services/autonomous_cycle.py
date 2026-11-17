@@ -13,6 +13,7 @@ from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.market_data.ingestion_runner import run_yahoo_ingestion
+from app.services.search_heartbeat import SearchJobHeartbeat
 from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
 
@@ -167,6 +168,8 @@ def run_autonomous_prop_cycle(
             raise RuntimeError("Search job disappeared")
         return current
 
+    heartbeat = SearchJobHeartbeat(job_pk)
+    heartbeat.start()
     try:
         datasets: dict[str, HistoricalDataset] = {}
         warnings: list[str] = []
@@ -226,6 +229,7 @@ def run_autonomous_prop_cycle(
             def _pulse(done: int, *, spec: dict | None = None, subphase: str = "walk_forward", symbol: str = symbol) -> None:
                 current = _job()
                 setup_name = (spec or {}).get("name") if spec else None
+                combo_est = min(budget, max(0, done // 2))
                 merge_search_progress(
                     current,
                     phase="scoring",
@@ -234,6 +238,7 @@ def run_autonomous_prop_cycle(
                     tests_completed=done,
                     tests_target_estimate=budget * 3,
                     combos_per_symbol=budget,
+                    combos_completed=combo_est,
                     current_setup=setup_name,
                     setup_family=entry_family_label(spec),
                     scoring_subphase=subphase,
@@ -244,17 +249,23 @@ def run_autonomous_prop_cycle(
                 fam = entry_family_label(spec)
                 fam_bit = f" [{fam}]" if fam else ""
                 phase_bit = subphase.replace("_", " ")
-                current.message = f"Scoring {symbol}{fam_bit} · {done} backtests · {phase_bit}{bit}"
-                current.progress_pct = min(
-                    94,
-                    int(
-                        100
-                        * (
-                            sym_idx / max(len(symbols), 1)
-                            + (min(done, budget * 3) / max(budget * 3, 1)) / max(len(symbols), 1)
-                        )
-                    ),
-                )
+                msg = f"Scoring {symbol}{fam_bit} · combo ~{combo_est}/{budget} · {done} backtests · {phase_bit}{bit}"
+                current.message = msg
+                symbol_fraction = combo_est / max(budget, 1)
+                overall = (sym_idx + symbol_fraction) / max(len(symbols), 1)
+                current.progress_pct = min(94, int(100 * overall))
+                heartbeat.snapshot = {
+                    "phase": "scoring",
+                    "current_symbol": symbol,
+                    "symbol_index": sym_idx,
+                    "tests_completed": done,
+                    "combos_completed": combo_est,
+                    "combos_per_symbol": budget,
+                    "current_setup": setup_name,
+                    "setup_family": entry_family_label(spec),
+                    "scoring_subphase": subphase,
+                    "message": msg,
+                }
                 session.commit()
 
             _pulse(0, subphase="start")
@@ -290,7 +301,7 @@ def run_autonomous_prop_cycle(
                 symbols_finished=list(finished_symbols),
                 tests_completed=total_eval,
             )
-            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval + evaluated} tests so far"
+            job.message = f"Finished {symbol}: {len(winners)} saved · {total_eval} tests so far"
             job.progress_pct = min(95, int(100 * (list(symbols).index(symbol) + 1) / max(len(symbols), 1)))
             session.add(
                 ResearchActivity(
@@ -339,9 +350,11 @@ def run_autonomous_prop_cycle(
         )
         job.payload = {**job.payload, "summary": summary}
         session.commit()
+        heartbeat.stop()
         return summary
     except Exception as exc:
         session.rollback()
+        heartbeat.stop()
         job = session.get(ResearchJob, job_pk)
         if job:
             job.status = ResearchJobStatus.FAILED
