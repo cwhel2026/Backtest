@@ -280,13 +280,21 @@ def enqueue_prop_search(actor: str) -> tuple[str, str]:
 
 @celery_app.task(name="app.worker.tasks.run_prop_search_job")
 def run_prop_search_job(job_id: str) -> None:
+    from app.services.search_progress import merge_search_progress
+
     with SyncSession() as db:
-        job = db.get(ResearchJob, uuid.UUID(job_id))
-        if not job or job.status != ResearchJobStatus.QUEUED:
+        jid = uuid.UUID(job_id)
+        job = db.execute(
+            select(ResearchJob).where(ResearchJob.id == jid).with_for_update()
+        ).scalar_one_or_none()
+        if not job:
+            return
+        if job.status != ResearchJobStatus.QUEUED:
             return
         job.status = ResearchJobStatus.RUNNING
         job.started_at = datetime.now(UTC)
         job.message = "Search started on the server"
+        merge_search_progress(job, phase="starting")
         actor = (job.payload or {}).get("actor", "autopilot")
         db.commit()
         run_autonomous_prop_cycle(db, actor=actor, job_id=job_id)

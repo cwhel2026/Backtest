@@ -71,15 +71,18 @@ def job_heartbeat(job: ResearchJob) -> datetime | None:
 
 
 def job_is_stale(job: ResearchJob, now: datetime | None = None) -> bool:
-    """Queued with nobody claiming it, or running with no recent heartbeat (dead worker)."""
+    """Queued too long without the worker, or running with no recent heartbeat (dead worker)."""
+    settings = get_settings()
+    queued_min = int(getattr(settings, "search_stale_queued_minutes", 12) or 12)
+    running_min = int(getattr(settings, "search_stale_running_minutes", 25) or 25)
     now = now or datetime.now(UTC)
     created = _aware(job.created_at)
-    if job.status == ResearchJobStatus.QUEUED and now - created > timedelta(minutes=2):
+    if job.status == ResearchJobStatus.QUEUED and now - created > timedelta(minutes=queued_min):
         return True
     if job.status != ResearchJobStatus.RUNNING:
         return False
     beat = job_heartbeat(job) or _aware(job.started_at or created)
-    return now - beat > timedelta(minutes=6)
+    return now - beat > timedelta(minutes=running_min)
 
 
 def find_active_prop_search_job(session: Session) -> ResearchJob | None:
@@ -343,6 +346,7 @@ def run_autonomous_prop_cycle(
         if job:
             job.status = ResearchJobStatus.FAILED
             job.error = str(exc)
+            job.message = (str(exc))[:500]
             job.completed_at = datetime.now(UTC)
             session.add(
                 ResearchActivity(headline="Deep search failed", detail=str(exc), job_id=job.id)

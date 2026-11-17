@@ -24,18 +24,19 @@ async def bootstrap_database(session: AsyncSession) -> None:
 
 
 async def _clear_searches_interrupted_by_restart(session: AsyncSession) -> None:
-    """A deploy kills the old process. Any search still marked running is not actually running."""
+    """A deploy kills the in-flight worker. Queued jobs are left for Celery to claim after boot."""
     rows = (
         await session.execute(
             select(ResearchJob).where(
                 ResearchJob.title == PROP_SEARCH_JOB_TITLE,
-                ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+                ResearchJob.status == ResearchJobStatus.RUNNING,
             )
         )
     ).scalars().all()
     for job in rows:
         job.status = ResearchJobStatus.FAILED
         job.error = "Stopped because the server restarted. Press Run prop search to start a new one."
+        job.message = job.error
         job.completed_at = datetime.now(UTC)
         session.add(
             ResearchActivity(
