@@ -82,6 +82,47 @@ def opening_range_bounds(
     return out
 
 
+@dataclass
+class SignalContext:
+    """Precomputed indicator series for O(n) per-bar signal evaluation."""
+
+    session_keys: list[str]
+    or_map: dict[str, tuple[Decimal, Decimal, int]] | None = None
+    fast_e: list[Decimal | None] | None = None
+    slow_e: list[Decimal | None] | None = None
+    vwap: list[Decimal | None] | None = None
+    rsi: list[Decimal | None] | None = None
+
+
+def build_signal_context(
+    spec: dict,
+    bars: list[Bar],
+    session_keys: list[str] | None = None,
+) -> SignalContext:
+    """Compute indicators once per backtest (avoids O(n²) prefix recomputation)."""
+    if session_keys is None:
+        session_keys = session_keys_rth(bars)
+    entry = spec["entry"]
+    entry_type = entry.get("type")
+    ctx = SignalContext(session_keys=session_keys)
+    if entry_type == "opening_range_breakout":
+        range_minutes = int(entry.get("range_minutes", 15))
+        ctx.or_map = opening_range_bounds(bars, session_keys, range_minutes)
+    elif entry_type == "ema_crossover":
+        closes = [b.close for b in bars]
+        fast = int(entry.get("fast_period", 9))
+        slow = int(entry.get("slow_period", 21))
+        ctx.fast_e = ema_series(closes, fast)
+        ctx.slow_e = ema_series(closes, slow)
+    elif entry_type == "vwap_reversion":
+        ctx.vwap = session_vwap(bars, session_keys)
+    elif entry_type == "rsi_reversion":
+        closes = [b.close for b in bars]
+        period = int(entry.get("period", 14))
+        ctx.rsi = rsi_series(closes, period)
+    return ctx
+
+
 def _pack_signal(
     *,
     direction: str,
@@ -113,8 +154,11 @@ def signal_at_bar(
     i: int,
     session_keys: list[str],
     instrument_tick: Decimal,
+    ctx: SignalContext | None = None,
 ) -> EntrySignal | None:
     """Evaluate signal using data through bar index i (completed bar)."""
+    if ctx is None:
+        ctx = build_signal_context(spec, bars, session_keys)
     entry = spec["entry"]
     exit_spec = spec["exit"]
     entry_type = entry.get("type")
@@ -138,11 +182,10 @@ def signal_at_bar(
         )
 
     if entry_type == "ema_crossover":
-        fast = int(entry.get("fast_period", 9))
-        slow = int(entry.get("slow_period", 21))
-        closes = [b.close for b in bars[: i + 1]]
-        fast_e = ema_series(closes, fast)
-        slow_e = ema_series(closes, slow)
+        fast_e = ctx.fast_e
+        slow_e = ctx.slow_e
+        if fast_e is None or slow_e is None:
+            raise ValueError("SignalContext missing EMA series")
         if fast_e[i] is None or slow_e[i] is None or i < 1:
             return None
         if fast_e[i - 1] is None or slow_e[i - 1] is None:
@@ -156,8 +199,9 @@ def signal_at_bar(
         return None
 
     if entry_type == "opening_range_breakout":
-        range_minutes = int(entry.get("range_minutes", 15))
-        or_map = opening_range_bounds(bars, session_keys, range_minutes)
+        or_map = ctx.or_map
+        if or_map is None:
+            raise ValueError("SignalContext missing opening range map")
         key = session_keys[i]
         if key not in or_map:
             return None
@@ -173,7 +217,9 @@ def signal_at_bar(
 
     if entry_type == "vwap_reversion":
         dev_ticks = Decimal(str(entry.get("deviation_ticks", 12)))
-        vwap = session_vwap(bars[: i + 1], session_keys[: i + 1])
+        vwap = ctx.vwap
+        if vwap is None:
+            raise ValueError("SignalContext missing VWAP series")
         if vwap[i] is None:
             return None
         if bar.close >= vwap[i] + dev_ticks * tick:
@@ -183,11 +229,11 @@ def signal_at_bar(
         return None
 
     if entry_type == "rsi_reversion":
-        period = int(entry.get("period", 14))
         oversold = Decimal(str(entry.get("oversold", 30)))
         overbought = Decimal(str(entry.get("overbought", 70)))
-        closes = [b.close for b in bars[: i + 1]]
-        series = rsi_series(closes, period)
+        series = ctx.rsi
+        if series is None:
+            raise ValueError("SignalContext missing RSI series")
         if series[i] is None or i < 1 or series[i - 1] is None:
             return None
         rsi_now = series[i]

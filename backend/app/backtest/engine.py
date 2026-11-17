@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.backtest.bars import Bar, resample_if_needed
-from app.backtest.dsl import EntrySignal, session_keys_rth, signal_at_bar, validate_spec
+from app.backtest.dsl import EntrySignal, build_signal_context, session_keys_rth, signal_at_bar, validate_spec
 from app.backtest.metrics import SimulatedTrade, compute_metrics
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
@@ -62,6 +62,7 @@ def run_backtest(
         warnings.append("Fewer than 30 bars after resample — statistics may be unreliable.")
 
     session_keys = session_keys_rth(bars)
+    signal_ctx = build_signal_context(spec, bars, session_keys)
     tick = instrument.tick_size
     commission_side = assumptions.commission_per_side or instrument.default_commission_per_side
     slip = assumptions.slippage_ticks_per_side
@@ -75,7 +76,7 @@ def run_backtest(
 
     i = 0
     while i < len(bars) - 2:
-        sig = signal_at_bar(spec, bars, i, session_keys, tick)
+        sig = signal_at_bar(spec, bars, i, session_keys, tick, signal_ctx)
         if not sig:
             i += 1
             continue

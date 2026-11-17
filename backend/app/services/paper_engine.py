@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.backtest.bars import Bar
-from app.backtest.dsl import session_keys_rth, signal_at_bar
+from app.backtest.dsl import build_signal_context, session_keys_rth, signal_at_bar
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
 
@@ -106,6 +106,7 @@ def advance_slot(
         return cursor, []
 
     keys = session_keys_rth(bars)
+    signal_ctx = build_signal_context(spec, bars, keys)
     tick = instrument.tick_size
     fills: list[ClosedFill] = []
     pos = cursor.position
@@ -143,7 +144,7 @@ def advance_slot(
                 )
                 pos = None
         elif allow_entries and i >= 1:
-            sig = signal_at_bar(spec, bars, i - 1, keys, tick)
+            sig = signal_at_bar(spec, bars, i - 1, keys, tick, signal_ctx)
             if sig:
                 raw = bar.open
                 dollar_risk = Decimal(str(spec.get("risk", {}).get("dollar_risk_per_trade", 75)))
