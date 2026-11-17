@@ -20,7 +20,10 @@ from app.services.backtest_runner import execute_backtest_run
 from app.services.forward_sim import run_forward_simulation
 from app.services.paper_book import enroll_strategy
 from app.util.serde import provisional_reproducibility_id
+from app.services.ai_search_mutator import propose_search_specs
 from app.services.prop_screen import is_profitable_backtest, rank_score
+from app.services.search_experiment_memory import SearchExperimentMemory
+from app.services.search_walkforward import aggregate_fold_metrics, folds_pass_oos, walk_forward_folds
 from app.services.strategy_factory import create_strategy_sync
 from app.services.strategy_reverse import is_anti_edge, reverse_passes_oos, reverse_spec
 from app.services.strategy_search_space import refine_spec, sample_search_specs
@@ -65,6 +68,53 @@ def _passes_oos(test_metrics: dict | None) -> bool:
     return net > 0 and pf is not None and float(pf) >= 1.05 and trades >= 4
 
 
+def _passes_oos_gate(test_metrics: dict | None, min_win_rate: float) -> bool:
+    if not _passes_oos(test_metrics):
+        return False
+    wr = test_metrics.get("win_rate")
+    if wr is not None and float(wr) < min_win_rate:
+        return False
+    return True
+
+
+def _run_oos_battery(
+    spec: dict,
+    bars: list,
+    instrument: Instrument,
+    dataset_tf: str,
+    *,
+    n_folds: int,
+    min_win_rate: float,
+) -> tuple[bool, dict | None, int]:
+    """Multi-fold OOS; returns (passed, aggregate metrics, backtests_run)."""
+    folds = walk_forward_folds(bars, n_folds)
+    runs = 0
+    if len(folds) == 1:
+        test_slice = folds[0][1]
+        test_m = _metrics_for_spec(spec, test_slice, instrument, dataset_tf)
+        runs += 1
+        if not test_m:
+            return False, None, runs
+        ok = _passes_oos_gate(test_m, min_win_rate)
+        return ok, test_m, runs
+
+    fold_metrics: list[dict] = []
+    for _train, test_slice in folds:
+        m = _metrics_for_spec(spec, test_slice, instrument, dataset_tf)
+        runs += 1
+        if m:
+            fold_metrics.append(m)
+    agg = aggregate_fold_metrics(fold_metrics)
+    required = 2 if len(fold_metrics) >= 3 else 1
+    ok = folds_pass_oos(
+        fold_metrics,
+        min_folds=required,
+        min_win_rate=min_win_rate,
+        per_fold_check=_passes_oos,
+    )
+    return ok, agg, runs
+
+
 @dataclass
 class SearchHit:
     spec: dict
@@ -106,13 +156,19 @@ def run_deep_search(
     refine_top: int = 8,
     seed: int | None = None,
     on_progress=None,
-) -> tuple[list[SearchHit], int]:
+) -> tuple[list[SearchHit], int, dict]:
     settings = get_settings()
     wr_max = float(getattr(settings, "reverse_winrate_max", 0.20) or 0.20)
     reverse_on = bool(getattr(settings, "reverse_search_enabled", True))
+    n_folds = int(getattr(settings, "search_walkforward_folds", 3) or 3)
+    oos_min_wr = float(getattr(settings, "search_oos_min_win_rate", 0.38) or 0.38)
+    ai_rounds = int(getattr(settings, "search_ai_rounds", 0) or 0)
+    ai_batch = int(getattr(settings, "search_ai_specs_per_round", 12) or 12)
+    if settings.ai_configured and ai_rounds < 1:
+        ai_rounds = 1
 
     bars = load_bars(session, dataset.id)
-    train, test = _split_train_test(bars)
+    train, _test = _split_train_test(bars)
     tf = dataset.timeframe
 
     specs = sample_search_specs(symbol, budget, seed=seed)
@@ -121,6 +177,8 @@ def run_deep_search(
     closest: list[tuple[float, dict, dict]] = []
     refine_queue: list[dict] = []
     reverse_queue: list[tuple[dict, dict]] = []
+    memory = SearchExperimentMemory(symbol=symbol)
+    tried_names: set[str] = {s["name"] for s in specs}
 
     def _remember(spec: dict, metrics: dict | None) -> None:
         if not metrics or int(metrics.get("trade_count") or 0) < 4:
@@ -134,30 +192,67 @@ def run_deep_search(
             return
         on_progress(evaluated, spec=spec, subphase=subphase)
 
-    for spec in specs:
+    def _score_forward(
+        spec: dict,
+        *,
+        origin: str,
+        sub_train: str,
+        sub_oos: str,
+        sub_full: str,
+        original_metrics: dict | None = None,
+    ) -> None:
+        nonlocal evaluated
         train_m = _metrics_for_spec(spec, train, instrument, tf)
         evaluated += 1
-        _tick(spec, subphase="train")
+        _tick(spec, subphase=sub_train)
         if not train_m:
-            continue
+            return
         _remember(spec, train_m)
         pf = float(train_m.get("profit_factor") or 0)
         net = float(train_m.get("total_net_profit") or 0)
-        if pf >= 0.92 or net > 0:
+        if origin == "deep" and (pf >= 0.92 or net > 0):
             refine_queue.append(spec)
-        if reverse_on and is_anti_edge(train_m, winrate_max=wr_max):
+        if origin == "deep" and reverse_on and is_anti_edge(train_m, winrate_max=wr_max):
             reverse_queue.append((spec, train_m))
         if net <= 0:
-            continue
-        test_m = _metrics_for_spec(spec, test, instrument, tf)
-        evaluated += 1
-        _tick(spec, subphase="oos")
-        if not _passes_oos(test_m):
-            continue
+            memory.record(spec, train_m, outcome="train_reject", note="negative train net")
+            return
+
+        passed_oos, test_m, oos_runs = _run_oos_battery(
+            spec, bars, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
+        )
+        evaluated += oos_runs
+        _tick(spec, subphase=sub_oos)
+        if not passed_oos or not test_m:
+            memory.record(
+                spec,
+                test_m or train_m,
+                outcome="oos_fail",
+                note=f"failed {n_folds}-fold OOS (min WR {oos_min_wr:.0%})",
+            )
+            return
+
         full_m = _metrics_for_spec(spec, bars, instrument, tf)
         evaluated += 1
-        _tick(spec, subphase="prop_screen")
-        _consider(spec, train_m, test_m, full_m, origin="deep", original_metrics=None, leaderboard=leaderboard)
+        _tick(spec, subphase=sub_full)
+        reverse = origin == "reverse"
+        if not full_m or not is_profitable_backtest(full_m, reverse=reverse):
+            memory.record(spec, full_m or test_m, outcome="prop_reject", note="prop screen")
+            return
+
+        memory.record(spec, full_m, outcome="winner", note=origin)
+        _consider(
+            spec,
+            train_m,
+            test_m,
+            full_m,
+            origin=origin,
+            original_metrics=original_metrics,
+            leaderboard=leaderboard,
+        )
+
+    for spec in specs:
+        _score_forward(spec, origin="deep", sub_train="train", sub_oos="oos", sub_full="prop_screen")
 
     for spec, orig_train in reverse_queue[: max(24, refine_top * 3)]:
         rev = reverse_spec(spec, original_metrics=orig_train)
@@ -168,48 +263,63 @@ def run_deep_search(
         _tick(rev, subphase="reverse_train")
         if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
             continue
-        test_m = _metrics_for_spec(rev, test, instrument, tf)
-        evaluated += 1
+        passed_oos, test_m, oos_runs = _run_oos_battery(
+            rev, bars, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
+        )
+        evaluated += oos_runs
         _tick(rev, subphase="reverse_oos")
         orig_wr = orig_train.get("win_rate")
-        if not reverse_passes_oos(test_m, float(orig_wr) if orig_wr is not None else None):
+        if not passed_oos or not test_m or not reverse_passes_oos(
+            test_m, float(orig_wr) if orig_wr is not None else None
+        ):
             continue
         full_m = _metrics_for_spec(rev, bars, instrument, tf)
         evaluated += 1
         _tick(rev, subphase="reverse_full")
-        _consider(
-            rev,
-            train_m,
-            test_m,
-            full_m,
-            origin="reverse",
-            original_metrics=orig_train,
-            leaderboard=leaderboard,
-        )
-
-    for base in refine_queue[:refine_top]:
-        for refined in refine_spec(base):
-            train_m = _metrics_for_spec(refined, train, instrument, tf)
-            evaluated += 1
-            _tick(refined, subphase="refine_train")
-            if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
-                continue
-            test_m = _metrics_for_spec(refined, test, instrument, tf)
-            evaluated += 1
-            _tick(refined, subphase="refine_oos")
-            if not _passes_oos(test_m):
-                continue
-            full_m = _metrics_for_spec(refined, bars, instrument, tf)
-            evaluated += 1
-            _tick(refined, subphase="refine_full")
+        if full_m and is_profitable_backtest(full_m, reverse=True):
+            memory.record(rev, full_m, outcome="winner", note="reverse")
             _consider(
-                refined,
+                rev,
                 train_m,
                 test_m,
                 full_m,
-                origin="deep",
-                original_metrics=None,
+                origin="reverse",
+                original_metrics=orig_train,
                 leaderboard=leaderboard,
+            )
+
+    for base in refine_queue[: refine_top]:
+        for refined in refine_spec(base):
+            if refined["name"] in tried_names:
+                continue
+            tried_names.add(refined["name"])
+            _score_forward(
+                refined,
+                origin="deep",
+                sub_train="refine_train",
+                sub_oos="refine_oos",
+                sub_full="refine_full",
+            )
+
+    for ai_idx in range(ai_rounds):
+        _tick(subphase="ai_propose")
+        summary = memory.summary_for_ai()
+        rationale, ai_specs = propose_search_specs(
+            symbol,
+            summary,
+            max_specs=ai_batch,
+            seed=(seed or 0) + 9000 + ai_idx,
+        )
+        for spec in ai_specs:
+            if spec["name"] in tried_names:
+                spec["name"] = f"{spec['name']} r{ai_idx}"
+            tried_names.add(spec["name"])
+            _score_forward(
+                spec,
+                origin="ai",
+                sub_train="ai_train",
+                sub_oos="ai_oos",
+                sub_full="ai_prop",
             )
 
     leaderboard.sort(key=lambda x: x[0], reverse=True)
@@ -253,7 +363,10 @@ def run_deep_search(
         if near >= 2:
             break
 
-    return hits, evaluated
+    stats = memory.to_progress_blob()
+    stats["ai_rounds"] = ai_rounds
+    stats["grid_specs"] = len(specs)
+    return hits, evaluated, stats
 
 
 def persist_search_hits(
@@ -296,6 +409,11 @@ def _persist_one_hit(
             f"Reverse of anti-edge on {symbol}: original train WR {float(orig_wr):.0%} "
             f"(implied fade {1 - float(orig_wr):.0%}). OOS WR {float(oos_wr or 0):.0%}, "
             f"OOS net {hit.test_metrics.get('total_net_profit')}."
+        )
+    elif hit.origin == "ai":
+        rationale = (
+            f"AI-directed search winner on {symbol}. Train net {hit.train_metrics.get('total_net_profit')}, "
+            f"OOS net {hit.test_metrics.get('total_net_profit')} (multi-fold when configured)."
         )
     else:
         rationale = (

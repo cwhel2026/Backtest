@@ -155,6 +155,9 @@ def all_search_specs(symbol: str, timeframe: str = "5m") -> list[dict[str, Any]]
 
 def sample_search_specs(symbol: str, budget: int, *, seed: int | None = None) -> list[dict[str, Any]]:
     """Draw evenly from each family so ORB stop-grid doesn't crowd out RSI/Donchian."""
+    universe = all_search_specs(symbol)
+    if budget >= len(universe):
+        return universe
     pools = family_pools(symbol)
     rng = random.Random(seed)
     families = [name for name, pool in pools.items() if pool]

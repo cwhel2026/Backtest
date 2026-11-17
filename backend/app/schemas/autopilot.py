@@ -30,7 +30,7 @@ class SearchPlan(BaseModel):
     combos_per_symbol: int = 0
     history_days: int = 0
     families: list[str] = Field(default_factory=list)
-    walk_forward: str = "65% train · 35% OOS · prop screen on full sample"
+    walk_forward: str = "train gate · multi-fold OOS · prop screen · AI rounds when enabled"
     reverse_fades: bool = True
 
 
@@ -54,6 +54,9 @@ class SearchLiveProgress(BaseModel):
     winners_saved: int = 0
     symbols_finished: list[str] = Field(default_factory=list)
     heartbeat_at: str | None = None
+    experiments_recorded: int = 0
+    ai_round: int = 0
+    ai_specs_proposed: int = 0
 
 
 class JobLogLine(BaseModel):
