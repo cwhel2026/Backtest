@@ -62,7 +62,7 @@ class DatabentoProvider(MarketDataProvider):
             slug=self.slug,
             display_name=self.display_name,
             state=ProviderConnectionState.CONFIGURED,
-            message="API key present. Run a connection test via Settings after licensing is confirmed.",
+            message="API key present. Queue ingestion on Market Data to download GLBX.MDP3 OHLCV.",
             capabilities={"ohlcv": True, "tick": True, "1m": True, "5m": True, "15m": True, "1h": True},
         )
 
@@ -79,7 +79,7 @@ class DatabentoProvider(MarketDataProvider):
             "start": start.isoformat(),
             "end": end.isoformat(),
             "status": "queued",
-            "note": "Ingestion requires provider SDK integration (Phase 1 framework only).",
+            "note": "Worker downloads licensed 1m bars and stores your requested timeframe.",
         }
 
 

@@ -11,10 +11,26 @@ from app.core.config import get_settings
 from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
 from app.services.backtest_runner import execute_backtest_run
+from app.services.market_data.ingestion_runner import run_databento_ingestion
 
 settings = get_settings()
 sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
 SyncSession = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False)
+
+
+def _fail_ingestion(db: Session, job: ResearchJob, error: str, headline: str) -> None:
+    job.status = ResearchJobStatus.FAILED
+    job.error = error
+    job.message = error
+    job.completed_at = datetime.now(UTC)
+    db.add(
+        ResearchActivity(
+            headline=headline,
+            detail=error,
+            job_id=job.id,
+        )
+    )
+    db.commit()
 
 
 def enqueue_data_ingestion(meta: dict, actor: str) -> str:
@@ -55,32 +71,44 @@ def run_data_ingestion(job_id: str) -> None:
         provider = job.payload.get("provider")
         settings_ref = get_settings()
         if provider == "databento" and not settings_ref.databento_api_key:
-            job.status = ResearchJobStatus.FAILED
-            job.error = "Databento API key not configured"
-            job.message = job.error
+            _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
+            return
+
+        if provider != "databento":
+            _fail_ingestion(
+                db,
+                job,
+                f"Provider {provider} is not supported for automated ingestion yet.",
+                "Ingestion failed: provider not supported",
+            )
+            return
+
+        job.message = "Downloading OHLCV from Databento"
+        job.progress_pct = 10
+        db.commit()
+
+        try:
+            dataset = run_databento_ingestion(db, job.payload)
+            db.commit()
+            job.status = ResearchJobStatus.COMPLETED
+            job.progress_pct = 100
+            job.message = f"Imported {dataset.row_count} bars ({dataset.timeframe})"
             job.completed_at = datetime.now(UTC)
+            job.payload = {**job.payload, "dataset_id": str(dataset.id), "row_count": dataset.row_count}
             db.add(
                 ResearchActivity(
-                    headline="Ingestion failed: Databento not configured",
-                    detail=job.error,
+                    headline=f"Dataset ready: {job.payload.get('instrument_symbol')} {dataset.timeframe}",
+                    detail=f"{dataset.row_count} bars · id {dataset.id}",
                     job_id=job.id,
+                    meta={"dataset_id": str(dataset.id)},
                 )
             )
             db.commit()
-            return
-
-        job.status = ResearchJobStatus.FAILED
-        job.error = "Provider SDK integration pending (Phase 1 framework). No synthetic data imported."
-        job.message = job.error
-        job.completed_at = datetime.now(UTC)
-        db.add(
-            ResearchActivity(
-                headline="Ingestion blocked until provider integration is completed",
-                detail=job.error,
-                job_id=job.id,
-            )
-        )
-        db.commit()
+        except Exception as exc:
+            db.rollback()
+            job = db.get(ResearchJob, uuid.UUID(job_id))
+            if job:
+                _fail_ingestion(db, job, str(exc), "Ingestion failed")
 
 
 def enqueue_backtest(run_id: str, actor: str) -> str:
