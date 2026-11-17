@@ -1,3 +1,4 @@
+from app.models.backtest import BacktestRun, BacktestTrade, OhlcvBar
 from app.models.instrument import FuturesContract, Instrument
 from app.models.market_data import DataProvider, DataQualityReport, HistoricalDataset
 from app.models.research import AuditLog, ResearchActivity, ResearchJob
@@ -5,6 +6,9 @@ from app.models.strategy import StrategyDefinition, StrategyHypothesis, Strategy
 from app.models.user import User
 
 __all__ = [
+    "OhlcvBar",
+    "BacktestRun",
+    "BacktestTrade",
     "User",
     "Instrument",
     "FuturesContract",

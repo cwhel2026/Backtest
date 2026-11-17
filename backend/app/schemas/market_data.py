@@ -19,5 +19,15 @@ class HistoricalDatasetOut(BaseModel):
     coverage_start: str | None
     coverage_end: str | None
     version_tag: str
+    meta: dict = {}
 
     model_config = {"from_attributes": True}
+
+
+class OhlcvBarOut(BaseModel):
+    ts: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int

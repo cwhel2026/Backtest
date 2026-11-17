@@ -7,6 +7,7 @@ import { setStoredToken } from "@/lib/api";
 const NAV = [
   { href: "/", label: "Overview" },
   { href: "/strategies", label: "Strategy Explorer" },
+  { href: "/backtests", label: "Backtest Laboratory" },
   { href: "/market-data", label: "Market Data" },
   { href: "/research", label: "Live Research" },
   { href: "/paper", label: "Paper Trading" },

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
@@ -39,13 +40,17 @@ export default function StrategiesPage() {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-zinc-500">
-                  No strategies yet. Phase 2 will add backtests and the strategy library.
+                  No strategies yet — restart API to seed the built-in library.
                 </td>
               </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.id} className="border-t border-zinc-800/80">
-                  <td className="px-4 py-3 text-zinc-100">{r.name}</td>
+                  <td className="px-4 py-3 text-zinc-100">
+                    <Link href={`/strategies/${r.id}`} className="hover:text-emerald-400">
+                      {r.name}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3">{r.symbol}</td>
                   <td className="px-4 py-3">{r.category}</td>
                   <td className="px-4 py-3">{r.timeframe}</td>

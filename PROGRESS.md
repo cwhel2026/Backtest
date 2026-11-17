@@ -15,10 +15,17 @@ Last updated: 2025-11-17 (Europe/London)
 - [x] Unit tests for futures tick/risk math
 - [x] `.env.example` and setup documentation
 
-## In Progress / Next
+## Completed (Phase 2 — Historical Research)
 
-- [ ] Phase 2: Event-driven backtest engine, OHLCV storage (Timescale optional), Strategy DSL v1
-- [ ] Phase 2: Backtest Laboratory UI, trade ledger, reproducibility IDs
+- [x] `ohlcv_bars` storage + user CSV import (`POST /market-data/import-csv`)
+- [x] Event-driven backtest engine v2.0.0 (no look-ahead; next-bar entries; stop-before-target)
+- [x] Strategy DSL v1: ORB, EMA cross, VWAP reversion
+- [x] Built-in strategy library (MES/MNQ) seeded on first boot
+- [x] `backtest_runs` + `backtest_trades` ledger, reproducibility ID, Celery worker execution
+- [x] Backtest Laboratory UI, strategy detail, equity curve chart, trade table
+- [x] Automated tests (synthetic bars only in tests)
+
+## In Progress / Next
 - [ ] Databento SDK ingestion (requires your API key + license)
 - [ ] Phase 3: AI hypothesis generation with structured strategy schema
 - [ ] WebSocket/SSE for dashboard live updates

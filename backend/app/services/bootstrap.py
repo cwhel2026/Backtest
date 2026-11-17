@@ -7,11 +7,13 @@ from app.models.enums import DataProviderStatus
 from app.models.market_data import DataProvider
 from app.models.user import User
 from app.services.instruments import seed_instruments
+from app.services.strategy_library import seed_strategy_library
 from app.services.market_data.providers import PROVIDER_REGISTRY
 
 
 async def bootstrap_database(session: AsyncSession) -> None:
     await seed_instruments(session)
+    await seed_strategy_library(session)
     await _seed_providers(session)
     await _seed_admin_user(session)
 

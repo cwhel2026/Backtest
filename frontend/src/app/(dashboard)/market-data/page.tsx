@@ -20,6 +20,8 @@ export default function MarketDataPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [symbol, setSymbol] = useState("MES");
   const [message, setMessage] = useState<string | null>(null);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvLabel, setCsvLabel] = useState("user_csv");
 
   useEffect(() => {
     Promise.all([
@@ -32,6 +34,30 @@ export default function MarketDataPage() {
       setDatasets(d);
     });
   }, []);
+
+  async function uploadCsv() {
+    if (!csvFile) return;
+    setMessage(null);
+    const form = new FormData();
+    form.append("instrument_symbol", symbol);
+    form.append("timeframe", "5m");
+    form.append("label", csvLabel);
+    form.append("file", csvFile);
+    const token = localStorage.getItem("propedge_token");
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const res = await fetch(`${base}/api/v1/market-data/import-csv`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      setMessage(await res.text());
+      return;
+    }
+    setMessage("CSV imported — dataset ready for backtests.");
+    const d = await apiFetch<Dataset[]>("/api/v1/market-data/datasets");
+    setDatasets(d);
+  }
 
   async function queueIngestion() {
     setMessage(null);
@@ -60,6 +86,36 @@ export default function MarketDataPage() {
         <h2 className="text-2xl font-semibold text-white">Market data</h2>
         <p className="mt-1 text-sm text-zinc-500">Provider status and dataset registry.</p>
       </div>
+
+      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6">
+        <h3 className="text-sm font-medium text-zinc-300">Import OHLCV CSV</h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          Columns: timestamp, open, high, low, close, volume (UTC ISO timestamps). Your file is stored as a dataset —
+          not mixed with provider feeds.
+        </p>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <input
+            type="file"
+            accept=".csv"
+            className="text-sm text-zinc-400"
+            onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+          />
+          <input
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            value={csvLabel}
+            onChange={(e) => setCsvLabel(e.target.value)}
+            placeholder="label"
+          />
+          <button
+            type="button"
+            onClick={uploadCsv}
+            disabled={!csvFile}
+            className="rounded-md bg-zinc-700 px-4 py-2 text-sm text-white hover:bg-zinc-600 disabled:opacity-40"
+          >
+            Upload CSV
+          </button>
+        </div>
+      </section>
 
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>

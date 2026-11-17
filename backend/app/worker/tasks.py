@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.research import ResearchActivity, ResearchJob
+from app.services.backtest_runner import execute_backtest_run
 
 settings = get_settings()
 sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
@@ -80,6 +81,44 @@ def run_data_ingestion(job_id: str) -> None:
             )
         )
         db.commit()
+
+
+def enqueue_backtest(run_id: str, actor: str) -> str:
+    with SyncSession() as db:
+        db.add(
+            ResearchActivity(
+                headline="Backtest queued",
+                detail=f"Run {run_id} requested by {actor}",
+                meta={"backtest_run_id": run_id},
+            )
+        )
+        db.commit()
+    run_backtest_task.delay(run_id)
+    return run_id
+
+
+@celery_app.task(name="app.worker.tasks.run_backtest_task")
+def run_backtest_task(run_id: str) -> None:
+    with SyncSession() as db:
+        try:
+            execute_backtest_run(db, uuid.UUID(run_id))
+            db.add(
+                ResearchActivity(
+                    headline=f"Backtest finished: {run_id}",
+                    detail="See Backtest Laboratory for metrics and trade ledger.",
+                    meta={"backtest_run_id": run_id},
+                )
+            )
+            db.commit()
+        except Exception as exc:
+            db.add(
+                ResearchActivity(
+                    headline=f"Backtest failed: {run_id}",
+                    detail=str(exc),
+                    meta={"backtest_run_id": run_id},
+                )
+            )
+            db.commit()
 
 
 @celery_app.task(name="app.worker.tasks.health_pulse")

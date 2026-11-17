@@ -1,17 +1,27 @@
+import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
 
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.db.session import get_db
+from app.models.backtest import OhlcvBar
+from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.models.user import User
-from app.schemas.market_data import HistoricalDatasetOut, ProviderHealthOut
+from app.schemas.market_data import HistoricalDatasetOut, OhlcvBarOut, ProviderHealthOut
+from app.services.market_data.csv_import import import_csv_bars
 from app.services.market_data.providers import PROVIDER_REGISTRY, all_provider_health
 from app.worker.tasks import enqueue_data_ingestion
+
+settings = get_settings()
+_sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
+SyncSession = sessionmaker(bind=_sync_engine, autoflush=False, autocommit=False)
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
 
@@ -57,8 +67,82 @@ async def list_datasets(
             coverage_start=d.coverage_start.isoformat() if d.coverage_start else None,
             coverage_end=d.coverage_end.isoformat() if d.coverage_end else None,
             version_tag=d.version_tag,
+            meta=d.meta,
         )
         for d in rows
+    ]
+
+
+@router.post("/import-csv", response_model=HistoricalDatasetOut)
+async def import_csv_dataset(
+    instrument_symbol: str = Form(...),
+    timeframe: str = Form("5m"),
+    label: str = Form("user_import"),
+    provider_slug: str = Form("databento"),
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> HistoricalDatasetOut:
+    content = (await file.read()).decode("utf-8")
+    inst = (
+        await db.execute(select(Instrument).where(Instrument.symbol == instrument_symbol))
+    ).scalar_one_or_none()
+    if not inst:
+        raise HTTPException(404, "Instrument not found")
+
+    def _import() -> HistoricalDataset:
+        with SyncSession() as session:
+            ds = import_csv_bars(
+                session,
+                provider_slug=provider_slug,
+                instrument_id=inst.id,
+                timeframe=timeframe,
+                label=label,
+                csv_text=content,
+            )
+            session.commit()
+            session.refresh(ds)
+            return ds
+
+    dataset = _import()
+    return HistoricalDatasetOut(
+        id=str(dataset.id),
+        instrument_id=str(dataset.instrument_id),
+        provider_id=str(dataset.provider_id),
+        timeframe=dataset.timeframe,
+        row_count=dataset.row_count,
+        validation_status=dataset.validation_status.value,
+        coverage_start=dataset.coverage_start.isoformat() if dataset.coverage_start else None,
+        coverage_end=dataset.coverage_end.isoformat() if dataset.coverage_end else None,
+        version_tag=dataset.version_tag,
+        meta=dataset.meta,
+    )
+
+
+@router.get("/datasets/{dataset_id}/bars", response_model=list[OhlcvBarOut])
+async def dataset_bars(
+    dataset_id: str,
+    limit: int = 500,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[OhlcvBarOut]:
+    result = await db.execute(
+        select(OhlcvBar)
+        .where(OhlcvBar.dataset_id == uuid.UUID(dataset_id))
+        .order_by(OhlcvBar.ts)
+        .limit(min(limit, 2000))
+    )
+    rows = result.scalars().all()
+    return [
+        OhlcvBarOut(
+            ts=r.ts.isoformat(),
+            open=float(r.open),
+            high=float(r.high),
+            low=float(r.low),
+            close=float(r.close),
+            volume=int(r.volume),
+        )
+        for r in rows
     ]
 
 
