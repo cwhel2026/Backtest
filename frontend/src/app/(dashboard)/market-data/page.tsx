@@ -19,6 +19,7 @@ export default function MarketDataPage() {
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [symbol, setSymbol] = useState("MES");
+  const [ingestTf, setIngestTf] = useState("5m");
   const [message, setMessage] = useState<string | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvLabel, setCsvLabel] = useState("user_csv");
@@ -68,7 +69,7 @@ export default function MarketDataPage() {
         body: JSON.stringify({
           provider_slug: "databento",
           instrument_symbol: symbol,
-          timeframe: "1m",
+          timeframe: ingestTf,
           start: start.toISOString(),
           end: end.toISOString(),
         }),
@@ -134,6 +135,19 @@ export default function MarketDataPage() {
                   {i.symbol}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
+            Store as
+            <select
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+              value={ingestTf}
+              onChange={(e) => setIngestTf(e.target.value)}
+            >
+              <option value="1m">1 minute</option>
+              <option value="5m">5 minutes</option>
+              <option value="15m">15 minutes</option>
+              <option value="1h">1 hour</option>
             </select>
           </label>
           <button

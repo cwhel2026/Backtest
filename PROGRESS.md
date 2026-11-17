@@ -25,9 +25,15 @@ Last updated: 2025-11-17 (Europe/London)
 - [x] Backtest Laboratory UI, strategy detail, equity curve chart, trade table
 - [x] Automated tests (synthetic bars only in tests)
 
+## Completed (Phase 1.5 — Licensed market data)
+
+- [x] Databento historical OHLCV download (`GLBX.MDP3`, continuous `*.c.0` symbols)
+- [x] Celery worker persists datasets (1m download, aggregate to 1m/5m/15m/1h)
+- [x] Market Data UI timeframe selector for ingestion jobs
+
 ## In Progress / Next
-- [ ] Databento SDK ingestion (requires your API key + license)
 - [ ] Phase 3: AI hypothesis generation with structured strategy schema
+- [ ] Custom strategy create/edit API + UI (beyond seeded library)
 - [ ] WebSocket/SSE for dashboard live updates
 
 ## Known Issues
