@@ -19,6 +19,7 @@ from app.schemas.autopilot import (
 )
 from app.services.autonomous_cycle import PROP_SEARCH_JOB_TITLE, job_is_stale, resolve_search_symbols
 from app.services.leaderboard import leaderboard_entries_async
+from app.util.serde import enum_value
 from app.worker.tasks import create_prop_search_job, run_prop_search_job
 
 router = APIRouter(prefix="/autopilot", tags=["autopilot"])
@@ -39,6 +40,7 @@ async def autopilot_status(
             )
         )
     ).scalars().all()
+    stale_changed = False
     for stale in active_rows:
         if job_is_stale(stale):
             stale.status = ResearchJobStatus.FAILED
@@ -51,7 +53,8 @@ async def autopilot_status(
                     job_id=stale.id,
                 )
             )
-    if active_rows:
+            stale_changed = True
+    if stale_changed:
         await db.commit()
 
     profitable = await leaderboard_entries_async(db, limit=12, profitable_only=True)
@@ -74,10 +77,9 @@ async def autopilot_status(
     ).scalar_one_or_none()
     background_search = None
     if latest_job:
-        raw_status = latest_job.status
         background_search = BackgroundSearchStatus(
             job_id=str(latest_job.id),
-            status=raw_status.value if hasattr(raw_status, "value") else str(raw_status),
+            status=enum_value(latest_job.status),
             message=latest_job.message or "",
             progress_pct=latest_job.progress_pct or 0,
             started_at=latest_job.started_at.isoformat() if latest_job.started_at else None,
@@ -153,7 +155,7 @@ async def run_autopilot_now(
     if active_job:
         return AutopilotRunResponse(
             job_id=str(active_job.id),
-            status=active_job.status.value,
+            status=enum_value(active_job.status),
             mode="already_active",
         )
 

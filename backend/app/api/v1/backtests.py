@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models.backtest import BacktestRun, BacktestTrade
 from app.models.user import User
 from app.schemas.backtest import BacktestCreateRequest, BacktestRunSummary, BacktestTradeOut
+from app.util.serde import enum_value
 from app.worker.tasks import enqueue_backtest
 
 router = APIRouter(prefix="/backtests", tags=["backtests"])
@@ -47,8 +48,14 @@ async def create_backtest(
     )
     db.add(run)
     await db.flush()
-    await db.commit()
-    enqueue_backtest(str(run.id), actor=user.email)
+    try:
+        enqueue_backtest(str(run.id), actor=user.email)
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Backtest was saved but the worker queue is unavailable. Try again in a few seconds.",
+        ) from exc
     return _serialize_run(run)
 
 
@@ -114,7 +121,7 @@ def _serialize_run(run: BacktestRun) -> BacktestRunSummary:
         strategy_id=str(run.strategy_id),
         dataset_id=str(run.dataset_id),
         status=run.status,
-        performance_category=run.performance_category.value,
+        performance_category=enum_value(run.performance_category),
         reproducibility_id=run.reproducibility_id,
         engine_version=run.engine_version,
         metrics=run.metrics,

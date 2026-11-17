@@ -253,75 +253,91 @@ def persist_search_hits(
 ) -> list[str]:
     winners: list[str] = []
     for hit in hits:
-        orig_wr = (hit.original_metrics or {}).get("win_rate") if hit.origin == "reverse" else None
-        oos_wr = hit.test_metrics.get("win_rate")
-        if hit.origin == "near_miss":
-            rationale = (
-                f"Closest {symbol} test this search (did not pass the prop screen). "
-                f"Train net {hit.train_metrics.get('total_net_profit')}."
-            )
-        elif hit.origin == "reverse" and orig_wr is not None:
-            rationale = (
-                f"Reverse of anti-edge on {symbol}: original train WR {float(orig_wr):.0%} "
-                f"(implied fade {1 - float(orig_wr):.0%}). OOS WR {float(oos_wr or 0):.0%}, "
-                f"OOS net {hit.test_metrics.get('total_net_profit')}."
-            )
-        else:
-            rationale = (
-                f"Deep search winner on {symbol}. Train net {hit.train_metrics.get('total_net_profit')}, "
-                f"OOS net {hit.test_metrics.get('total_net_profit')}."
-            )
-        strategy = create_strategy_sync(
-            session,
-            specification=hit.spec,
-            economic_rationale=rationale,
-            created_by=actor,
-        )
-        session.flush()
-        run = BacktestRun(
-            strategy_id=strategy.id,
-            strategy_version_id=strategy.current_version_id,
-            dataset_id=dataset.id,
-            status="queued",
-            engine_version="pending",
-            reproducibility_id="pending",
-            assumptions={"slippage_ticks_per_side": 1},
-            parameters={
-                "search": hit.origin,
-                "origin": hit.origin,
-                "oos_metrics": hit.test_metrics,
-                "train_metrics": hit.train_metrics,
-                "original_metrics": hit.original_metrics,
-            },
-        )
-        session.add(run)
-        session.flush()
-        execute_backtest_run(session, run.id)
-        if run.status == "completed" and hit.origin != "near_miss":
-            enroll_strategy(session, strategy, symbol)
-        session.commit()
-        winners.append(strategy.name)
-
-        if forward_sim and run.status == "completed":
-            sim = run_forward_simulation(session, strategy, run, tail_bars=120)
-            prefix = "Reverse candidate" if hit.origin == "reverse" else "Prop candidate"
-            wr_bit = ""
-            if hit.origin == "reverse" and orig_wr is not None:
-                wr_bit = f" · fade {float(orig_wr):.0%}→{float(oos_wr or 0):.0%} WR"
-            session.add(
-                ResearchActivity(
-                    headline=f"{prefix} · {strategy.name}",
-                    detail=(
-                        f"{symbol}{wr_bit} · OOS PF {float(hit.test_metrics.get('profit_factor') or 0):.2f} · "
-                        f"full net ${float(hit.full_metrics.get('total_net_profit') or 0):.0f} · {sim.get('summary', '')}"
-                    ),
-                    meta={
-                        "strategy_id": str(strategy.id),
-                        "run_id": str(run.id),
-                        "origin": hit.origin,
-                        "hit": hit.full_metrics,
-                    },
-                )
-            )
-            session.commit()
+        try:
+            _persist_one_hit(session, hit, dataset, symbol, actor, forward_sim, winners)
+        except Exception:
+            session.rollback()
+            raise
     return winners
+
+
+def _persist_one_hit(
+    session: Session,
+    hit: SearchHit,
+    dataset: HistoricalDataset,
+    symbol: str,
+    actor: str,
+    forward_sim: bool,
+    winners: list[str],
+) -> None:
+    orig_wr = (hit.original_metrics or {}).get("win_rate") if hit.origin == "reverse" else None
+    oos_wr = hit.test_metrics.get("win_rate")
+    if hit.origin == "near_miss":
+        rationale = (
+            f"Closest {symbol} test this search (did not pass the prop screen). "
+            f"Train net {hit.train_metrics.get('total_net_profit')}."
+        )
+    elif hit.origin == "reverse" and orig_wr is not None:
+        rationale = (
+            f"Reverse of anti-edge on {symbol}: original train WR {float(orig_wr):.0%} "
+            f"(implied fade {1 - float(orig_wr):.0%}). OOS WR {float(oos_wr or 0):.0%}, "
+            f"OOS net {hit.test_metrics.get('total_net_profit')}."
+        )
+    else:
+        rationale = (
+            f"Deep search winner on {symbol}. Train net {hit.train_metrics.get('total_net_profit')}, "
+            f"OOS net {hit.test_metrics.get('total_net_profit')}."
+        )
+    strategy = create_strategy_sync(
+        session,
+        specification=hit.spec,
+        economic_rationale=rationale,
+        created_by=actor,
+    )
+    session.flush()
+    run = BacktestRun(
+        strategy_id=strategy.id,
+        strategy_version_id=strategy.current_version_id,
+        dataset_id=dataset.id,
+        status="queued",
+        engine_version="pending",
+        reproducibility_id="pending",
+        assumptions={"slippage_ticks_per_side": 1},
+        parameters={
+            "search": hit.origin,
+            "origin": hit.origin,
+            "oos_metrics": hit.test_metrics,
+            "train_metrics": hit.train_metrics,
+            "original_metrics": hit.original_metrics,
+        },
+    )
+    session.add(run)
+    session.flush()
+    execute_backtest_run(session, run.id)
+    if run.status == "completed" and hit.origin != "near_miss":
+        enroll_strategy(session, strategy, symbol)
+    session.commit()
+    winners.append(strategy.name)
+
+    if forward_sim and run.status == "completed":
+        sim = run_forward_simulation(session, strategy, run, tail_bars=120)
+        prefix = "Reverse candidate" if hit.origin == "reverse" else "Prop candidate"
+        wr_bit = ""
+        if hit.origin == "reverse" and orig_wr is not None:
+            wr_bit = f" · fade {float(orig_wr):.0%}→{float(oos_wr or 0):.0%} WR"
+        session.add(
+            ResearchActivity(
+                headline=f"{prefix} · {strategy.name}",
+                detail=(
+                    f"{symbol}{wr_bit} · OOS PF {float(hit.test_metrics.get('profit_factor') or 0):.2f} · "
+                    f"full net ${float(hit.full_metrics.get('total_net_profit') or 0):.0f} · {sim.get('summary', '')}"
+                ),
+                meta={
+                    "strategy_id": str(strategy.id),
+                    "run_id": str(run.id),
+                    "origin": hit.origin,
+                    "hit": hit.full_metrics,
+                },
+            )
+        )
+        session.commit()

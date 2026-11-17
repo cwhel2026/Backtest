@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.research import ResearchActivity, ResearchJob
 from app.models.user import User
 from app.schemas.research import AiGenerateRequest, AiGenerateResponse, ResearchActivityOut, ResearchJobOut
+from app.util.serde import enum_value
 from app.worker.tasks import enqueue_ai_hypothesis
 
 router = APIRouter(prefix="/research", tags=["research"])
@@ -65,8 +66,8 @@ async def research_jobs(
     return [
         ResearchJobOut(
             id=str(j.id),
-            kind=j.kind.value,
-            status=j.status.value,
+            kind=enum_value(j.kind),
+            status=enum_value(j.status),
             title=j.title,
             message=j.message,
             progress_pct=j.progress_pct,
