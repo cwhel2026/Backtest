@@ -27,7 +27,7 @@ export default function LoginPage() {
         );
       } else {
         setError(
-          `Cannot reach API at build-time URL. In Railway frontend: set NEXT_PUBLIC_API_URL to https://backtest-production-39b9045c.up.railway.app then Redeploy frontend (not just backend). (${msg})`,
+          `Cannot reach API. On Railway frontend set BACKEND_INTERNAL_URL or NEXT_PUBLIC_API_URL to https://backtest-production-39b9045c.up.railway.app then Redeploy frontend. (${msg})`,
         );
       }
     } finally {

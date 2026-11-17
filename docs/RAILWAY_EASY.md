@@ -119,7 +119,8 @@ On the **frontend** service → **Variables**:
 
 | Variable name | Value |
 |---------------|--------|
-| `NEXT_PUBLIC_API_URL` | Your **API URL** from Step 6 (must start with `https://`) |
+| `BACKEND_INTERNAL_URL` | Your **API URL** from Step 6 (must start with `https://`) — preferred |
+| `NEXT_PUBLIC_API_URL` | Same URL (optional if `BACKEND_INTERNAL_URL` is set) |
 
 Example: `https://backtest-production-xxxx.up.railway.app`
 
