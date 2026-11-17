@@ -9,6 +9,7 @@ class LeaderboardEntry(BaseModel):
     category: str
     timeframe: str
     entry_type: str | None = None
+    origin: str = "deep"
     completed_at: str | None = None
     prop_ready_score: int
     passes_prop_screen: bool
@@ -22,9 +23,19 @@ class CycleStats(BaseModel):
     last_cycle_detail: str | None = None
 
 
+class BackgroundSearchStatus(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    progress_pct: int = 0
+    started_at: str | None = None
+
+
 class AutopilotStatus(BaseModel):
     hourly_enabled: bool
     ai_configured: bool
+    search_symbols: list[str] = Field(default_factory=list)
+    background_search: BackgroundSearchStatus | None = None
     message: str
     profitable_candidates: list[LeaderboardEntry] = Field(default_factory=list)
     recent_activity: list[dict] = Field(default_factory=list)

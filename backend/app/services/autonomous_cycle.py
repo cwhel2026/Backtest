@@ -15,11 +15,31 @@ from app.models.research import ResearchActivity, ResearchJob
 from app.services.market_data.ingestion_runner import run_yahoo_ingestion
 from app.services.strategy_search import persist_search_hits, run_deep_search
 
+# Nasdaq micro + e-mini always included (even if SEARCH_SYMBOLS omits them).
+NASDAQ_SYMBOLS = ("MNQ", "NQ")
+DEFAULT_SEARCH_SYMBOLS = ("MNQ", "NQ", "MES", "ES")
+PROP_SEARCH_JOB_TITLE = "Deep prop search"
+
+
+def resolve_search_symbols() -> tuple[str, ...]:
+    settings = get_settings()
+    raw = getattr(settings, "search_symbols", None) or ",".join(DEFAULT_SEARCH_SYMBOLS)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        sym = token.strip().upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            ordered.append(sym)
+    for sym in NASDAQ_SYMBOLS:
+        if sym not in seen:
+            ordered.insert(0, sym)
+            seen.add(sym)
+    return tuple(ordered)
+
 
 def _search_symbols() -> tuple[str, ...]:
-    settings = get_settings()
-    raw = getattr(settings, "search_symbols", "MES,MNQ,ES,NQ") or "MES,MNQ,ES,NQ"
-    return tuple(s.strip().upper() for s in raw.split(",") if s.strip())
+    return resolve_search_symbols()
 
 
 def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset:
@@ -35,6 +55,18 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
+def find_active_prop_search_job(session: Session) -> ResearchJob | None:
+    return session.execute(
+        select(ResearchJob)
+        .where(
+            ResearchJob.title == PROP_SEARCH_JOB_TITLE,
+            ResearchJob.status.in_((ResearchJobStatus.QUEUED, ResearchJobStatus.RUNNING)),
+        )
+        .order_by(desc(ResearchJob.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
     inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
     if not inst:
@@ -47,7 +79,11 @@ def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
     ).scalar_one_or_none()
 
 
-def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dict:
+def run_autonomous_prop_cycle(
+    session: Session,
+    actor: str = "autopilot",
+    job_id: str | None = None,
+) -> dict:
     settings = get_settings()
     budget = int(getattr(settings, "search_budget_per_symbol", 120) or 120)
     history_days = int(getattr(settings, "search_history_days", 35) or 35)
@@ -56,16 +92,28 @@ def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dic
 
     summary: dict = {"symbols": {}, "backtests": [], "sims": [], "search_evaluations": 0}
 
-    job = ResearchJob(
-        kind=ResearchJobKind.VALIDATION,
-        status=ResearchJobStatus.RUNNING,
-        title="Deep prop search",
-        message="Loading market data",
-        started_at=datetime.now(UTC),
-        payload={"actor": actor, "budget_per_symbol": budget},
-    )
-    session.add(job)
-    session.flush()
+    if job_id:
+        from uuid import UUID
+
+        job = session.get(ResearchJob, UUID(job_id) if isinstance(job_id, str) else job_id)
+        if not job:
+            raise ValueError(f"Unknown prop search job {job_id}")
+        job.status = ResearchJobStatus.RUNNING
+        job.message = "Loading market data"
+        job.started_at = datetime.now(UTC)
+        job.payload = {**(job.payload or {}), "actor": actor, "budget_per_symbol": budget}
+        session.flush()
+    else:
+        job = ResearchJob(
+            kind=ResearchJobKind.VALIDATION,
+            status=ResearchJobStatus.RUNNING,
+            title=PROP_SEARCH_JOB_TITLE,
+            message="Loading market data",
+            started_at=datetime.now(UTC),
+            payload={"actor": actor, "budget_per_symbol": budget},
+        )
+        session.add(job)
+        session.flush()
 
     try:
         datasets: dict[str, HistoricalDataset] = {}
@@ -124,8 +172,10 @@ def run_autonomous_prop_cycle(session: Session, actor: str = "autopilot") -> dic
         job.completed_at = datetime.now(UTC)
         if all_winners:
             job.message = f"Found {len(all_winners)} walk-forward winners"
+            reverse_n = sum(1 for w in all_winners if w.startswith("REV "))
             detail = (
-                f"Scored {total_eval}+ backtests · {len(all_winners)} passed OOS: "
+                f"Scored {total_eval}+ backtests · {len(all_winners)} passed OOS"
+                f"{f' ({reverse_n} reverse fades)' if reverse_n else ''}: "
                 f"{', '.join(all_winners[:6])}"
             )
         else:

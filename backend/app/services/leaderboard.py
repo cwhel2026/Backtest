@@ -25,6 +25,8 @@ def _entry(
     if profitable_only and not is_profitable_backtest(metrics):
         return None
     display = format_metric_display(metrics)
+    params = run.parameters or {}
+    origin = str(params.get("origin") or ("reverse" if strategy.category.startswith("reversed_") else "deep"))
     return {
         "run_id": str(run.id),
         "strategy_id": str(strategy.id),
@@ -34,9 +36,10 @@ def _entry(
         "timeframe": dataset_tf or strategy.timeframe,
         "entry_type": (metrics.get("entry_type") if isinstance(metrics.get("entry_type"), str) else None)
         or _entry_type_from_strategy(strategy),
+        "origin": origin,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "prop_ready_score": prop_readiness_score(metrics),
-        "passes_prop_screen": is_profitable_backtest(metrics),
+        "passes_prop_screen": is_profitable_backtest(metrics, reverse=origin == "reverse"),
         "metrics": display,
         "rank_score": rank_score(metrics),
     }

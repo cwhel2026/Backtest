@@ -5,13 +5,23 @@ import { useEffect, useState } from "react";
 import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
 import { apiFetch } from "@/lib/api";
 
+type BackgroundSearch = {
+  job_id: string;
+  status: string;
+  message: string;
+  progress_pct: number;
+  started_at: string | null;
+};
+
 type AutopilotStatus = {
   hourly_enabled: boolean;
   ai_configured: boolean;
   message: string;
+  background_search: BackgroundSearch | null;
   profitable_candidates: LeaderboardEntry[];
   recent_activity: { headline: string; detail: string; created_at: string }[];
   cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
+  search_symbols: string[];
 };
 
 export default function HomePage() {
@@ -25,20 +35,31 @@ export default function HomePage() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 15000);
-    return () => clearInterval(t);
+    return () => undefined;
   }, []);
+
+  useEffect(() => {
+    const busy = status?.background_search?.status === "queued" || status?.background_search?.status === "running";
+    const ms = busy ? 8000 : 15000;
+    const t = setInterval(refresh, ms);
+    return () => clearInterval(t);
+  }, [status?.background_search?.status]);
 
   async function runNow() {
     setRunning(true);
     setNote(null);
     try {
-      const res = await apiFetch<{ status: string; mode: string }>("/api/v1/autopilot/run", { method: "POST" });
-      setNote(
-        res.mode === "inline"
-          ? "Deep search running (100s of combos per symbol) — allow 5–8 minutes, then refresh."
-          : "Deep search queued — allow several minutes, then refresh."
+      const res = await apiFetch<{ status: string; mode: string; job_id: string | null }>(
+        "/api/v1/autopilot/run",
+        { method: "POST" }
       );
+      if (res.mode === "already_active") {
+        setNote("Search already running on the server — you can leave this page; results will appear when it finishes.");
+      } else {
+        setNote(
+          "Search queued on the server (5–8 min). You can close the app or switch tabs — hourly research also runs in the background."
+        );
+      }
       setTimeout(refresh, 5000);
     } catch (e) {
       setNote(String(e));
@@ -53,12 +74,22 @@ export default function HomePage() {
     <div className="space-y-8">
       <header>
         <h2 className="page-title">Prop firm autopilot</h2>
-        <p className="page-sub">Only profitable, named strategies appear below — losers are filtered out.</p>
+        <p className="page-sub">
+          Profitable named strategies only. Anti-edge setups (very low win rate) are reversed and re-tested.
+        </p>
       </header>
 
       <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
         <p className="text-sm leading-relaxed text-zinc-200">{status?.message}</p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+          <span className="rounded-full border border-violet-900/50 bg-violet-950/30 px-2 py-1 text-violet-200/90">
+            Markets: {(status?.search_symbols ?? ["MNQ", "NQ", "MES", "ES"]).join(" · ")}
+          </span>
+          {status?.background_search ? (
+            <span className="rounded-full border border-amber-800/60 bg-amber-950/40 px-2 py-1 text-amber-200/90">
+              {status.background_search.status === "queued" ? "Queued" : "Searching"} on server — safe to leave
+            </span>
+          ) : null}
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
           <span className="rounded-full border border-zinc-700 px-2 py-1">
             AI: {status?.ai_configured ? "OpenAI" : "rules"}
@@ -88,12 +119,14 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Must have net &gt; $0, profit factor ≥ 1.1, ≥8 trades, drawdown under ~$3.5k (on $100k sim).
+          Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, DD under ~$3.5k. Reverse fades can keep a slightly
+          lower PF if win rate actually inverted out of sample.
         </p>
         {!candidates.length ? (
           <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
-            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests many
-            stop/target variants on MES &amp; MNQ.
+            No profitable setups yet. Tap <strong className="text-zinc-300">Run prop search</strong> — each run tests RSI,
+            Donchian, ORB, EMA, VWAP and streak systems on Nasdaq + S&amp;P, then fades any anti-edge
+            (e.g. 8% WR → reverse ~92% WR) if walk-forward still holds.
           </div>
         ) : (
           <ul className="mt-4 space-y-4">

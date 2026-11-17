@@ -7,6 +7,7 @@ export type LeaderboardEntry = {
   symbol: string;
   category: string;
   timeframe: string;
+  origin?: string;
   prop_ready_score: number;
   metrics: {
     net_profit_usd?: number;
@@ -26,12 +27,14 @@ function fmtUsd(n?: number | null) {
 
 export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
   const m = row.metrics;
+  const reversed = row.origin === "reverse" || row.category.startsWith("reversed_");
   return (
     <li className="rounded-xl border border-zinc-800 bg-gradient-to-br from-[#1a1d26] to-[#14171e] p-4 shadow-lg">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wide text-emerald-500/90">
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
+            {reversed ? " · reverse fade" : ""}
           </p>
           <Link
             href={`/backtests/${row.run_id}`}
@@ -39,8 +42,18 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           >
             {row.strategy_name}
           </Link>
+          {reversed ? (
+            <p className="mt-1 text-[11px] text-violet-300/90">
+              Faded anti-edge — original signal inverted, stop/target swapped, walk-forward re-tested.
+            </p>
+          ) : null}
         </div>
         <div className="shrink-0 text-right">
+          {reversed ? (
+            <p className="mb-1 rounded-full border border-violet-800/70 bg-violet-950/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-200">
+              Reverse
+            </p>
+          ) : null}
           <p className="text-[10px] uppercase text-zinc-500">Prop score</p>
           <p
             className={`text-lg font-bold tabular-nums ${row.prop_ready_score >= 60 ? "text-emerald-400" : row.prop_ready_score > 0 ? "text-amber-400" : "text-zinc-600"}`}

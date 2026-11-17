@@ -1,4 +1,4 @@
-"""Exhaustive + random combinatorial search space for prop-style DSL specs."""
+"""Signal-first combinatorial search — families sampled evenly, one risk profile."""
 
 from __future__ import annotations
 
@@ -7,27 +7,19 @@ from itertools import product
 from typing import Any, Iterator
 
 SESSION = {"allowed": ["RTH"], "timezone": "America/Chicago"}
+DEFAULT_RISK = {"dollar_risk_per_trade": 75, "max_contracts": 3}
 
+# Include tighter R:R so reverse/fade (high WR, small winners) can survive.
 STOP_TARGETS = (
+    (8, 12),
     (8, 16),
     (10, 20),
+    (12, 18),
     (12, 24),
-    (12, 28),
-    (14, 28),
-    (16, 32),
-    (18, 36),
-    (20, 40),
-    (22, 44),
-    (24, 48),
     (16, 24),
+    (16, 32),
     (20, 30),
-)
-
-RISK_PROFILES = (
-    {"dollar_risk_per_trade": 50, "max_contracts": 2},
-    {"dollar_risk_per_trade": 75, "max_contracts": 3},
-    {"dollar_risk_per_trade": 100, "max_contracts": 4},
-    {"dollar_risk_per_trade": 125, "max_contracts": 5},
+    (20, 40),
 )
 
 
@@ -40,88 +32,154 @@ def _base(symbol: str, timeframe: str, category: str, entry: dict, name: str) ->
         "session": dict(SESSION),
         "entry": entry,
         "exit": {"stop_ticks": 16, "target_ticks": 32, "session_end_flatten": True},
-        "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        "risk": dict(DEFAULT_RISK),
     }
 
 
+def _with_exits(base: dict[str, Any], stop: int, target: int) -> dict[str, Any]:
+    copy = {
+        **base,
+        "exit": {"stop_ticks": stop, "target_ticks": target, "session_end_flatten": True},
+        "name": f"{base['name']} {stop}/{target}",
+    }
+    return copy
+
+
 def _orb_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
-    for minutes, side, (stop, target), risk in product(
-        (10, 15, 20, 30),
-        ("both", "long", "short"),
-        STOP_TARGETS,
-        RISK_PROFILES,
-    ):
-        yield {
-            **_base(
-                symbol,
-                timeframe,
-                "opening_range_breakout",
-                {"type": "opening_range_breakout", "range_minutes": minutes, "side": side},
-                f"{symbol} ORB {minutes}m {side} {stop}/{target}",
-            ),
-            "exit": {"stop_ticks": stop, "target_ticks": target, "session_end_flatten": True},
-            "risk": dict(risk),
-        }
+    for minutes, side, (stop, target) in product((10, 15, 20, 30), ("both", "long", "short"), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "opening_range_breakout",
+            {"type": "opening_range_breakout", "range_minutes": minutes, "side": side},
+            f"{symbol} ORB {minutes}m {side}",
+        )
+        yield _with_exits(base, stop, target)
 
 
 def _ema_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
-    pairs = (
-        (5, 13),
-        (8, 21),
-        (9, 26),
-        (10, 30),
-        (12, 26),
-        (13, 34),
-        (15, 40),
-        (20, 50),
-    )
-    for fast, slow in pairs:
+    pairs = ((5, 13), (8, 21), (9, 26), (12, 26), (13, 34), (20, 50))
+    for (fast, slow), (stop, target) in product(pairs, STOP_TARGETS):
         if fast >= slow:
             continue
-        for stop, target in STOP_TARGETS:
-            for risk in RISK_PROFILES:
-                yield {
-                    **_base(
-                        symbol,
-                        timeframe,
-                        "trend_continuation",
-                        {"type": "ema_crossover", "fast_period": fast, "slow_period": slow},
-                        f"{symbol} EMA {fast}/{slow} {stop}/{target}",
-                    ),
-                    "exit": {"stop_ticks": stop, "target_ticks": target, "session_end_flatten": True},
-                    "risk": dict(risk),
-                }
+        base = _base(
+            symbol,
+            timeframe,
+            "trend_continuation",
+            {"type": "ema_crossover", "fast_period": fast, "slow_period": slow},
+            f"{symbol} EMA {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
 
 
 def _vwap_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
-    for dev, (stop, target), risk in product((10, 12, 14, 16, 20, 24, 28), STOP_TARGETS, RISK_PROFILES):
-        yield {
-            **_base(
-                symbol,
-                timeframe,
-                "vwap_mean_reversion",
-                {"type": "vwap_reversion", "deviation_ticks": dev},
-                f"{symbol} VWAP rev {dev}t {stop}/{target}",
-            ),
-            "exit": {"stop_ticks": stop, "target_ticks": target, "session_end_flatten": True},
-            "risk": dict(risk),
-        }
+    for dev, (stop, target) in product((10, 14, 16, 20, 24, 32), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "vwap_mean_reversion",
+            {"type": "vwap_reversion", "deviation_ticks": dev},
+            f"{symbol} VWAP rev {dev}t",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _rsi_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for period, oversold, overbought, (stop, target) in product(
+        (7, 14),
+        (25, 30),
+        (70, 75),
+        STOP_TARGETS,
+    ):
+        if oversold >= overbought:
+            continue
+        base = _base(
+            symbol,
+            timeframe,
+            "rsi_reversion",
+            {
+                "type": "rsi_reversion",
+                "period": period,
+                "oversold": oversold,
+                "overbought": overbought,
+            },
+            f"{symbol} RSI {period} {oversold}/{overbought}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _donchian_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, (stop, target) in product((10, 16, 20, 30), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "donchian_breakout",
+            {"type": "donchian_breakout", "lookback": lookback},
+            f"{symbol} Donchian {lookback}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _streak_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for count, (stop, target) in product((3, 4, 5), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "consecutive_closes",
+            {"type": "consecutive_closes", "count": count},
+            f"{symbol} streak {count}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+FAMILY_BUILDERS = {
+    "orb": _orb_specs,
+    "ema": _ema_specs,
+    "vwap": _vwap_specs,
+    "rsi": _rsi_specs,
+    "donchian": _donchian_specs,
+    "streak": _streak_specs,
+}
+
+
+def family_pools(symbol: str, timeframe: str = "5m") -> dict[str, list[dict[str, Any]]]:
+    return {name: list(builder(symbol, timeframe)) for name, builder in FAMILY_BUILDERS.items()}
 
 
 def all_search_specs(symbol: str, timeframe: str = "5m") -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
-    specs.extend(_orb_specs(symbol, timeframe))
-    specs.extend(_ema_specs(symbol, timeframe))
-    specs.extend(_vwap_specs(symbol, timeframe))
+    for builder in FAMILY_BUILDERS.values():
+        specs.extend(builder(symbol, timeframe))
     return specs
 
 
 def sample_search_specs(symbol: str, budget: int, *, seed: int | None = None) -> list[dict[str, Any]]:
-    pool = all_search_specs(symbol)
-    if budget >= len(pool):
-        return pool
+    """Draw evenly from each family so ORB stop-grid doesn't crowd out RSI/Donchian."""
+    pools = family_pools(symbol)
     rng = random.Random(seed)
-    return rng.sample(pool, budget)
+    families = [name for name, pool in pools.items() if pool]
+    if not families or budget <= 0:
+        return []
+    per = max(1, budget // len(families))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name in families:
+        pool = pools[name]
+        take = min(per, len(pool))
+        picked = rng.sample(pool, take) if take < len(pool) else list(pool)
+        for spec in picked:
+            key = spec["name"]
+            if key not in seen:
+                seen.add(key)
+                out.append(spec)
+            if len(out) >= budget:
+                return out
+    leftover = budget - len(out)
+    if leftover > 0:
+        rest = [s for s in all_search_specs(symbol) if s["name"] not in seen]
+        extra = rng.sample(rest, min(leftover, len(rest))) if rest else []
+        out.extend(extra)
+    return out[:budget]
 
 
 def refine_spec(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -129,9 +187,9 @@ def refine_spec(spec: dict[str, Any]) -> list[dict[str, Any]]:
     stop = int(spec["exit"]["stop_ticks"])
     target = int(spec["exit"]["target_ticks"])
     out: list[dict[str, Any]] = []
-    for ds, dt in ((-2, 0), (0, 4), (2, 4), (-2, -4), (2, 0)):
-        s2, t2 = max(4, stop + ds), max(8, target + dt)
-        if s2 >= t2:
+    for ds, dt in ((-2, 0), (0, 4), (2, 4), (-2, -4), (2, 0), (0, -4)):
+        s2, t2 = max(4, stop + ds), max(6, target + dt)
+        if s2 < 4 or t2 < 6:
             continue
         copy = {**spec, "exit": {**spec["exit"], "stop_ticks": s2, "target_ticks": t2}}
         copy["name"] = f"{spec['name']} refine {s2}/{t2}"
