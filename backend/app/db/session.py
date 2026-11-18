@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, Generator
+from contextlib import suppress
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -28,8 +29,24 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
+        except Exception:
+            with suppress(Exception):
+                await session.rollback()
+            raise
+        try:
             if session.in_transaction():
                 await session.commit()
         except Exception:
-            await session.rollback()
+            with suppress(Exception):
+                await session.rollback()
             raise
+
+
+async def get_db_readonly() -> AsyncGenerator[AsyncSession, None]:
+    """Login and other reads: never COMMIT a recovering connection."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            with suppress(Exception):
+                await session.rollback()

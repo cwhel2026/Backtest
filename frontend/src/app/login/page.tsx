@@ -28,7 +28,9 @@ export default function LoginPage() {
       } else if (
         !msg ||
         /^API_ERROR_/.test(msg) ||
-        /failed to fetch|failed to respond|recovery mode|starting up/i.test(msg)
+        /failed to fetch|failed to respond|recovery mode|starting up|connection reset|last database write failed/i.test(
+          msg,
+        )
       ) {
         setError(POSTGRES_RECOVERY_COPY);
       } else {
