@@ -238,9 +238,8 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Keepers: net &gt; $0, PF ≥ 1.1, ≥8 trades, win rate ≥ 42%, DD under ~$3.5k. Expectancy is net ÷
-          trades (can be positive even with a low hit rate if winners are huge). Reverse fades use separate
-          rules.
+          Keepers: net &gt; $0, PF ≥ 1.1, enough trades for the timeframe (4 on 1m, 8 on 5m), win rate ≥ 42%,
+          DD under ~$3.5k. Cards show when it was tested, the bar window, and the stop/$ risk it took.
         </p>
         {searching ? (
           <p className="mt-4 text-sm text-amber-200/90">

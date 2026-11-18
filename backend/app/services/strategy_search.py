@@ -165,9 +165,10 @@ def _consider(
     origin: str,
     original_metrics: dict | None,
     leaderboard: list,
+    timeframe: str,
 ) -> None:
     reverse = origin == "reverse"
-    if not full_m or not is_profitable_backtest(full_m, reverse=reverse):
+    if not full_m or not is_profitable_backtest(full_m, reverse=reverse, timeframe=timeframe):
         return
     sc = rank_score(full_m)
     if reverse:
@@ -266,7 +267,7 @@ def run_deep_search(
         evaluated += 1
         _tick(spec, subphase=sub_full)
         reverse = origin == "reverse"
-        if not full_m or not is_profitable_backtest(full_m, reverse=reverse):
+        if not full_m or not is_profitable_backtest(full_m, reverse=reverse, timeframe=tf):
             memory.record(spec, full_m or test_m, outcome="prop_reject", note="prop screen")
             return
 
@@ -286,6 +287,7 @@ def run_deep_search(
             origin=origin,
             original_metrics=original_metrics,
             leaderboard=leaderboard,
+            timeframe=tf,
         )
 
     for spec in specs:
@@ -313,7 +315,7 @@ def run_deep_search(
         full_m = _metrics_for_spec(rev, bars, instrument, tf)
         evaluated += 1
         _tick(rev, subphase="reverse_full")
-        if full_m and is_profitable_backtest(full_m, reverse=True):
+        if full_m and is_profitable_backtest(full_m, reverse=True, timeframe=tf):
             full_m, extra = _apply_robustness(rev, bars, instrument, tf, full_m)
             evaluated += extra
             _tick(rev, subphase="robustness")
@@ -329,6 +331,7 @@ def run_deep_search(
                 origin="reverse",
                 original_metrics=orig_train,
                 leaderboard=leaderboard,
+                timeframe=tf,
             )
 
     for base in refine_queue[: refine_top]:
@@ -517,7 +520,7 @@ def _persist_one_hit(
             run.metrics = {**run.metrics, **extra}
             session.add(run)
     if run.status == "completed" and is_profitable_backtest(
-        run.metrics, reverse=hit.origin == "reverse"
+        run.metrics, reverse=hit.origin == "reverse", timeframe=dataset.timeframe
     ):
         enroll_strategy(session, strategy, symbol)
     session.commit()
