@@ -10,7 +10,13 @@ from app.models.backtest import BacktestRun
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.models.strategy import StrategyDefinition
-from app.services.prop_screen import format_metric_display, is_profitable_backtest, prop_readiness_score, rank_score
+from app.services.prop_screen import (
+    format_metric_display,
+    is_profitable_backtest,
+    prop_gate_miss,
+    prop_readiness_score,
+    rank_score,
+)
 
 
 def _entry(
@@ -22,24 +28,28 @@ def _entry(
     profitable_only: bool,
 ) -> dict | None:
     metrics = run.metrics or {}
-    if profitable_only and not is_profitable_backtest(metrics):
-        return None
-    display = format_metric_display(metrics)
+    tf = dataset_tf or strategy.timeframe
     params = run.parameters or {}
     origin = str(params.get("origin") or ("reverse" if strategy.category.startswith("reversed_") else "deep"))
+    reverse = origin == "reverse"
+    passes = is_profitable_backtest(metrics, reverse=reverse, timeframe=tf)
+    if profitable_only and not passes:
+        return None
+    display = format_metric_display(metrics)
     return {
         "run_id": str(run.id),
         "strategy_id": str(strategy.id),
         "strategy_name": strategy.name,
         "symbol": symbol,
         "category": strategy.category,
-        "timeframe": dataset_tf or strategy.timeframe,
+        "timeframe": tf,
         "entry_type": (metrics.get("entry_type") if isinstance(metrics.get("entry_type"), str) else None)
         or _entry_type_from_strategy(strategy),
         "origin": origin,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        "prop_ready_score": prop_readiness_score(metrics),
-        "passes_prop_screen": is_profitable_backtest(metrics, reverse=origin == "reverse"),
+        "prop_ready_score": prop_readiness_score(metrics, timeframe=tf),
+        "passes_prop_screen": passes,
+        "gate_miss": None if passes else prop_gate_miss(metrics, reverse=reverse, timeframe=tf),
         "metrics": display,
         "rank_score": rank_score(metrics),
     }

@@ -1,4 +1,4 @@
-from app.services.prop_screen import is_profitable_backtest, prop_readiness_score
+from app.services.prop_screen import is_profitable_backtest, min_trades_for, prop_gate_miss, prop_readiness_score
 
 
 def test_rejects_losing_strategy():
@@ -24,6 +24,22 @@ def test_rejects_swing_style_low_win_rate():
     }
     assert not is_profitable_backtest(m)
     assert prop_readiness_score(m) == 0
+
+
+def test_1m_orb_with_four_trades_is_a_keeper():
+    m = {
+        "total_net_profit": 2137,
+        "profit_factor": 91.93,
+        "trade_count": 4,
+        "max_drawdown": 24,
+        "win_rate": 0.75,
+    }
+    assert min_trades_for("1m") == 4
+    assert is_profitable_backtest(m, timeframe="1m")
+    assert not is_profitable_backtest(m, timeframe="5m")
+    assert prop_gate_miss(m, timeframe="5m") == "Needs ≥8 trades (has 4)"
+    assert prop_gate_miss(m, timeframe="1m") is None
+    assert prop_readiness_score(m, timeframe="1m") > 0
 
 
 def test_win_rate_dominates_readiness_score():

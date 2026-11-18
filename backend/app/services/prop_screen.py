@@ -8,7 +8,20 @@ from typing import Any
 INTRADAY_MIN_WIN_RATE = 0.42
 
 
-def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = False) -> bool:
+def min_trades_for(timeframe: str | None, *, reverse: bool = False) -> int:
+    """1m search windows are ~7 days, so a daily ORB cannot hit the 5m 8-trade floor."""
+    tf = (timeframe or "5m").strip().lower()
+    if tf in ("1m", "1min", "1"):
+        return 3 if reverse else 4
+    return 6 if reverse else 8
+
+
+def is_profitable_backtest(
+    metrics: dict[str, Any] | None,
+    *,
+    reverse: bool = False,
+    timeframe: str | None = None,
+) -> bool:
     if not metrics:
         return False
     net = float(metrics.get("total_net_profit") or 0)
@@ -17,7 +30,7 @@ def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = Fa
     if net <= 0:
         return False
     min_pf = 1.05 if reverse else 1.1
-    min_trades = 6 if reverse else 8
+    min_trades = min_trades_for(timeframe, reverse=reverse)
     if pf is None or float(pf) < min_pf:
         return False
     if trades < min_trades:
@@ -30,6 +43,39 @@ def is_profitable_backtest(metrics: dict[str, Any] | None, *, reverse: bool = Fa
         if wr is not None and float(wr) < INTRADAY_MIN_WIN_RATE:
             return False
     return True
+
+
+def prop_gate_miss(
+    metrics: dict[str, Any] | None,
+    *,
+    reverse: bool = False,
+    timeframe: str | None = None,
+) -> str | None:
+    """Human reason a green-P&L run is not a keeper. None if it passes."""
+    if is_profitable_backtest(metrics, reverse=reverse, timeframe=timeframe):
+        return None
+    if not metrics:
+        return "No backtest metrics"
+    net = float(metrics.get("total_net_profit") or 0)
+    if net <= 0:
+        return "Net P&L is not positive"
+    trades = int(metrics.get("trade_count") or 0)
+    need = min_trades_for(timeframe, reverse=reverse)
+    if trades < need:
+        tf = (timeframe or "5m").lower()
+        extra = " — 1m history is only ~7 days" if tf in ("1m", "1min", "1") else ""
+        return f"Needs ≥{need} trades (has {trades}){extra}"
+    pf = metrics.get("profit_factor")
+    min_pf = 1.05 if reverse else 1.1
+    if pf is None or float(pf) < min_pf:
+        return f"Profit factor below {min_pf}"
+    max_dd = float(metrics.get("max_drawdown") or 0)
+    if max_dd > 3500:
+        return "Drawdown above $3,500"
+    wr = metrics.get("win_rate")
+    if not reverse and wr is not None and float(wr) < INTRADAY_MIN_WIN_RATE:
+        return f"Win rate below {INTRADAY_MIN_WIN_RATE:.0%} (has {float(wr):.0%})"
+    return "Did not pass the prop screen"
 
 
 def rank_score(metrics: dict[str, Any] | None) -> float:
@@ -47,14 +93,14 @@ def rank_score(metrics: dict[str, Any] | None) -> float:
     return pf * 1000 + net * 0.5 + min(trades, 80) * 2 - dd * 0.1 + wr * 600 + robust * 250
 
 
-def prop_readiness_score(metrics: dict[str, Any] | None) -> int:
+def prop_readiness_score(metrics: dict[str, Any] | None, *, timeframe: str | None = None) -> int:
     """0–100 score for UI badge."""
     if not metrics:
         return 0
     wr = float(metrics.get("win_rate") or 0)
     if wr < INTRADAY_MIN_WIN_RATE:
         return 0
-    if not is_profitable_backtest(metrics):
+    if not is_profitable_backtest(metrics, timeframe=timeframe):
         return 0
     pf = float(metrics.get("profit_factor") or 1)
     net = float(metrics.get("total_net_profit") or 0)

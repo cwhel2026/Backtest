@@ -21,7 +21,10 @@ export default function ResultsPage() {
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h2 className="page-title">Prop results</h2>
-          <p className="page-sub">Named strategies with full metrics. Default view: profitable only.</p>
+          <p className="page-sub">
+            Default: keepers that pass the prop screen. Green P&amp;L with too few trades is a sample-size miss,
+            not a losing strategy.
+          </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-zinc-400">
           <input
@@ -30,7 +33,7 @@ export default function ResultsPage() {
             onChange={(e) => setShowAll(e.target.checked)}
             className="rounded border-zinc-600"
           />
-          Show unprofitable runs
+          Include gate misses
         </label>
       </header>
 

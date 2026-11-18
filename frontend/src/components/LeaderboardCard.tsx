@@ -13,6 +13,7 @@ export type LeaderboardEntry = {
   timeframe: string;
   origin?: string;
   passes_prop_screen?: boolean;
+  gate_miss?: string | null;
   prop_ready_score: number;
   metrics: {
     net_profit_usd?: number;
@@ -66,7 +67,7 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
             {reversed ? " · reverse fade" : ""}
             {keeper && nearMiss ? " · full-sample keeper" : ""}
-            {!keeper && nearMiss ? " · search gate miss" : ""}
+            {!keeper && (nearMiss || row.gate_miss) ? " · search gate miss" : ""}
             {swingStyle && row.prop_ready_score === 0 ? " · swing-style R:R" : ""}
           </p>
           <Link
@@ -100,6 +101,11 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           Expectancy is average $ per trade (net P&amp;L ÷ trades). A low win rate can still be positive when
           winners are much larger than losers — that is wide R:R, not a typical intraday prop profile (keepers
           need ≥42% hit rate).
+        </p>
+      ) : null}
+      {!keeper && row.gate_miss ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
+          Not unprofitable — {row.gate_miss}. Keepers need enough trades in the sample, not just green P&amp;L.
         </p>
       ) : null}
       <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
