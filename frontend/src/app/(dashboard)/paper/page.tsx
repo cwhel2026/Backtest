@@ -36,7 +36,10 @@ type Enrolled = {
   last_high?: number | null;
   last_low?: number | null;
   last_close?: number | null;
+  last_quote?: number | null;
   last_volume?: number | null;
+  quality?: string;
+  provider?: string;
   bar_age_sec?: number | null;
   bars_in_dataset?: number;
   feed_source?: string | null;
@@ -79,6 +82,15 @@ type Scanner = {
   in_trade_count: number;
   slot_count: number;
   feed_note: string;
+  feed?: {
+    quality?: string;
+    source?: string | null;
+    provider?: string | null;
+    last?: number | null;
+    last_ts?: string | null;
+    live?: boolean;
+    chain?: string[];
+  };
 };
 
 type Desk = {
@@ -216,7 +228,7 @@ export default function PaperTradingPage() {
     load();
     void tick("auto");
     const poll = setInterval(load, 4000);
-    const scan = setInterval(() => void tick("auto"), 30000);
+    const scan = setInterval(() => void tick("auto"), 20000);
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(poll);
@@ -253,8 +265,9 @@ export default function PaperTradingPage() {
         <div>
           <h2 className="page-title">Forward test</h2>
           <p className="page-sub max-w-2xl">
-            Keepers (including NQ 1m ATR pullbacks) sit on this book. The worker scans every minute; this
-            page also pulls a pass when you open it so you can watch last prints, new bars, and entries.
+            Keepers (including NQ 1m ATR pullbacks) sit on this book. The worker scans every 20s from
+            IBKR or Twelve Data when configured, otherwise delayed Yahoo. This page also pulls a pass
+            when you open it.
           </p>
         </div>
         <button
@@ -288,13 +301,16 @@ export default function PaperTradingPage() {
                 }`}
               />
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400">
-                  Live scanner
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400">
+                    Live scanner
+                  </p>
+                  <FeedBadge quality={scanner?.feed?.quality} live={scanner?.feed?.live} />
+                </div>
                 <p className="mt-1 text-lg font-semibold text-zinc-50">{statusLabel}</p>
                 <p className="mt-1 max-w-2xl text-sm text-zinc-300">
                   {scanning
-                    ? "Pulling delayed live bars and evaluating every enrolled setup for an entry or exit."
+                    ? "Pulling the live feed and evaluating every enrolled setup for an entry or exit."
                     : scanner?.headline || "Opening the book and waiting for the first scan pass."}
                 </p>
               </div>
@@ -319,31 +335,37 @@ export default function PaperTradingPage() {
             />
             <ScanStat
               label="Worker"
-              value={`every ${scanner?.tick_interval_sec ?? 60}s`}
+              value={`every ${scanner?.tick_interval_sec ?? 20}s`}
               hint={
                 scanning
                   ? "Pass in flight"
                   : scanner?.next_scan_sec != null
                     ? `Next worker pass ~${scanner.next_scan_sec}s`
-                    : "Page also scans every 30s while open"
+                    : "Page also scans every 20s while open"
               }
             />
             <ScanStat
               label="Last print"
               value={
-                desk?.enrolled.find((s) => s.last_close != null)
-                  ? `${desk.enrolled.find((s) => s.last_close != null)?.symbol} ${px(
-                      desk.enrolled.find((s) => s.last_close != null)?.last_close,
-                    )}`
-                  : "—"
+                scanner?.feed?.last != null
+                  ? `${desk?.enrolled.find((s) => s.last_close != null)?.symbol ?? ""} ${px(scanner.feed.last)}`.trim()
+                  : desk?.enrolled.find((s) => s.last_close != null)
+                    ? `${desk.enrolled.find((s) => s.last_close != null)?.symbol} ${px(
+                        desk.enrolled.find((s) => s.last_close != null)?.last_close,
+                      )}`
+                    : "—"
               }
               hint={
-                desk?.enrolled.find((s) => s.last_bar_ts)
-                  ? `${chicagoClock(desk.enrolled.find((s) => s.last_bar_ts)?.last_bar_ts)} · ${delayNote(
-                      desk.enrolled.find((s) => s.bar_age_sec != null)?.bar_age_sec,
-                      sessionOpen,
-                    )}`
-                  : "No bars yet"
+                scanner?.feed?.source
+                  ? `${scanner.feed.source} · ${chicagoClock(scanner.feed.last_ts)} · ${
+                      scanner.feed.quality ?? "unknown"
+                    }`
+                  : desk?.enrolled.find((s) => s.last_bar_ts)
+                    ? `${chicagoClock(desk.enrolled.find((s) => s.last_bar_ts)?.last_bar_ts)} · ${delayNote(
+                        desk.enrolled.find((s) => s.bar_age_sec != null)?.bar_age_sec,
+                        sessionOpen,
+                      )}`
+                    : "No bars yet"
               }
             />
           </dl>
@@ -416,7 +438,11 @@ export default function PaperTradingPage() {
                         {s.symbol} {s.timeframe}
                       </span>
                     </p>
-                    <p className={`mt-1 text-xs font-medium uppercase tracking-wide ${st.tone}`}>{st.label}</p>
+                    <p className={`mt-1 text-xs font-medium uppercase tracking-wide ${st.tone}`}>
+                      {st.label}
+                      {s.quality ? ` · ${s.quality}` : ""}
+                      {s.provider ? ` · ${s.provider}` : ""}
+                    </p>
                   </div>
                   <div className="text-right">
                     <p className="font-mono text-lg tabular-nums text-zinc-50">{px(s.last_close)}</p>
@@ -515,5 +541,21 @@ function ScanStat({ label, value, hint }: { label: string; value: string; hint: 
       <p className="mt-1 text-sm font-semibold text-zinc-100">{value}</p>
       <p className="mt-1 text-[11px] leading-snug text-zinc-500">{hint}</p>
     </div>
+  );
+}
+
+function FeedBadge({ quality, live }: { quality?: string; live?: boolean }) {
+  const q = live ? "live" : quality || "unknown";
+  const styles =
+    q === "live"
+      ? "border-emerald-700 bg-emerald-950/70 text-emerald-300"
+      : q === "delayed"
+        ? "border-amber-800 bg-amber-950/50 text-amber-200"
+        : q === "stale"
+          ? "border-red-900 bg-red-950/40 text-red-300"
+          : "border-zinc-700 bg-zinc-900 text-zinc-400";
+  const label = q === "live" ? "LIVE" : q === "delayed" ? "DELAYED ~15m" : q.replaceAll("_", " ").toUpperCase();
+  return (
+    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${styles}`}>{label}</span>
   );
 }

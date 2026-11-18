@@ -23,7 +23,9 @@ Set these on **API**, **worker**, and **beat** (use Railway **Shared Variables**
 | `ENVIRONMENT` | `production` |
 | `ALLOWED_ORIGINS` | `https://YOUR-FRONTEND.up.railway.app` (after frontend gets a domain) |
 
-Optional: `DATABENTO_API_KEY`, `OPENAI_API_KEY`, `AI_RESEARCH_ENABLED=true`.
+Optional live paper-desk feed (first match wins): `IBKR_HOST` + `IBKR_PORT`, or `TWELVEDATA_API_KEY`. Yahoo/FinzData remain delayed fallbacks.
+
+Optional research keys: `DATABENTO_API_KEY`, `FINZDATA_API_KEY`, `OPENAI_API_KEY`, `AI_RESEARCH_ENABLED=true`.
 
 Celery broker URLs are **derived from `REDIS_URL`** when not set (suited to a single Railway Redis).
 

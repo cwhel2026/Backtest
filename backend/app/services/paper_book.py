@@ -18,11 +18,23 @@ from app.models.paper import PaperAccount, PaperFill, PaperSlot
 from app.models.research import ResearchActivity
 from app.models.strategy import StrategyDefinition, StrategyVersion
 from app.services.leaderboard import leaderboard_entries_sync
-from app.services.market_data.live_feed import refresh_live_bars
-from app.services.paper_engine import ClosedFill, OpenTrade, SlotCursor, advance_slot, apply_prop_rules
+from app.services.market_data.live_feed import (
+    classify_feed_quality,
+    fetch_live_quote,
+    live_source_chain,
+    refresh_live_bars,
+)
+from app.services.paper_engine import (
+    ClosedFill,
+    OpenTrade,
+    SlotCursor,
+    advance_slot,
+    apply_prop_rules,
+    exit_open_on_quote,
+)
 
 CHICAGO = ZoneInfo("America/Chicago")
-TICK_INTERVAL_SEC = 60
+TICK_INTERVAL_SEC = 20
 TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 
@@ -292,6 +304,7 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
     refreshed = 0
     allow = account.status in ("active", "passed")
     feeds: dict[tuple[str, str], dict] = {}
+    quotes: dict[str, dict] = {}
     watches: list[dict] = []
 
     if refresh_data:
@@ -310,6 +323,11 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
                 feeds[key] = {"error": str(exc)[:400]}
                 slot.last_error = str(exc)[:400]
                 session.add(slot)
+            if slot.symbol.upper() not in quotes:
+                try:
+                    quotes[slot.symbol.upper()] = fetch_live_quote(slot.symbol) or {}
+                except Exception:
+                    quotes[slot.symbol.upper()] = {}
 
     for slot in slots:
         strategy = session.get(StrategyDefinition, slot.strategy_id)
@@ -364,6 +382,16 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             cursor,
             allow_entries=allow and account.status != "breached",
         )
+        quote = quotes.get(slot.symbol.upper()) or {}
+        if cursor.position and quote.get("last"):
+            q_ts = quote.get("ts") or datetime.now(UTC)
+            cursor, extra = exit_open_on_quote(
+                instrument,
+                cursor,
+                Decimal(str(quote["last"])),
+                q_ts if isinstance(q_ts, datetime) else datetime.now(UTC),
+            )
+            fills.extend(extra)
         slot.last_bar_ts = cursor.last_bar_ts
         slot.last_refresh_at = datetime.now(UTC)
         slot.last_error = None
@@ -440,6 +468,17 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             state = "watching"
         else:
             state = "scanned"
+        quote = quotes.get(slot.symbol.upper()) or {}
+        provider = str(feed.get("provider") or (feed.get("source") or "yahoo")).split(":")[0]
+        q_source = str(quote.get("source") or provider)
+        q_ts = quote.get("ts") if isinstance(quote.get("ts"), datetime) else None
+        quality_ts = q_ts or (last.ts if last else None)
+        quality = classify_feed_quality(
+            quality_ts,
+            session_open=globex_session()["open"],
+            provider=q_source,
+        )
+        last_print = float(quote["last"]) if quote.get("last") is not None else (float(last.close) if last else None)
         watches.append(
             {
                 "slot_id": str(slot.id),
@@ -454,9 +493,13 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
                 "last_open": float(last.open) if last else None,
                 "last_high": float(last.high) if last else None,
                 "last_low": float(last.low) if last else None,
-                "last_close": float(last.close) if last else None,
+                "last_close": last_print,
                 "last_volume": int(last.volume) if last else 0,
-                "feed_source": feed.get("source"),
+                "last_quote": float(quote["last"]) if quote.get("last") is not None else None,
+                "quote_ts": q_ts.isoformat() if q_ts else None,
+                "feed_source": feed.get("source") or q_source,
+                "provider": q_source,
+                "quality": quality,
                 "bars_added": feed.get("added"),
                 "in_trade": cursor.position is not None,
                 "direction": cursor.position.direction if cursor.position else None,
@@ -491,6 +534,16 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             "slots": len(slots),
         },
     )
+    lead = next((w for w in watches if w.get("last_close") is not None), watches[0] if watches else {})
+    feed = {
+        "quality": lead.get("quality") or "unknown",
+        "source": lead.get("feed_source"),
+        "provider": lead.get("provider"),
+        "last": lead.get("last_quote") or lead.get("last_close"),
+        "last_ts": lead.get("quote_ts") or lead.get("last_bar_ts"),
+        "live": lead.get("quality") == "live",
+        "chain": live_source_chain(),
+    }
     account.last_scan = {
         "at": now.isoformat(),
         "headline": headline,
@@ -500,6 +553,7 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         "enrolled_new": enrolled_new,
         "slots": len(slots),
         "session": market,
+        "feed": feed,
         "watches": watches,
         "history": history[:12],
     }
@@ -614,11 +668,36 @@ def scanner_payload(
         "watching_count": len(watching),
         "in_trade_count": len(trading),
         "slot_count": len(enrolled),
-        "feed_note": (
-            "Yahoo/FinzData prints are delayed (~15m). The scanner still evaluates every new bar; "
-            "it does not replay history on first arm."
-        ),
+        "feed": last.get("feed") if isinstance(last.get("feed"), dict) else {
+            "quality": "unknown",
+            "chain": live_source_chain(),
+            "live": False,
+        },
+        "feed_note": _feed_note(last.get("feed") if isinstance(last.get("feed"), dict) else None),
     }
+
+
+def _feed_note(feed: dict | None) -> str:
+    chain = ", ".join(live_source_chain())
+    if not feed:
+        return (
+            f"Feed order: {chain}. Set IBKR_HOST or TWELVEDATA_API_KEY for live CME prints; "
+            "Yahoo/FinzData stay delayed (~15m)."
+        )
+    quality = feed.get("quality") or "unknown"
+    source = feed.get("source") or feed.get("provider") or "unknown"
+    if quality == "live":
+        return f"Live feed {source}. Worker scans every {TICK_INTERVAL_SEC}s. First arm still does not replay history."
+    if quality == "delayed":
+        return (
+            f"{source} is delayed (~15m). Set TWELVEDATA_API_KEY (paid real-time) or IBKR_HOST "
+            f"for live last prints. Order: {chain}."
+        )
+    if quality == "session_closed":
+        return f"Globex is closed. Last print from {source}. Scanner stays armed."
+    if quality == "stale":
+        return f"{source} last print is stale. Check IBKR Gateway / Twelve Data key, then press Scan now."
+    return f"Feed order: {chain}. Waiting for the first print."
 
 
 def paper_snapshot(session: Session) -> dict:
@@ -636,6 +715,16 @@ def paper_snapshot(session: Session) -> dict:
             row["new_bars"] = watch.get("new_bars", row.get("new_bars"))
             row["armed"] = watch.get("armed", row.get("armed"))
             row["feed_source"] = watch.get("feed_source") or row.get("feed_source")
+            row["quality"] = watch.get("quality") or row.get("quality")
+            row["provider"] = watch.get("provider") or row.get("provider")
+            if watch.get("last_quote") is not None:
+                row["last_quote"] = watch["last_quote"]
+                row["last_close"] = watch["last_quote"]
+                strategy = session.get(StrategyDefinition, slot.strategy_id)
+                inst = session.get(Instrument, strategy.instrument_id) if strategy else None
+                row["unrealized"] = _unrealized(
+                    slot, float(watch["last_quote"]), inst.multiplier if inst else None
+                )
         if slot.open_direction:
             open_positions.append(
                 {

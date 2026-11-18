@@ -29,7 +29,7 @@ celery_app.conf.update(
         },
         "paper-forward-tick": {
             "task": "app.worker.tasks.paper_forward_tick",
-            "schedule": 60.0,
+            "schedule": 20.0,
         },
     },
 )

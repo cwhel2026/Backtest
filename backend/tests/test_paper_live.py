@@ -133,5 +133,5 @@ def test_scanner_payload_live_when_recent():
     assert payload["live"] is True
     assert payload["status"] == "scanning"
     assert payload["last_scan_age_sec"] == 12
-    assert payload["next_scan_sec"] == 48
+    assert payload["next_scan_sec"] == 8
     assert "watching" in payload["headline"].lower() or "Caught up" in payload["headline"]

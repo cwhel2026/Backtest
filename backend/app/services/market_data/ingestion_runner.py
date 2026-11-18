@@ -12,6 +12,7 @@ from app.services.market_data.bar_storage import persist_bars_to_dataset
 from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m
 from app.services.market_data.finzdata_ingest import fetch_finzdata_ohlcv
 from app.services.market_data.ibkr_ingest import bar_size_for_timeframe, fetch_ibkr_bars
+from app.services.market_data.twelvedata_ingest import fetch_twelvedata_ohlcv
 from app.services.market_data.yahoo_ingest import bars_to_storage, fetch_yahoo_ohlcv
 
 
@@ -116,6 +117,7 @@ def run_ibkr_ingestion(session: Session, payload: dict) -> HistoricalDataset:
         start=start,
         end=end,
         bar_size=bar_size_for_timeframe(timeframe),
+        use_rth=bool(payload.get("use_rth", True)),
     )
     stored = bars_to_storage(bars, source_timeframe=timeframe, target_timeframe=timeframe)
     return persist_bars_to_dataset(
@@ -127,6 +129,42 @@ def run_ibkr_ingestion(session: Session, payload: dict) -> HistoricalDataset:
         meta={
             "source": "ibkr_gateway",
             "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
+        },
+    )
+
+
+def run_twelvedata_ingestion(session: Session, payload: dict) -> HistoricalDataset:
+    symbol = payload.get("instrument_symbol")
+    timeframe = payload.get("timeframe", "1m")
+    start = parse_job_datetime(payload["start"])
+    end = parse_job_datetime(payload["end"])
+
+    inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
+    if not inst:
+        raise ValueError(f"Unknown instrument {symbol}")
+
+    bars, root, download_tf = fetch_twelvedata_ohlcv(
+        instrument_symbol=symbol,
+        start=start,
+        end=end,
+        target_timeframe=timeframe,
+    )
+    if not bars:
+        raise ValueError(
+            f"No Twelve Data bars for {root} {timeframe} ({start.isoformat()} → {end.isoformat()})."
+        )
+    stored = bars_to_storage(bars, source_timeframe=download_tf, target_timeframe=timeframe)
+    return persist_bars_to_dataset(
+        session,
+        provider_slug="twelvedata",
+        instrument_id=inst.id,
+        timeframe=timeframe,
+        bars=stored,
+        meta={
+            "source": "twelvedata",
+            "twelvedata_symbol": root,
+            "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
+            "bars_downloaded": len(bars),
         },
     )
 
