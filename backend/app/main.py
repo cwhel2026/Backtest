@@ -4,13 +4,21 @@ import structlog
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError, PendingRollbackError
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, OperationalError, PendingRollbackError
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.services.bootstrap import bootstrap_database
-from app.util.db_errors import DISK_FULL_MESSAGE, RETRY_AFTER_DB_ERROR, compact_error, is_disk_full
+from app.util.db_errors import (
+    DISK_FULL_MESSAGE,
+    POSTGRES_RECOVERY_MESSAGE,
+    RETRY_AFTER_DB_ERROR,
+    compact_error,
+    is_disk_full,
+    is_postgres_recovery,
+)
 from app.util.serde import integrity_hint
 
 logger = structlog.get_logger()
@@ -38,7 +46,18 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "app": settings.app_name, "environment": settings.environment}
+        database = "ok"
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception as exc:
+            database = compact_error(exc)
+        return {
+            "status": "ok" if database == "ok" else "degraded",
+            "app": settings.app_name,
+            "environment": settings.environment,
+            "database": database,
+        }
 
     @app.exception_handler(IntegrityError)
     async def db_integrity_error(_request: Request, exc: IntegrityError) -> JSONResponse:
@@ -49,6 +68,15 @@ def create_app() -> FastAPI:
             detail += f" {hint}"
         detail += f" {RETRY_AFTER_DB_ERROR}"
         return JSONResponse(status_code=500, content={"detail": detail})
+
+    @app.exception_handler(OperationalError)
+    async def db_operational(_request: Request, exc: OperationalError) -> JSONResponse:
+        logger.exception("db_operational_error", error=str(exc))
+        if is_postgres_recovery(exc):
+            return JSONResponse(status_code=503, content={"detail": POSTGRES_RECOVERY_MESSAGE})
+        if is_disk_full(exc):
+            return JSONResponse(status_code=507, content={"detail": DISK_FULL_MESSAGE})
+        return JSONResponse(status_code=503, content={"detail": compact_error(exc)})
 
     @app.exception_handler(PendingRollbackError)
     async def db_pending_rollback(_request: Request, exc: PendingRollbackError) -> JSONResponse:
@@ -65,6 +93,8 @@ def create_app() -> FastAPI:
         logger.exception("unhandled_api_error", error=str(exc))
         if is_disk_full(exc):
             return JSONResponse(status_code=507, content={"detail": DISK_FULL_MESSAGE})
+        if is_postgres_recovery(exc):
+            return JSONResponse(status_code=503, content={"detail": POSTGRES_RECOVERY_MESSAGE})
         return JSONResponse(status_code=500, content={"detail": compact_error(exc) or RETRY_AFTER_DB_ERROR})
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
