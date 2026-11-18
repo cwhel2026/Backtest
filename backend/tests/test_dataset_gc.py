@@ -84,7 +84,7 @@ def test_compact_error_truncates_generic():
 
 def test_ohlcv_trim_cutoffs():
     now = datetime(2026, 11, 18, 12, tzinfo=UTC)
-    assert ohlcv_trim_cutoff("1m", now) == now - timedelta(days=10)
+    assert ohlcv_trim_cutoff("1m", now) == now - timedelta(days=35)
     assert ohlcv_trim_cutoff("5m", now) == now - timedelta(days=70)
     assert ohlcv_trim_cutoff("1d", now) is None
 

@@ -14,9 +14,16 @@ export type LeaderboardEntry = {
   origin?: string;
   completed_at?: string | null;
   tested_at?: string | null;
+  grade?: "keeper" | "candidate" | "probe" | "miss" | string;
   passes_prop_screen?: boolean;
   gate_miss?: string | null;
   prop_ready_score: number;
+  data?: {
+    slug?: string;
+    name?: string;
+    probe_feed?: boolean;
+    summary?: string;
+  } | null;
   sample?: {
     start?: string | null;
     end?: string | null;
@@ -41,6 +48,10 @@ export type LeaderboardEntry = {
     oos_trades?: number | null;
     oos_win_rate_pct?: number | null;
     full_trades?: number | null;
+    holdout_net?: number | null;
+    holdout_trades?: number | null;
+    expectancy_ci_low?: number | null;
+    expectancy_ci_high?: number | null;
     summary?: string;
   } | null;
   metrics: {
@@ -50,6 +61,10 @@ export type LeaderboardEntry = {
     win_rate_pct?: number | null;
     max_drawdown_usd?: number;
     expectancy_usd?: number | null;
+    expectancy_ci_low?: number | null;
+    expectancy_ci_high?: number | null;
+    holdout_net_usd?: number | null;
+    holdout_trades?: number | null;
     avg_win_usd?: number | null;
     avg_loss_usd?: number | null;
     robustness_pct?: number | null;
@@ -95,9 +110,12 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
   const m = row.metrics;
   const reversed = row.origin === "reverse" || row.category.startsWith("reversed_");
   const nearMiss = row.origin === "near_miss";
-  const keeper = row.passes_prop_screen === true || (row.prop_ready_score ?? 0) > 0;
+  const grade = row.grade || (row.passes_prop_screen ? "keeper" : "miss");
+  const keeper = grade === "keeper";
   const lowHitRate = (m.win_rate_pct ?? 100) < 42;
   const swingStyle = lowHitRate && (m.net_profit_usd ?? 0) > 0;
+  const ciLo = m.expectancy_ci_low ?? row.tests?.expectancy_ci_low;
+  const ciHi = m.expectancy_ci_high ?? row.tests?.expectancy_ci_high;
   const [watchNote, setWatchNote] = useState<string | null>(null);
   const [watching, setWatching] = useState(false);
 
@@ -123,8 +141,9 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           <p className="text-xs font-medium uppercase tracking-wide text-emerald-500/90">
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
             {reversed ? " · reverse fade" : ""}
-            {keeper && nearMiss ? " · full-sample keeper" : ""}
-            {!keeper && (nearMiss || row.gate_miss) ? " · search gate miss" : ""}
+            {grade === "probe" ? " · probe" : ""}
+            {grade === "candidate" ? " · candidate" : ""}
+            {keeper && nearMiss ? " · research-window keeper" : ""}
             {swingStyle && row.prop_ready_score === 0 ? " · swing-style R:R" : ""}
           </p>
           <Link
@@ -149,6 +168,19 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           ) : null}
         </div>
         <div className="shrink-0 text-right">
+          <p
+            className={`mb-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+              grade === "keeper"
+                ? "border-emerald-800/70 bg-emerald-950/50 text-emerald-200"
+                : grade === "candidate"
+                  ? "border-amber-800/70 bg-amber-950/50 text-amber-200"
+                  : grade === "probe"
+                    ? "border-zinc-700 bg-zinc-900 text-zinc-300"
+                    : "border-zinc-800 bg-zinc-950 text-zinc-500"
+            }`}
+          >
+            {grade}
+          </p>
           {reversed ? (
             <p className="mb-1 rounded-full border border-violet-800/70 bg-violet-950/50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-200">
               Reverse
@@ -169,9 +201,18 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           need ≥42% hit rate).
         </p>
       ) : null}
-      {!keeper && row.gate_miss ? (
+      {row.data?.summary ? (
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">{row.data.summary}</p>
+      ) : null}
+      {grade === "probe" && row.gate_miss ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">{row.gate_miss}</p>
+      ) : null}
+      {grade === "candidate" && row.gate_miss ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">{row.gate_miss}</p>
+      ) : null}
+      {grade === "miss" && row.gate_miss ? (
         <p className="mt-3 text-[11px] leading-relaxed text-amber-200/90">
-          Not unprofitable — {row.gate_miss}. Keepers need enough trades in the sample, not just green P&amp;L.
+          Not unprofitable — {row.gate_miss}. Keepers need holdout + a confidence interval, not just green P&amp;L.
         </p>
       ) : null}
       <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
@@ -188,7 +229,20 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           positive={!lowHitRate}
         />
         <Metric label="Max DD" value={m.max_drawdown_usd != null ? fmtUsd(-m.max_drawdown_usd) : "—"} />
-        <Metric label="Expectancy / trade" value={fmtUsd(m.expectancy_usd)} positive={(m.expectancy_usd ?? 0) > 0} />
+        <Metric
+          label="Expectancy / trade"
+          value={
+            ciLo != null && ciHi != null
+              ? `${fmtUsd(m.expectancy_usd)} (${fmtUsd(ciLo)}–${fmtUsd(ciHi)})`
+              : fmtUsd(m.expectancy_usd)
+          }
+          positive={(m.expectancy_usd ?? 0) > 0 && (ciLo == null || ciLo > 0)}
+        />
+        <Metric
+          label="Holdout net"
+          value={fmtUsd(m.holdout_net_usd ?? row.tests?.holdout_net)}
+          positive={(m.holdout_net_usd ?? row.tests?.holdout_net ?? 0) > 0}
+        />
         <Metric label="Avg win" value={fmtUsd(m.avg_win_usd)} positive />
         <Metric label="Avg loss" value={m.avg_loss_usd != null ? fmtUsd(-Math.abs(m.avg_loss_usd)) : "—"} positive={false} />
         <Metric

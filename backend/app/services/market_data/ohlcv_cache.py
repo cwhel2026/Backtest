@@ -68,6 +68,12 @@ def download_history(
             return run_databento_ingestion(session, payload), label
         except Exception:
             session.rollback()
+    yahoo_start, yahoo_end = start, end
+    if timeframe == "1m":
+        cap = yahoo_end - timedelta(days=7)
+        if yahoo_start < cap:
+            yahoo_start = cap
+            payload = {**payload, "start": yahoo_start.isoformat()}
     return run_yahoo_ingestion(session, payload), f"Yahoo Finance {timeframe}"
 
 

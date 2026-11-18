@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 
+def split_holdout(bars: list, holdout_frac: float = 0.2) -> tuple[list, list]:
+    """Last holdout_frac of bars is never used for train / OOS / selection."""
+    if len(bars) < 80 or holdout_frac <= 0:
+        return bars, []
+    cut = int(len(bars) * (1.0 - holdout_frac))
+    cut = max(40, min(cut, len(bars) - 15))
+    return bars[:cut], bars[cut:]
+
+
 def walk_forward_folds(bars: list, n_folds: int = 3) -> list[tuple[list, list]]:
     """Expanding train windows with contiguous OOS slices (intraday bars in time order)."""
     if n_folds < 2 or len(bars) < 100:

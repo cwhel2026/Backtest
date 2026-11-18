@@ -136,4 +136,14 @@ def format_metric_display(metrics: dict[str, Any] | None) -> dict[str, str | int
         "robustness_pct": round(float(metrics["mc_pass_rate"]) * 100, 0)
         if metrics.get("mc_pass_rate") is not None
         else None,
+        "expectancy_ci_low": round(float(metrics["expectancy_ci_low"]), 2)
+        if metrics.get("expectancy_ci_low") is not None
+        else None,
+        "expectancy_ci_high": round(float(metrics["expectancy_ci_high"]), 2)
+        if metrics.get("expectancy_ci_high") is not None
+        else None,
+        "holdout_net_usd": round(float(metrics["holdout_net"]), 2)
+        if metrics.get("holdout_net") is not None
+        else None,
+        "holdout_trades": int(metrics["holdout_trades"]) if metrics.get("holdout_trades") is not None else None,
     }

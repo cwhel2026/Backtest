@@ -100,7 +100,7 @@ def initial_search_progress(*, symbols: tuple[str, ...], budget: int, history_da
         "setup_family": None,
         "scoring_subphase": None,
         "search_families": list(SEARCH_FAMILY_LABELS),
-        "walk_forward": "train gate · multi-fold OOS · full-sample prop screen · AI mutation rounds when enabled",
+        "walk_forward": "holdout 20% · train gate · multi-fold OOS · research-window screen · expectancy CI · AI rounds",
         "ai_round": 0,
         "ai_specs_proposed": 0,
         "experiments_recorded": 0,

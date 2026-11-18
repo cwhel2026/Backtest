@@ -22,8 +22,8 @@ export default function ResultsPage() {
         <div>
           <h2 className="page-title">Prop results</h2>
           <p className="page-sub">
-            Each card shows when it was tested, the sample window, and the stop/$ risk it took. Default:
-            keepers. Green P&amp;L with too few trades is a sample-size miss, not a losing strategy.
+            Default: keepers only (≥15 trades, holdout, expectancy CI above $0). Yahoo 1m ~7-day runs are
+            probes — tick the box to see them. Each card shows the feed, sample window, and stop/$ risk.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-zinc-400">
@@ -33,7 +33,7 @@ export default function ResultsPage() {
             onChange={(e) => setShowAll(e.target.checked)}
             className="rounded border-zinc-600"
           />
-          Include gate misses
+          Include probes &amp; gate misses
         </label>
       </header>
 
