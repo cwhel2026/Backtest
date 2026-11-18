@@ -183,6 +183,7 @@ Browsers block the site unless the API allows your frontend URL.
 
 ## Optional later
 
+- **OHLCV volume (recommended):** bars live as parquet files, not Postgres rows. On the backend service add a volume mounted at `/data` and set `OHLCV_STORE_DIR=/data/ohlcv` so history survives deploys. Without it, search re-downloads after a rebuild — that is still better than filling the Postgres disk.  
 - **FinzData:** add `FINZDATA_API_KEY` on the backend. Free plan is daily bars; 1m/5m search needs a paid market, otherwise Yahoo is used.  
 - **Databento:** add `DATABENTO_API_KEY` on the backend.  
 - **Full split deploy** (separate worker): see [DEPLOY_RAILWAY.md](./DEPLOY_RAILWAY.md).

@@ -7,9 +7,9 @@ from decimal import Decimal
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.models.backtest import OhlcvBar
 from app.models.enums import DatasetValidationStatus
 from app.models.market_data import DataProvider, HistoricalDataset
+from app.services.market_data.ohlcv_parquet import bar_count, coverage, write_bars
 
 
 def persist_bars_to_dataset(
@@ -59,10 +59,11 @@ def persist_bars_to_dataset(
     if existing is None:
         session.add(dataset)
         session.flush()
-        _insert_ohlcv_chunks(session, dataset.id, deduped)
-        dataset.row_count = len(deduped)
-        dataset.coverage_start = deduped[0][0]
-        dataset.coverage_end = deduped[-1][0]
+        write_bars(dataset.id, deduped)
+        dataset.row_count = bar_count(dataset.id)
+        start, end = coverage(dataset.id)
+        dataset.coverage_start = start
+        dataset.coverage_end = end
     else:
         merge_bars_into_dataset(session, dataset, deduped)
         dataset.provider_id = provider.id
@@ -70,7 +71,13 @@ def persist_bars_to_dataset(
 
     dataset.downloaded_at = datetime.now(UTC)
     dataset.validation_status = DatasetValidationStatus.VALIDATED
-    dataset.meta = {**(dataset.meta or {}), **meta, "synthetic": False, "duplicate_rows_skipped": dupes}
+    dataset.meta = {
+        **(dataset.meta or {}),
+        **meta,
+        "synthetic": False,
+        "duplicate_rows_skipped": dupes,
+        "store": "parquet",
+    }
     session.flush()
     return dataset
 
@@ -109,42 +116,10 @@ def merge_bars_into_dataset(
     incoming = bars_outside_coverage(dataset.coverage_start, dataset.coverage_end, bars)
     if not incoming:
         return 0
-    _insert_ohlcv_chunks(session, dataset.id, incoming)
-    dataset.row_count = int(dataset.row_count or 0) + len(incoming)
-    first, last = incoming[0][0], incoming[-1][0]
-    if dataset.coverage_start is None or first < dataset.coverage_start:
-        dataset.coverage_start = first
-    if dataset.coverage_end is None or last > dataset.coverage_end:
-        dataset.coverage_end = last
-    dataset.downloaded_at = datetime.now(UTC)
+    write_bars(dataset.id, incoming)
+    _refresh_dataset_from_store(dataset)
     session.flush()
     return len(incoming)
-
-
-def _insert_ohlcv_chunks(
-    session: Session,
-    dataset_id: uuid.UUID,
-    rows: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]],
-    *,
-    chunk_size: int = 1500,
-) -> None:
-    for i in range(0, len(rows), chunk_size):
-        chunk = rows[i : i + chunk_size]
-        session.add_all(
-            [
-                OhlcvBar(
-                    dataset_id=dataset_id,
-                    ts=ts,
-                    open=open_,
-                    high=high,
-                    low=low,
-                    close=close,
-                    volume=volume,
-                )
-                for ts, open_, high, low, close, volume in chunk
-            ]
-        )
-        session.flush()
 
 
 def append_bars_to_dataset(
@@ -155,25 +130,25 @@ def append_bars_to_dataset(
     """Insert bars newer than coverage_end. Returns count added."""
     if not bars:
         return 0
-    cutoff = dataset.coverage_end
-    added: list[OhlcvBar] = []
-    for ts, o, h, l, c, v in sorted(bars, key=lambda x: x[0]):
-        ts_u = ts.astimezone(UTC) if ts.tzinfo else ts.replace(tzinfo=UTC)
-        if cutoff is not None and ts_u <= cutoff:
-            continue
-        added.append(
-            OhlcvBar(dataset_id=dataset.id, ts=ts_u, open=o, high=h, low=l, close=c, volume=v)
-        )
-    if not added:
+    incoming = bars_outside_coverage(dataset.coverage_start, dataset.coverage_end, bars)
+    if not incoming:
         return 0
-    session.add_all(added)
-    dataset.row_count = int(dataset.row_count or 0) + len(added)
-    dataset.coverage_end = added[-1].ts
-    if dataset.coverage_start is None:
-        dataset.coverage_start = added[0].ts
-    dataset.downloaded_at = datetime.now(UTC)
+    write_bars(dataset.id, incoming)
+    before = int(dataset.row_count or 0)
+    _refresh_dataset_from_store(dataset)
     meta = dict(dataset.meta or {})
-    meta["live_appended"] = int(meta.get("live_appended") or 0) + len(added)
+    meta["live_appended"] = int(meta.get("live_appended") or 0) + max(0, int(dataset.row_count or 0) - before)
+    meta["store"] = "parquet"
     dataset.meta = meta
     session.flush()
-    return len(added)
+    return max(0, int(dataset.row_count or 0) - before)
+
+
+def _refresh_dataset_from_store(dataset: HistoricalDataset) -> None:
+    dataset.row_count = bar_count(dataset.id)
+    start, end = coverage(dataset.id)
+    if start is not None:
+        dataset.coverage_start = start
+    if end is not None:
+        dataset.coverage_end = end
+    dataset.downloaded_at = datetime.now(UTC)

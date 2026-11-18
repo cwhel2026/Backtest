@@ -92,7 +92,8 @@ export default function MarketDataPage() {
       <div>
         <h2 className="page-title">Market data</h2>
         <p className="page-sub">
-          One stored series per symbol and timeframe. Search and paper ticks reuse it and only append new bars.
+          One series per symbol and timeframe, stored as daily parquet files — not as millions of Postgres
+          rows. Search reuses the files and only appends new days; old days roll off.
         </p>
       </div>
 

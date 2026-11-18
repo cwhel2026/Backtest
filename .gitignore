@@ -12,5 +12,6 @@ dist/
 .coverage
 htmlcov/
 postgres_data/
+data/ohlcv/
 .DS_Store
 *.log
