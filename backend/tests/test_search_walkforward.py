@@ -1,9 +1,23 @@
-from app.services.search_walkforward import aggregate_fold_metrics, folds_pass_oos, walk_forward_folds
+from app.services.search_walkforward import (
+    aggregate_fold_metrics,
+    folds_pass_oos,
+    split_holdout,
+    walk_forward_folds,
+)
 
 
 class _Bar:
     def __init__(self, i: int):
         self.i = i
+
+
+def test_split_holdout_is_time_ordered():
+    bars = [_Bar(i) for i in range(200)]
+    research, holdout = split_holdout(bars, 0.2)
+    assert len(research) == 160
+    assert len(holdout) == 40
+    assert research[-1].i == 159
+    assert holdout[0].i == 160
 
 
 def test_walk_forward_folds_splits():

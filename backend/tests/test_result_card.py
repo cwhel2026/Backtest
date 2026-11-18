@@ -1,6 +1,12 @@
 from datetime import UTC, datetime
 
-from app.services.result_card import build_test_meta, risk_profile, sample_window
+from app.services.result_card import build_test_meta, data_feed, risk_profile, sample_window
+
+
+def test_data_feed_labels_yahoo_1m_as_probe():
+    feed = data_feed(provider_slug="yahoo", provider_name="Yahoo Finance (free)", timeframe="1m", sample_days=6.5)
+    assert feed["probe_feed"] is True
+    assert "probe" in feed["summary"].lower()
 
 
 def test_sample_window_summarizes_1m_week():
@@ -43,3 +49,4 @@ def test_test_meta_includes_oos_and_tested_at():
     assert meta["oos_trades"] == 2
     assert "OOS 2 trades, 50% WR" in meta["summary"]
     assert "full sample 4 trades" in meta["summary"]
+    assert "research-window" in meta["method"]

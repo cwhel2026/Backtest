@@ -14,9 +14,11 @@ class LeaderboardEntry(BaseModel):
     tested_at: str | None = None
     prop_ready_score: int
     passes_prop_screen: bool
+    grade: str = "miss"
     gate_miss: str | None = None
     metrics: dict
     sample: dict | None = None
+    data: dict | None = None
     risk: dict | None = None
     tests: dict | None = None
     rank_score: float = 0
@@ -35,7 +37,7 @@ class SearchPlan(BaseModel):
     combos_per_symbol: int = 0
     history_days: int = 0
     families: list[str] = Field(default_factory=list)
-    walk_forward: str = "train gate · multi-fold OOS · prop screen · AI rounds when enabled"
+    walk_forward: str = "holdout 20% · train · multi-fold OOS · research screen · expectancy CI"
     reverse_fades: bool = True
 
 

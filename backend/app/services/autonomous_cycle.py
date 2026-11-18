@@ -176,7 +176,7 @@ def run_autonomous_prop_cycle(
         warnings: list[str] = []
         for idx, symbol in enumerate(symbols):
             for tf in timeframes:
-                days = int(settings.search_1m_history_days) if tf == "1m" else history_days
+                days = int(settings.search_1m_window_days()) if tf == "1m" else history_days
                 job = _job()
                 merge_search_progress(
                     job,

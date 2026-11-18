@@ -1,7 +1,7 @@
 import os
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.railway import celery_urls_from_redis, to_async_database_url, to_sync_database_url
@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     search_timeframes: str = Field(default="5m,1m", validation_alias="SEARCH_TIMEFRAMES")
     search_1m_budget_per_symbol: int = Field(default=72, validation_alias="SEARCH_1M_BUDGET_PER_SYMBOL")
     search_1m_history_days: int = Field(default=7, validation_alias="SEARCH_1M_HISTORY_DAYS")
+    search_1m_paid_history_days: int = Field(default=30, validation_alias="SEARCH_1M_PAID_HISTORY_DAYS")
     search_prefer_ibkr: bool = Field(default=False, validation_alias="SEARCH_PREFER_IBKR")
     search_robustness_enabled: bool = Field(default=True, validation_alias="SEARCH_ROBUSTNESS_ENABLED")
     search_robustness_shuffles: int = Field(default=8, validation_alias="SEARCH_ROBUSTNESS_SHUFFLES")
@@ -122,15 +123,20 @@ class Settings(BaseSettings):
         "search_ai_specs_per_round",
         "search_1m_budget_per_symbol",
         "search_1m_history_days",
+        "search_1m_paid_history_days",
         "search_robustness_shuffles",
         "search_stress_slip_ticks",
+        "ibkr_port",
+        "ibkr_client_id",
         mode="before",
     )
     @classmethod
-    def _coerce_env_int(cls, v: object) -> object:
-        """Railway env values are sometimes set as \"60+\" — strip trailing plus signs."""
+    def _coerce_env_int(cls, v: object, info: ValidationInfo) -> object:
+        """Railway env values are sometimes set as \"60+\" or left blank."""
         if isinstance(v, str):
             s = v.strip().strip('"').strip("'")
+            if s == "":
+                return {"ibkr_port": 7497, "ibkr_client_id": 11}.get(info.field_name, v)
             while s.endswith("+"):
                 s = s[:-1].strip()
             if s.isdigit():
@@ -176,6 +182,14 @@ class Settings(BaseSettings):
 
     def search_timeframe_list(self) -> list[str]:
         return [t.strip() for t in self.search_timeframes.split(",") if t.strip()]
+
+    def search_1m_window_days(self) -> int:
+        """Yahoo 1m max is 7 days. FinzData / Databento can fill a 30-day keeper window."""
+        yahoo_cap = int(self.search_1m_history_days or 7)
+        paid = int(self.search_1m_paid_history_days or 30)
+        if self.finzdata_configured or self.databento_configured:
+            return max(yahoo_cap, paid)
+        return yahoo_cap
 
 
 @lru_cache

@@ -112,7 +112,8 @@ def prune_old_jobs(session: Session, *, keep: int = 20) -> int:
 
 def ohlcv_trim_cutoff(timeframe: str, now: datetime) -> datetime | None:
     if timeframe == "1m":
-        return now - timedelta(days=10)
+        # Paid 1m search uses ~30 days; keep a small buffer so GC does not wipe the window.
+        return now - timedelta(days=35)
     if timeframe in ("5m", "15m"):
         return now - timedelta(days=70)
     return None

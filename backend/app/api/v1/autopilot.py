@@ -172,10 +172,11 @@ async def autopilot_status(
         search_symbols=sym_list,
         search_plan=search_plan,
         message=(
-            "Always-on prop desk: hourly search on Nasdaq + S&P, walk-forward backtests, "
-            "then a paper book that opens and closes trades on new 5-minute bars under "
-            "prop-style daily loss, trailing drawdown, and profit target. "
-            "Simulated only — delayed data, not a broker."
+            "Always-on prop desk: hourly search on Nasdaq + S&P with a 20% holdout, "
+            "walk-forward OOS, and an expectancy confidence interval. Keepers need ≥15 trades "
+            "and a CI that does not include $0 — Yahoo 1m (~7 days) is a probe scan. "
+            "Paper book trades new 5-minute bars under prop-style daily loss, trailing DD, "
+            "and profit target. Simulated only — not a broker."
         ),
         background_search=background_search,
         profitable_candidates=[LeaderboardEntry(**e) for e in profitable],

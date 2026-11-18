@@ -114,7 +114,8 @@ export default function HomePage() {
       <header>
         <h2 className="page-title">Prop desk</h2>
         <p className="page-sub">
-          Search runs on the server, keepers are backtested walk-forward, then the paper book takes the next trades.
+          Search holds out the last 20% of bars, then walk-forward scores the rest. Keepers need a real sample —
+          Yahoo 1m (~7 days) is a probe, not the product.
         </p>
       </header>
 
@@ -128,8 +129,8 @@ export default function HomePage() {
         </li>
         <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">2 · Backtest</p>
-          <p className="mt-2 text-sm text-zinc-200">{candidates.length} profitable keepers</p>
-          <p className="mt-1 text-xs text-zinc-500">Train, out-of-sample, then full sample.</p>
+          <p className="mt-2 text-sm text-zinc-200">{candidates.length} research-grade keepers</p>
+          <p className="mt-1 text-xs text-zinc-500">Holdout, OOS, then expectancy 95% CI.</p>
         </li>
         <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">3 · Forward test</p>
@@ -232,14 +233,14 @@ export default function HomePage() {
 
       <section>
         <div className="flex items-end justify-between gap-2">
-          <h3 className="text-sm font-semibold text-zinc-100">Profitable candidates</h3>
+          <h3 className="text-sm font-semibold text-zinc-100">Keepers</h3>
           <Link href="/backtests" className="text-xs text-emerald-500 hover:underline">
             All results
           </Link>
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          Keepers: net &gt; $0, PF ≥ 1.1, enough trades for the timeframe (4 on 1m, 8 on 5m), win rate ≥ 42%,
-          DD under ~$3.5k. Cards show when it was tested, the bar window, and the stop/$ risk it took.
+          Keepers: ≥15 trades, PF ≥ 1.1, WR ≥ 42%, holdout not red, expectancy 95% CI above $0. Yahoo 1m
+          four-trade ORBs are probes (include them under Latest tests). 5m ~50-day or paid 1m is the desk path.
         </p>
         {searching ? (
           <p className="mt-4 text-sm text-amber-200/90">
@@ -264,7 +265,8 @@ export default function HomePage() {
       <section>
         <h3 className="text-sm font-semibold text-zinc-100">Latest tests</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Includes close calls that did not pass the prop screen, so a finished search is never a blank page.
+          Probes, candidates, and gate misses — green P&amp;L on a thin sample is not a losing strategy, and it is
+          not a keeper.
         </p>
         {!latestTests.length ? (
           <p className="mt-3 text-sm text-zinc-500">

@@ -23,8 +23,20 @@ from app.services.paper_book import enroll_strategy
 from app.util.serde import provisional_reproducibility_id
 from app.services.ai_search_mutator import propose_search_specs
 from app.services.prop_screen import is_profitable_backtest, rank_score
+from app.services.research_grade import (
+    GRADE_KEEPER,
+    HOLDOUT_FRAC,
+    attach_expectancy_ci,
+    research_grade,
+    source_slug,
+)
 from app.services.search_experiment_memory import SearchExperimentMemory
-from app.services.search_walkforward import aggregate_fold_metrics, folds_pass_oos, walk_forward_folds
+from app.services.search_walkforward import (
+    aggregate_fold_metrics,
+    folds_pass_oos,
+    split_holdout,
+    walk_forward_folds,
+)
 from app.services.strategy_factory import create_strategy_sync
 from app.services.strategy_reverse import is_anti_edge, reverse_passes_oos, reverse_spec
 from app.services.strategy_search_space import refine_spec, sample_search_specs
@@ -51,7 +63,9 @@ def _metrics_for_spec(spec: dict, bars, instrument: Instrument, dataset_tf: str)
             dataset_tf,
             BacktestAssumptions(slippage_ticks_per_side=1),
         )
-        return result.metrics
+        pnls = [float(t.get("net_pnl") or 0) for t in result.trades]
+        seed = abs(hash(spec.get("name") or "spec")) % 10_000
+        return attach_expectancy_ci(result.metrics, pnls, seed=seed)
 
     try:
         future = _BT_SEARCH_POOL.submit(_run)
@@ -144,6 +158,40 @@ def _apply_robustness(
     return {**full_m, **report["metrics"]}, int(report["backtests"])
 
 
+def _attach_holdout_and_grade(
+    spec: dict,
+    full_m: dict,
+    test_m: dict | None,
+    holdout: list,
+    instrument: Instrument,
+    timeframe: str,
+    *,
+    origin: str,
+    data_source: str,
+    sample_days: float | None,
+) -> dict:
+    holdout_m = None
+    if holdout and len(holdout) >= 40:
+        holdout_m = _metrics_for_spec(spec, holdout, instrument, timeframe)
+    graded = dict(full_m)
+    if holdout_m:
+        graded["holdout_net"] = holdout_m.get("total_net_profit")
+        graded["holdout_trades"] = holdout_m.get("trade_count")
+        graded["holdout_win_rate"] = holdout_m.get("win_rate")
+        graded["holdout_profit_factor"] = holdout_m.get("profit_factor")
+    graded["data_source"] = data_source
+    graded["grade"] = research_grade(
+        graded,
+        oos=test_m,
+        holdout=holdout_m,
+        reverse=origin == "reverse",
+        timeframe=timeframe,
+        data_source=data_source,
+        sample_days=sample_days,
+    )
+    return graded
+
+
 @dataclass
 class SearchHit:
     spec: dict
@@ -199,8 +247,13 @@ def run_deep_search(
         ai_rounds = 1
 
     bars = load_bars(session, dataset.id)
-    train, _test = _split_train_test(bars)
+    research, holdout = split_holdout(bars, HOLDOUT_FRAC)
+    train, _test = _split_train_test(research)
     tf = dataset.timeframe
+    data_source = source_slug(str((dataset.meta or {}).get("source") or ""))
+    sample_days = None
+    if dataset.coverage_start and dataset.coverage_end:
+        sample_days = max((dataset.coverage_end - dataset.coverage_start).total_seconds(), 0) / 86400
 
     specs = sample_search_specs(symbol, budget, seed=seed, timeframe=tf)
     evaluated = 0
@@ -250,7 +303,7 @@ def run_deep_search(
             return
 
         passed_oos, test_m, oos_runs = _run_oos_battery(
-            spec, bars, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
+            spec, research, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
         )
         evaluated += oos_runs
         _tick(spec, subphase=sub_oos)
@@ -263,7 +316,7 @@ def run_deep_search(
             )
             return
 
-        full_m = _metrics_for_spec(spec, bars, instrument, tf)
+        full_m = _metrics_for_spec(spec, research, instrument, tf)
         evaluated += 1
         _tick(spec, subphase=sub_full)
         reverse = origin == "reverse"
@@ -271,12 +324,27 @@ def run_deep_search(
             memory.record(spec, full_m or test_m, outcome="prop_reject", note="prop screen")
             return
 
-        full_m, extra = _apply_robustness(spec, bars, instrument, tf, full_m)
+        full_m, extra = _apply_robustness(spec, research, instrument, tf, full_m)
         evaluated += extra
         _tick(spec, subphase="robustness")
         if not full_m:
             memory.record(spec, test_m, outcome="robust_fail", note="cost/MC/neighborhood")
             return
+
+        full_m = _attach_holdout_and_grade(
+            spec,
+            full_m,
+            test_m,
+            holdout,
+            instrument,
+            tf,
+            origin=origin,
+            data_source=data_source,
+            sample_days=sample_days,
+        )
+        if holdout:
+            evaluated += 1
+            _tick(spec, subphase="holdout")
 
         memory.record(spec, full_m, outcome="winner", note=origin)
         _consider(
@@ -303,7 +371,7 @@ def run_deep_search(
         if not train_m or float(train_m.get("total_net_profit") or 0) <= 0:
             continue
         passed_oos, test_m, oos_runs = _run_oos_battery(
-            rev, bars, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
+            rev, research, instrument, tf, n_folds=n_folds, min_win_rate=oos_min_wr
         )
         evaluated += oos_runs
         _tick(rev, subphase="reverse_oos")
@@ -312,16 +380,30 @@ def run_deep_search(
             test_m, float(orig_wr) if orig_wr is not None else None
         ):
             continue
-        full_m = _metrics_for_spec(rev, bars, instrument, tf)
+        full_m = _metrics_for_spec(rev, research, instrument, tf)
         evaluated += 1
         _tick(rev, subphase="reverse_full")
         if full_m and is_profitable_backtest(full_m, reverse=True, timeframe=tf):
-            full_m, extra = _apply_robustness(rev, bars, instrument, tf, full_m)
+            full_m, extra = _apply_robustness(rev, research, instrument, tf, full_m)
             evaluated += extra
             _tick(rev, subphase="robustness")
             if not full_m:
                 memory.record(rev, test_m, outcome="robust_fail", note="reverse robustness")
                 continue
+            full_m = _attach_holdout_and_grade(
+                rev,
+                full_m,
+                test_m,
+                holdout,
+                instrument,
+                tf,
+                origin="reverse",
+                data_source=data_source,
+                sample_days=sample_days,
+            )
+            if holdout:
+                evaluated += 1
+                _tick(rev, subphase="holdout")
             memory.record(rev, full_m, outcome="winner", note="reverse")
             _consider(
                 rev,
@@ -487,6 +569,16 @@ def _persist_one_hit(
             "oos_metrics": hit.test_metrics,
             "train_metrics": hit.train_metrics,
             "original_metrics": hit.original_metrics,
+            "grade": hit.full_metrics.get("grade"),
+            "data_source": hit.full_metrics.get("data_source"),
+            "holdout_metrics": {
+                "total_net_profit": hit.full_metrics.get("holdout_net"),
+                "trade_count": hit.full_metrics.get("holdout_trades"),
+                "win_rate": hit.full_metrics.get("holdout_win_rate"),
+                "profit_factor": hit.full_metrics.get("holdout_profit_factor"),
+            }
+            if hit.full_metrics.get("holdout_net") is not None
+            else None,
             "robustness": {
                 k: hit.full_metrics.get(k)
                 for k in (
@@ -513,15 +605,33 @@ def _persist_one_hit(
                 "stress_slip_net",
                 "stress_slip_pf",
                 "robustness_score",
+                "grade",
+                "expectancy_ci_low",
+                "expectancy_ci_high",
+                "expectancy_ci_includes_zero",
+                "holdout_net",
+                "holdout_trades",
+                "holdout_win_rate",
+                "holdout_profit_factor",
+                "data_source",
             )
             if hit.full_metrics.get(k) is not None
         }
-        if extra:
-            run.metrics = {**run.metrics, **extra}
-            session.add(run)
-    if run.status == "completed" and is_profitable_backtest(
-        run.metrics, reverse=hit.origin == "reverse", timeframe=dataset.timeframe
-    ):
+        merged = {**run.metrics, **extra}
+        if not merged.get("grade"):
+            src = extra.get("data_source") or source_slug(str((dataset.meta or {}).get("source") or ""))
+            merged["grade"] = research_grade(
+                merged,
+                oos=hit.test_metrics,
+                reverse=hit.origin == "reverse",
+                timeframe=dataset.timeframe,
+                data_source=src,
+            )
+            merged["data_source"] = src
+        run.metrics = merged
+        session.add(run)
+    grade = (run.metrics or {}).get("grade") if isinstance(run.metrics, dict) else None
+    if run.status == "completed" and grade == GRADE_KEEPER:
         enroll_strategy(session, strategy, symbol)
     session.commit()
     winners.append(strategy.name)

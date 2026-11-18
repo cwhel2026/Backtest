@@ -60,10 +60,16 @@ export default function MarketDataPage() {
     setDatasets(d);
   }
 
+  function ingestDays() {
+    if (ingestTf === "1m") return ingestProvider === "yahoo" ? 7 : 30;
+    if (ingestTf === "5m") return 50;
+    return 60;
+  }
+
   async function queueIngestion() {
     setMessage(null);
     const end = new Date();
-    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const start = new Date(end.getTime() - ingestDays() * 24 * 60 * 60 * 1000);
     try {
       const res = await apiFetch<{ job_id: string; status: string }>("/api/v1/market-data/ingest", {
         method: "POST",
@@ -123,8 +129,8 @@ export default function MarketDataPage() {
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          First download is stored. Later searches do not pull the full window again — they append bars since the
-          last coverage end. Default source: free Yahoo futures (no key).
+          First download is stored. Later searches only append new bars. Yahoo 1m maxes at 7 days (probe-grade).
+          FinzData / IBKR / Databento can fill a longer 1m window when configured — that is the keeper path.
         </p>
         <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
@@ -134,7 +140,9 @@ export default function MarketDataPage() {
               value={ingestProvider}
               onChange={(e) => setIngestProvider(e.target.value)}
             >
-              <option value="yahoo">Yahoo Finance (free)</option>
+              <option value="yahoo">Yahoo Finance (free, 1m max 7d)</option>
+              <option value="finzdata">FinzData (paid 1m/5m)</option>
+              <option value="ibkr">Interactive Brokers</option>
               <option value="databento">Databento (licensed)</option>
             </select>
           </label>
@@ -170,7 +178,7 @@ export default function MarketDataPage() {
             onClick={queueIngestion}
             className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 md:w-auto md:py-2"
           >
-            Queue download (last 7 days)
+            Queue download (last {ingestDays()} days)
           </button>
         </div>
         {message ? <p className="mt-3 text-sm text-zinc-400">{message}</p> : null}

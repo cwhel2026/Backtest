@@ -26,7 +26,8 @@ def test_rejects_swing_style_low_win_rate():
     assert prop_readiness_score(m) == 0
 
 
-def test_1m_orb_with_four_trades_is_a_keeper():
+def test_1m_orb_with_four_trades_still_passes_green_screen():
+    """Green enough to save as a probe; keeper grade lives in research_grade."""
     m = {
         "total_net_profit": 2137,
         "profit_factor": 91.93,

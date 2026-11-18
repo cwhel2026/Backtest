@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from app.services.research_grade import source_slug
+
 
 def sample_window(
     *,
@@ -104,6 +106,40 @@ def risk_profile(
     }
 
 
+def data_feed(
+    *,
+    provider_slug: str | None,
+    provider_name: str | None,
+    timeframe: str,
+    source_meta: str | None = None,
+    sample_days: float | None = None,
+) -> dict[str, Any]:
+    slug = source_slug(provider_slug or source_meta or provider_name)
+    name = provider_name or {
+        "yahoo": "Yahoo Finance (delayed)",
+        "finzdata": "FinzData",
+        "ibkr": "Interactive Brokers",
+        "databento": "Databento",
+        "csv": "Imported CSV",
+    }.get(slug, slug or "Unknown feed")
+    probe = slug == "yahoo" and (timeframe or "").lower() in ("1m", "1min", "1")
+    bits = [name]
+    if probe:
+        bits.append("1m max ~7 days — probe scan, not a keeper feed")
+    elif slug == "yahoo":
+        bits.append("delayed · research-only")
+    elif slug == "finzdata":
+        bits.append("continuous futures")
+    if sample_days is not None and sample_days < 12 and (timeframe or "").lower() in ("1m", "1min", "1"):
+        bits.append(f"{sample_days:g}d window")
+    return {
+        "slug": slug,
+        "name": name,
+        "probe_feed": probe,
+        "summary": " · ".join(bits),
+    }
+
+
 def build_test_meta(
     *,
     tested_at: datetime | None,
@@ -116,16 +152,21 @@ def build_test_meta(
     train = params.get("train_metrics") if isinstance(params.get("train_metrics"), dict) else {}
     origin = str(params.get("origin") or "deep")
     method = {
-        "near_miss": "Closest full-sample test (did not pass every search gate)",
-        "reverse": "Walk-forward reverse fade · train / OOS / full sample",
-        "ai": "Walk-forward + AI mutation · train / OOS / full sample",
-        "deep": "Walk-forward · train / OOS / full-sample prop screen",
+        "near_miss": "Closest research-window test (did not pass every search gate)",
+        "reverse": "Holdout · walk-forward reverse fade · train / OOS / research window",
+        "ai": "Holdout · walk-forward + AI mutation · train / OOS / research window",
+        "deep": "Holdout · walk-forward · train / OOS / research-window screen",
     }.get(origin, "Walk-forward backtest")
+    holdout = params.get("holdout_metrics") if isinstance(params.get("holdout_metrics"), dict) else {}
     oos_trades = _int(oos.get("trade_count"))
     oos_wr = _float(oos.get("win_rate"))
     oos_net = _float(oos.get("total_net_profit"))
     train_trades = _int(train.get("trade_count"))
     full_trades = _int(metrics.get("trade_count"))
+    holdout_net = _float(holdout.get("total_net_profit") if holdout else metrics.get("holdout_net"))
+    holdout_trades = _int(holdout.get("trade_count") if holdout else metrics.get("holdout_trades"))
+    ci_lo = _float(metrics.get("expectancy_ci_low"))
+    ci_hi = _float(metrics.get("expectancy_ci_high"))
     bits = [method]
     if train_trades:
         bits.append(f"train {train_trades} trades")
@@ -133,6 +174,12 @@ def build_test_meta(
         wr_bit = f", {oos_wr:.0%} WR" if oos_wr is not None else ""
         net_bit = f", net ${oos_net:.0f}" if oos_net is not None else ""
         bits.append(f"OOS {oos_trades} trades{wr_bit}{net_bit}")
+    if holdout_trades or holdout_net is not None:
+        net_bit = f", net ${holdout_net:.0f}" if holdout_net is not None else ""
+        tr_bit = f"{holdout_trades} trades" if holdout_trades else "window"
+        bits.append(f"holdout {tr_bit}{net_bit}")
+    if ci_lo is not None and ci_hi is not None:
+        bits.append(f"expectancy 95% CI ${ci_lo:.0f}–${ci_hi:.0f}")
     if full_trades:
         bits.append(f"full sample {full_trades} trades")
     return {
@@ -144,6 +191,10 @@ def build_test_meta(
         "oos_net": oos_net,
         "train_trades": train_trades,
         "full_trades": full_trades,
+        "holdout_net": holdout_net,
+        "holdout_trades": holdout_trades,
+        "expectancy_ci_low": ci_lo,
+        "expectancy_ci_high": ci_hi,
         "summary": " · ".join(bits),
     }
 
