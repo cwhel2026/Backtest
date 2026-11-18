@@ -12,6 +12,7 @@ from pathlib import Path
 from app.util.db_errors import (
     POSTGRES_RECOVERY_MESSAGE,
     compact_error,
+    exception_text,
     is_disk_full,
     is_disk_full_text,
     is_postgres_recovery,
@@ -32,7 +33,7 @@ RETRYABLE_SNIPPETS = (
 def is_retryable_db(exc: BaseException | str) -> bool:
     if not isinstance(exc, str) and (is_postgres_recovery(exc) or is_disk_full(exc)):
         return True
-    text = f"{exc} {getattr(exc, 'orig', '')}".lower() if not isinstance(exc, str) else exc.lower()
+    text = exception_text(exc)
     return is_postgres_recovery(text) or is_disk_full_text(text) or any(s in text for s in RETRYABLE_SNIPPETS)
 
 
@@ -81,10 +82,24 @@ def alembic_ini() -> Path:
 
 def run_alembic_upgrade() -> None:
     ini = alembic_ini()
-    subprocess.check_call(
+    result = subprocess.run(
         [sys.executable, "-m", "alembic", "-c", str(ini), "upgrade", "head"],
         cwd=str(ini.parent),
+        capture_output=True,
+        text=True,
     )
+    if result.returncode == 0:
+        return
+    output = f"{result.stdout}\n{result.stderr}".strip()
+    err = subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
+    if is_retryable_db(output) or is_postgres_recovery(output):
+        raise RuntimeError(output or str(err)) from err
+    raise err
 
 
 def main(argv: list[str] | None = None) -> int:

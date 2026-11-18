@@ -35,9 +35,10 @@ def exception_text(exc: BaseException | str) -> str:
     seen = 0
     while current is not None and seen < 8:
         parts.append(str(current))
-        orig = getattr(current, "orig", None)
-        if orig is not None:
-            parts.append(str(orig))
+        for attr in ("orig", "stderr", "stdout", "output"):
+            val = getattr(current, attr, None)
+            if val:
+                parts.append(str(val))
         current = current.__cause__ or current.__context__
         seen += 1
     return " ".join(parts).lower()
