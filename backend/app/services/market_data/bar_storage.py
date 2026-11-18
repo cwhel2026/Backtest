@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from app.models.backtest import OhlcvBar
@@ -23,8 +24,6 @@ def persist_bars_to_dataset(
     if not bars:
         raise ValueError("No bars to persist")
 
-    from sqlalchemy import select
-
     provider = session.execute(select(DataProvider).where(DataProvider.slug == provider_slug)).scalar_one_or_none()
     if not provider:
         raise ValueError(f"Unknown provider {provider_slug}")
@@ -43,7 +42,13 @@ def persist_bars_to_dataset(
     if not deduped:
         raise ValueError("No bars after deduplication")
 
-    dataset = HistoricalDataset(
+    existing = session.execute(
+        select(HistoricalDataset)
+        .where(HistoricalDataset.instrument_id == instrument_id, HistoricalDataset.timeframe == timeframe)
+        .order_by(desc(HistoricalDataset.downloaded_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    dataset = existing or HistoricalDataset(
         provider_id=provider.id,
         instrument_id=instrument_id,
         timeframe=timeframe,
@@ -51,31 +56,51 @@ def persist_bars_to_dataset(
         validation_status=DatasetValidationStatus.PENDING,
         meta={**meta, "synthetic": False},
     )
-    session.add(dataset)
-    session.flush()
+    if existing is None:
+        session.add(dataset)
+        session.flush()
+    else:
+        session.execute(delete(OhlcvBar).where(OhlcvBar.dataset_id == dataset.id))
+        session.flush()
+        dataset.provider_id = provider.id
+        dataset.version_tag = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
 
-    ohlcv_rows = [
-        OhlcvBar(
-            dataset_id=dataset.id,
-            ts=ts,
-            open=open_,
-            high=high,
-            low=low,
-            close=close,
-            volume=volume,
-        )
-        for ts, open_, high, low, close, volume in deduped
-    ]
-    session.add_all(ohlcv_rows)
+    _insert_ohlcv_chunks(session, dataset.id, deduped)
 
-    dataset.row_count = len(ohlcv_rows)
+    dataset.row_count = len(deduped)
     dataset.coverage_start = deduped[0][0]
     dataset.coverage_end = deduped[-1][0]
     dataset.downloaded_at = datetime.now(UTC)
     dataset.validation_status = DatasetValidationStatus.VALIDATED
-    dataset.meta["duplicate_rows_skipped"] = dupes
+    dataset.meta = {**(dataset.meta or {}), **meta, "synthetic": False, "duplicate_rows_skipped": dupes}
     session.flush()
     return dataset
+
+
+def _insert_ohlcv_chunks(
+    session: Session,
+    dataset_id: uuid.UUID,
+    rows: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]],
+    *,
+    chunk_size: int = 1500,
+) -> None:
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        session.add_all(
+            [
+                OhlcvBar(
+                    dataset_id=dataset_id,
+                    ts=ts,
+                    open=open_,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=volume,
+                )
+                for ts, open_, high, low, close, volume in chunk
+            ]
+        )
+        session.flush()
 
 
 def append_bars_to_dataset(

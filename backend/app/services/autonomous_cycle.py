@@ -12,6 +12,7 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
+from app.services.market_data.dataset_gc import reclaim_search_disk, should_reuse_dataset
 from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
     run_finzdata_ingestion,
@@ -21,6 +22,7 @@ from app.services.market_data.ingestion_runner import (
 from app.services.search_heartbeat import SearchJobHeartbeat
 from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
+from app.util.db_errors import compact_error, is_disk_full, set_job_message
 
 # Nasdaq micro + e-mini always included (even if SEARCH_SYMBOLS omits them).
 NASDAQ_SYMBOLS = ("MNQ", "NQ")
@@ -151,6 +153,24 @@ def _latest_dataset(session: Session, symbol: str, timeframe: str = "5m") -> His
     ).scalar_one_or_none()
 
 
+def _cached_search_dataset(session: Session, symbol: str, timeframe: str, days: int) -> HistoricalDataset | None:
+    ds = _latest_dataset(session, symbol, timeframe)
+    if not ds:
+        return None
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days)
+    if should_reuse_dataset(
+        coverage_start=ds.coverage_start,
+        coverage_end=ds.coverage_end,
+        row_count=int(ds.row_count or 0),
+        window_start=start,
+        window_end=end,
+        timeframe=timeframe,
+    ):
+        return ds
+    return None
+
+
 def run_autonomous_prop_cycle(
     session: Session,
     actor: str = "autopilot",
@@ -171,7 +191,7 @@ def run_autonomous_prop_cycle(
         if not job:
             raise ValueError(f"Unknown prop search job {job_id}")
         job.status = ResearchJobStatus.RUNNING
-        job.message = "Loading market data"
+        set_job_message(job, "Loading market data")
         job.started_at = datetime.now(UTC)
         job.payload = {
             **(job.payload or {}),
@@ -202,6 +222,11 @@ def run_autonomous_prop_cycle(
 
     job_pk = job.id
     session.commit()
+    try:
+        reclaim_search_disk(session)
+        session.commit()
+    except Exception:
+        session.rollback()
 
     def _job() -> ResearchJob:
         current = session.get(ResearchJob, job_pk)
@@ -225,45 +250,83 @@ def run_autonomous_prop_cycle(
                     current_symbol=symbol,
                     symbol_index=idx,
                 )
-                job.message = f"Downloading {symbol} {tf} ({days} days)"
+                set_job_message(job, f"Downloading {symbol} {tf} ({days} days)")
                 session.commit()
                 key = (symbol, tf)
-                try:
-                    with session.begin_nested():
-                        ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
-                    session.commit()
-                    datasets[key] = ds
+                cached = _cached_search_dataset(session, symbol, tf, days)
+                if cached:
+                    datasets[key] = cached
                     summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
-                        "dataset_id": str(ds.id),
-                        "row_count": ds.row_count,
-                        "provider": provider_label,
+                        "dataset_id": str(cached.id),
+                        "row_count": cached.row_count,
+                        "provider": f"cached {tf}",
                     }
-                except Exception as exc:
-                    session.rollback()
-                    warnings.append(f"{symbol} {tf}: {exc}")
-                    ds = _latest_dataset(session, symbol, tf)
-                    if ds:
+                else:
+                    try:
+                        with session.begin_nested():
+                            ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
+                        session.commit()
                         datasets[key] = ds
                         summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
                             "dataset_id": str(ds.id),
                             "row_count": ds.row_count,
-                            "warning": str(exc),
+                            "provider": provider_label,
                         }
+                    except Exception as exc:
+                        session.rollback()
+                        note = compact_error(exc)
+                        if is_disk_full(exc):
+                            try:
+                                reclaim_search_disk(session)
+                                session.commit()
+                                cached = _latest_dataset(session, symbol, tf)
+                                if cached:
+                                    datasets[key] = cached
+                                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                                        "dataset_id": str(cached.id),
+                                        "row_count": cached.row_count,
+                                        "provider": f"cached after disk full {tf}",
+                                        "warning": note,
+                                    }
+                                else:
+                                    with session.begin_nested():
+                                        ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
+                                    session.commit()
+                                    datasets[key] = ds
+                                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                                        "dataset_id": str(ds.id),
+                                        "row_count": ds.row_count,
+                                        "provider": provider_label,
+                                    }
+                            except Exception as retry_exc:
+                                session.rollback()
+                                note = compact_error(retry_exc)
+                        if key not in datasets:
+                            warnings.append(f"{symbol} {tf}: {note}")
+                            ds = _latest_dataset(session, symbol, tf)
+                            if ds:
+                                datasets[key] = ds
+                                summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                                    "dataset_id": str(ds.id),
+                                    "row_count": ds.row_count,
+                                    "warning": note,
+                                }
                 job = _job()
                 loaded = list((job.payload or {}).get("search_progress", {}).get("markets_loaded") or [])
                 if key in datasets:
                     row_count = summary["symbols"].get(symbol, {}).get(tf, {}).get("row_count")
                     loaded.append(f"{symbol} {tf} ({row_count} bars)" if row_count is not None else f"{symbol} {tf}")
                 merge_search_progress(job, markets_loaded=loaded)
-                job.message = f"Loaded {symbol} {tf}" + (
-                    f" — {warnings[-1]}" if warnings and warnings[-1].startswith(f"{symbol} {tf}") else ""
-                )
+                warn_bit = ""
+                if warnings and warnings[-1].startswith(f"{symbol} {tf}"):
+                    warn_bit = f" — {compact_error(warnings[-1])}"
+                set_job_message(job, f"Loaded {symbol} {tf}{warn_bit}")
                 session.commit()
 
         job = _job()
         merge_search_progress(job, phase="scoring", current_symbol=None)
         ai_bit = " + AI mutation rounds" if get_settings().ai_configured else ""
-        job.message = f"Scoring {len(symbols)} symbols × {timeframes} TFs ({budget} 5m combos{ai_bit})"
+        set_job_message(job, f"Scoring {len(symbols)} symbols × {timeframes} TFs ({budget} 5m combos{ai_bit})")
         session.commit()
 
         all_winners: list[str] = []
@@ -315,7 +378,7 @@ def run_autonomous_prop_cycle(
                     f"Scoring {symbol} {tf}{fam_bit} · combo ~{combo_est}/{tf_budget} · "
                     f"{done} backtests · {phase_bit}{bit}"
                 )
-                current.message = msg
+                set_job_message(current, msg)
                 symbol_fraction = combo_est / max(tf_budget, 1)
                 overall = (slot_idx + symbol_fraction) / max(len(search_slots), 1)
                 current.progress_pct = min(94, int(100 * overall))
@@ -353,7 +416,7 @@ def run_autonomous_prop_cycle(
             session.commit()
             job = _job()
             merge_search_progress(job, phase="saving", current_symbol=symbol, scoring_subphase="persist")
-            job.message = f"Saving {symbol} keepers ({len(hits)} hits to backtest)"
+            set_job_message(job, f"Saving {symbol} keepers ({len(hits)} hits to backtest)")
             session.commit()
             winners = persist_search_hits(
                 session,
@@ -373,7 +436,7 @@ def run_autonomous_prop_cycle(
                 symbols_finished=list(finished_symbols),
                 tests_completed=total_eval,
             )
-            job.message = f"Finished {symbol} {tf}: {len(winners)} saved · {total_eval} tests so far"
+            set_job_message(job, f"Finished {symbol} {tf}: {len(winners)} saved · {total_eval} tests so far")
             job.progress_pct = min(95, int(100 * (list(symbols).index(symbol) + 1) / max(len(symbols), 1)))
             session.add(
                 ResearchActivity(
@@ -397,7 +460,7 @@ def run_autonomous_prop_cycle(
         job.progress_pct = 100
         job.completed_at = datetime.now(UTC)
         if all_winners:
-            job.message = f"Found {len(all_winners)} walk-forward winners"
+            set_job_message(job, f"Found {len(all_winners)} walk-forward winners")
             reverse_n = sum(1 for w in all_winners if w.startswith("REV "))
             detail = (
                 f"Scored {total_eval}+ backtests · {len(all_winners)} passed OOS"
@@ -405,7 +468,7 @@ def run_autonomous_prop_cycle(
                 f"{', '.join(all_winners[:6])}"
             )
         else:
-            job.message = "No walk-forward winners this cycle"
+            set_job_message(job, "No walk-forward winners this cycle")
             detail = f"Scored {total_eval} tests — none passed the prop screen."
             if warnings:
                 detail += " Data notes: " + "; ".join(warnings[:3])
@@ -427,14 +490,26 @@ def run_autonomous_prop_cycle(
     except Exception as exc:
         session.rollback()
         heartbeat.stop()
+        try:
+            reclaim_search_disk(session)
+            session.commit()
+        except Exception:
+            session.rollback()
         job = session.get(ResearchJob, job_pk)
         if job:
-            job.status = ResearchJobStatus.FAILED
-            job.error = str(exc)
-            job.message = (str(exc))[:500]
-            job.completed_at = datetime.now(UTC)
-            session.add(
-                ResearchActivity(headline="Deep search failed", detail=str(exc), job_id=job.id)
-            )
-            session.commit()
+            try:
+                job.status = ResearchJobStatus.FAILED
+                job.error = compact_error(exc)
+                set_job_message(job, compact_error(exc))
+                job.completed_at = datetime.now(UTC)
+                session.add(
+                    ResearchActivity(
+                        headline="Deep search failed",
+                        detail=compact_error(exc, limit=400),
+                        job_id=job.id,
+                    )
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
         raise

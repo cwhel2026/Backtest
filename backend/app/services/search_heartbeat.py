@@ -10,6 +10,7 @@ from app.db.session import SyncSessionLocal
 from app.models.enums import ResearchJobStatus
 from app.models.research import ResearchJob
 from app.services.search_progress import merge_search_progress
+from app.util.db_errors import set_job_message
 
 
 class SearchJobHeartbeat:
@@ -34,7 +35,7 @@ class SearchJobHeartbeat:
                         merge_search_progress(job, **{k: v for k, v in snap.items() if k != "message"})
                         msg = snap.get("message")
                         if isinstance(msg, str) and msg:
-                            job.message = msg
+                            set_job_message(job, msg)
                     else:
                         merge_search_progress(job, phase="scoring")
                     db.commit()

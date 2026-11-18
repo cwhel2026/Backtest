@@ -51,6 +51,15 @@ type AutopilotStatus = {
   search_plan: SearchPlan | null;
 };
 
+function compactSearchText(text: string | null | undefined): string {
+  if (!text) return "";
+  if (/diskfull|no space left|could not extend file/i.test(text)) {
+    return "Postgres ran out of disk while loading 1m bars. Extra copies will be cleared on restart — press Restart search. If it happens again, increase the Railway Postgres volume.";
+  }
+  const cut = text.split("[SQL:")[0].split("[parameters:")[0].trim();
+  return cut.length > 280 ? `${cut.slice(0, 280)}…` : cut;
+}
+
 export default function HomePage() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null);
   const [paper, setPaper] = useState<PaperDesk | null>(null);
@@ -150,8 +159,8 @@ export default function HomePage() {
               }`}
             >
               {status.background_search.status === "failed"
-                ? status.background_search.error || status.background_search.message
-                : `${status.background_search.status}: ${status.background_search.message}`}
+                ? compactSearchText(status.background_search.error || status.background_search.message)
+                : `${status.background_search.status}: ${compactSearchText(status.background_search.message)}`}
             </span>
           ) : null}
           <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
@@ -174,11 +183,13 @@ export default function HomePage() {
         </button>
         {searching ? (
           <p className="mt-3 text-sm text-amber-100">
-            A search is already in progress on the server. Current step: {status?.background_search?.message}
+            A search is already in progress on the server. Current step:{" "}
+            {compactSearchText(status?.background_search?.message)}
           </p>
         ) : status?.background_search?.status === "failed" ? (
           <p className="mt-3 text-sm text-amber-100">
-            {status.background_search.error || "The last search stopped."} Press the green button to start a new one.
+            {compactSearchText(status.background_search.error) || "The last search stopped."} Press the green
+            button to start a new one.
           </p>
         ) : null}
         {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
@@ -186,7 +197,10 @@ export default function HomePage() {
 
       <SearchLiveMonitor
         status={status?.background_search?.status ?? "idle"}
-        message={status?.background_search?.message ?? "Press Run prop search to start a walk-forward scan."}
+        message={
+          compactSearchText(status?.background_search?.message) ||
+          "Press Run prop search to start a walk-forward scan."
+        }
         progressPct={status?.background_search?.progress_pct ?? 0}
         live={(status?.background_search?.live as Record<string, unknown> | undefined) ?? null}
         plan={status?.search_plan ?? null}
