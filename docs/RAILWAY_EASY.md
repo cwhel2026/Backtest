@@ -183,6 +183,7 @@ Browsers block the site unless the API allows your frontend URL.
 
 ## Optional later
 
+- **Live paper desk:** add `TWELVEDATA_API_KEY` (cloud live/near-live CME 1m) or `IBKR_HOST` pointing at a reachable IB Gateway. Without those, Yahoo/FinzData stay delayed ~15m.  
 - **FinzData:** add `FINZDATA_API_KEY` on the backend. Free plan is daily bars; 1m/5m search needs a paid market, otherwise Yahoo is used.  
 - **Databento:** add `DATABENTO_API_KEY` on the backend.  
 - **Full split deploy** (separate worker): see [DEPLOY_RAILWAY.md](./DEPLOY_RAILWAY.md).

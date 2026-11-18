@@ -20,7 +20,7 @@ export default function MarketDataPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [symbol, setSymbol] = useState("MES");
   const [ingestTf, setIngestTf] = useState("5m");
-  const [ingestProvider, setIngestProvider] = useState("yahoo");
+  const [ingestProvider, setIngestProvider] = useState("twelvedata");
   const [message, setMessage] = useState<string | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvLabel, setCsvLabel] = useState("user_csv");
@@ -121,8 +121,7 @@ export default function MarketDataPage() {
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Default: free Yahoo futures data (no key). Databento is optional when you add a licensed key on the
-          backend.
+          Paper desk prefers IBKR then Twelve Data for live prints. Yahoo is delayed (~15m) research-only.
         </p>
         <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
@@ -132,8 +131,11 @@ export default function MarketDataPage() {
               value={ingestProvider}
               onChange={(e) => setIngestProvider(e.target.value)}
             >
-              <option value="yahoo">Yahoo Finance (free)</option>
-              <option value="databento">Databento (licensed)</option>
+              <option value="twelvedata">Twelve Data (live / near-live)</option>
+              <option value="ibkr">IBKR Gateway (live)</option>
+              <option value="yahoo">Yahoo Finance (free, delayed)</option>
+              <option value="finzdata">FinzData (historical)</option>
+              <option value="databento">Databento (licensed historical)</option>
             </select>
           </label>
           <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">

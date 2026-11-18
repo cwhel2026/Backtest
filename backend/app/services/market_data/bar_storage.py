@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.models.backtest import OhlcvBar
-from app.models.enums import DatasetValidationStatus
+from app.models.enums import DataProviderStatus, DatasetValidationStatus
 from app.models.market_data import DataProvider, HistoricalDataset
 
 
@@ -27,7 +27,15 @@ def persist_bars_to_dataset(
 
     provider = session.execute(select(DataProvider).where(DataProvider.slug == provider_slug)).scalar_one_or_none()
     if not provider:
-        raise ValueError(f"Unknown provider {provider_slug}")
+        provider = DataProvider(
+            slug=provider_slug,
+            display_name=provider_slug,
+            status=DataProviderStatus.CONFIGURED,
+            config_hint="",
+            capabilities={"ohlcv": True},
+        )
+        session.add(provider)
+        session.flush()
 
     seen: set[datetime] = set()
     deduped: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]] = []

@@ -158,6 +158,45 @@ class FinzDataProvider(MarketDataProvider):
         }
 
 
+class TwelveDataProvider(MarketDataProvider):
+    slug = "twelvedata"
+    display_name = "Twelve Data (live CME)"
+
+    async def health(self) -> ProviderHealth:
+        settings = get_settings()
+        if not settings.twelvedata_configured:
+            return ProviderHealth(
+                slug=self.slug,
+                display_name=self.display_name,
+                state=ProviderConnectionState.NOT_CONFIGURED,
+                message="Set TWELVEDATA_API_KEY for cloud live/near-live NQ/ES 1m bars (paid real-time; free is delayed).",
+                capabilities={"ohlcv": True, "1m": True, "5m": True, "quote": True, "live": True},
+            )
+        return ProviderHealth(
+            slug=self.slug,
+            display_name=self.display_name,
+            state=ProviderConnectionState.CONFIGURED,
+            message="API key present. Paper desk prefers Twelve Data over delayed Yahoo when IBKR is not connected.",
+            capabilities={"ohlcv": True, "1m": True, "5m": True, "quote": True, "live": True},
+        )
+
+    async def ingest_historical(
+        self, instrument_symbol: str, timeframe: str, start: datetime, end: datetime
+    ) -> dict:
+        health = await self.health()
+        if health.state == ProviderConnectionState.NOT_CONFIGURED:
+            raise ValueError(health.message)
+        return {
+            "provider": self.slug,
+            "instrument_symbol": instrument_symbol,
+            "timeframe": timeframe,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "queued",
+            "note": "Worker pulls CME 1m/5m bars from Twelve Data.",
+        }
+
+
 class InteractiveBrokersProvider(MarketDataProvider):
     slug = "ibkr"
     display_name = "Interactive Brokers"
@@ -169,14 +208,14 @@ class InteractiveBrokersProvider(MarketDataProvider):
                 slug=self.slug,
                 display_name=self.display_name,
                 state=ProviderConnectionState.NOT_CONFIGURED,
-                message="Set IBKR_HOST (and IBKR_PORT) where the worker can reach your IB Gateway.",
+                message="Set IBKR_HOST (and IBKR_PORT) where the worker can reach your IB Gateway. This is true live CME data.",
                 capabilities={"ohlcv": True, "1m": True, "5m": True, "requires_same_network": True},
             )
         return ProviderHealth(
             slug=self.slug,
             display_name=self.display_name,
             state=ProviderConnectionState.CONFIGURED,
-            message=f"Gateway {settings.ibkr_host}:{settings.ibkr_port}. Enable SEARCH_PREFER_IBKR for prop search.",
+            message=f"Gateway {settings.ibkr_host}:{settings.ibkr_port}. Paper desk uses this first for live 1m bars + last trade.",
             capabilities={"ohlcv": True, "1m": True, "5m": True, "requires_same_network": True},
         )
 
@@ -198,10 +237,11 @@ class InteractiveBrokersProvider(MarketDataProvider):
 
 
 PROVIDER_REGISTRY: dict[str, MarketDataProvider] = {
-    YahooFinanceProvider.slug: YahooFinanceProvider(),
-    FinzDataProvider.slug: FinzDataProvider(),
-    DatabentoProvider.slug: DatabentoProvider(),
     InteractiveBrokersProvider.slug: InteractiveBrokersProvider(),
+    TwelveDataProvider.slug: TwelveDataProvider(),
+    FinzDataProvider.slug: FinzDataProvider(),
+    YahooFinanceProvider.slug: YahooFinanceProvider(),
+    DatabentoProvider.slug: DatabentoProvider(),
 }
 
 

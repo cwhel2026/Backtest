@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.backtest.bars import Bar
-from app.services.paper_book import strategy_fingerprint
+from app.services.paper_book import globex_session, scan_headline, scanner_payload, strategy_fingerprint
 from app.services.paper_engine import OpenTrade, SlotCursor, advance_slot
 from app.models.enums import AssetClass
 from app.models.instrument import Instrument
@@ -67,3 +68,70 @@ def test_open_trade_preserves_bars_held_across_ticks():
     assert fills == []
     assert cursor.position is not None
     assert cursor.position.bars_held >= 3
+
+
+def test_globex_session_rth_and_weekend():
+    chicago = ZoneInfo("America/Chicago")
+    rth = datetime(2026, 11, 18, 10, 15, tzinfo=chicago)
+    sat = datetime(2026, 11, 21, 12, 0, tzinfo=chicago)
+    halt = datetime(2026, 11, 18, 16, 20, tzinfo=chicago)
+    assert globex_session(rth)["state"] == "rth"
+    assert globex_session(rth)["open"] is True
+    assert globex_session(sat)["open"] is False
+    assert globex_session(halt)["state"] == "halt"
+
+
+def test_scan_headline_watching_next_bar():
+    text = scan_headline(
+        slot_count=1,
+        opened=0,
+        closed=0,
+        enrolled_new=0,
+        watches=[
+            {
+                "symbol": "NQ",
+                "timeframe": "1m",
+                "last_close": 19012.25,
+                "new_bars": 1,
+                "in_trade": False,
+            }
+        ],
+        session={"open": True, "label": "RTH"},
+    )
+    assert "NQ" in text
+    assert "no entry" in text.lower()
+
+
+def test_scan_headline_armed_first_tick():
+    text = scan_headline(
+        slot_count=1,
+        opened=0,
+        closed=0,
+        enrolled_new=1,
+        watches=[{"symbol": "NQ", "timeframe": "1m", "last_close": 19012.25, "armed": True}],
+        session={"open": True, "label": "RTH"},
+    )
+    assert "Armed" in text
+    assert "Enrolled 1 keeper" in text
+
+
+def test_scanner_payload_live_when_recent():
+    now = datetime(2026, 11, 18, 15, 0, tzinfo=UTC)
+    payload = scanner_payload(
+        last_scan={
+            "at": (now - timedelta(seconds=12)).isoformat(),
+            "headline": "Caught up on NQ 1m @ 19012.25 — watching for the next bar.",
+            "opened": 0,
+            "closed": 0,
+            "refreshed": 1,
+            "watches": [{"new_bars": 0}],
+            "session": {"state": "rth", "label": "RTH", "open": True, "chicago": "09:00:00 CT"},
+        },
+        enrolled=[{"in_trade": False, "last_close": 19012.25, "symbol": "NQ", "timeframe": "1m"}],
+        now=now,
+    )
+    assert payload["live"] is True
+    assert payload["status"] == "scanning"
+    assert payload["last_scan_age_sec"] == 12
+    assert payload["next_scan_sec"] == 8
+    assert "watching" in payload["headline"].lower() or "Caught up" in payload["headline"]

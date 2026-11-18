@@ -240,3 +240,34 @@ def advance_slot(
 
     cursor.position = pos
     return cursor, fills
+
+
+def exit_open_on_quote(
+    instrument: Instrument,
+    cursor: SlotCursor,
+    last_price: Decimal,
+    ts: datetime,
+    *,
+    slip_ticks: int = 1,
+) -> tuple[SlotCursor, list[ClosedFill]]:
+    """Mark an open paper trade against the live last print (stop/target only, no new entries)."""
+    pos = cursor.position
+    if pos is None or last_price <= 0:
+        return cursor, []
+    bar = Bar(ts=ts, open=last_price, high=last_price, low=last_price, close=last_price, volume=0)
+    exit_px, reason = check_intrabar_exit(pos.direction, pos.stop, pos.target, bar)
+    if exit_px is None or reason is None:
+        return cursor, []
+    slipped = _slip(exit_px, pos.direction, "exit", instrument.tick_size, slip_ticks)
+    fill = ClosedFill(
+        pos.direction,
+        pos.qty,
+        pos.entry_ts,
+        pos.entry_price,
+        ts,
+        slipped,
+        reason,
+        _net_pnl(pos.entry_price, slipped, pos.direction, pos.qty, instrument, slip_ticks),
+    )
+    cursor.position = None
+    return cursor, [fill]

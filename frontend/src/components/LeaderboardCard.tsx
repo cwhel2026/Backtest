@@ -51,7 +51,7 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
         method: "POST",
         body: JSON.stringify({ strategy_id: row.strategy_id }),
       });
-      setWatchNote("Enrolled on the forward-test book. Open Paper to track live fills.");
+      setWatchNote("Enrolled on the forward-test book. Open Forward test to watch it scan for live fills.");
     } catch (e) {
       setWatchNote(String(e));
     } finally {

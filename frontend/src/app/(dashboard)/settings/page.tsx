@@ -6,6 +6,14 @@ export default function SettingsPage() {
         <p className="font-medium text-zinc-200">Server-side configuration</p>
         <ul className="mt-3 list-inside list-disc space-y-2">
           <li>
+            <code className="text-emerald-400">TWELVEDATA_API_KEY</code> — live/near-live CME 1m bars + last
+            print for the paper desk (paid real-time; free plan is delayed)
+          </li>
+          <li>
+            <code className="text-emerald-400">IBKR_HOST</code> + <code className="text-emerald-400">IBKR_PORT</code>{" "}
+            — IB Gateway on the same network as the worker. True live last trade (needs a market-data sub)
+          </li>
+          <li>
             <code className="text-emerald-400">FINZDATA_API_KEY</code> — FinzData historical futures (free =
             daily only; paid market unlocks 1m/5m)
           </li>

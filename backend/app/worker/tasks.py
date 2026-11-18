@@ -22,6 +22,7 @@ from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
     run_finzdata_ingestion,
     run_ibkr_ingestion,
+    run_twelvedata_ingestion,
     run_yahoo_ingestion,
 )
 
@@ -93,7 +94,11 @@ def run_data_ingestion(job_id: str) -> None:
             _fail_ingestion(db, job, "FINZDATA_API_KEY not configured", "Ingestion failed: FinzData not configured")
             return
 
-        if provider not in ("yahoo", "databento", "ibkr", "finzdata"):
+        if provider == "twelvedata" and not settings_ref.twelvedata_configured:
+            _fail_ingestion(db, job, "TWELVEDATA_API_KEY not configured", "Ingestion failed: Twelve Data not configured")
+            return
+
+        if provider not in ("yahoo", "databento", "ibkr", "finzdata", "twelvedata"):
             _fail_ingestion(
                 db,
                 job,
@@ -111,6 +116,7 @@ def run_data_ingestion(job_id: str) -> None:
             "databento": "Databento",
             "ibkr": "IBKR Gateway",
             "finzdata": "FinzData",
+            "twelvedata": "Twelve Data",
         }[provider]
         job.message = f"Downloading OHLCV from {label}"
         job.progress_pct = 10
@@ -123,6 +129,8 @@ def run_data_ingestion(job_id: str) -> None:
                 dataset = run_ibkr_ingestion(db, job.payload)
             elif provider == "finzdata":
                 dataset = run_finzdata_ingestion(db, job.payload)
+            elif provider == "twelvedata":
+                dataset = run_twelvedata_ingestion(db, job.payload)
             else:
                 dataset = run_databento_ingestion(db, job.payload)
             db.commit()

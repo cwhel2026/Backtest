@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.backtest.bars import Bar
@@ -25,13 +25,12 @@ def fetch_ibkr_bars(
     start: datetime,
     end: datetime,
     bar_size: str = "5 mins",
+    use_rth: bool = True,
 ) -> list[Bar]:
     settings = get_settings()
     if not settings.ibkr_configured:
         raise ValueError("IBKR_HOST not configured — point worker at your IB Gateway.")
     try:
-        from datetime import UTC
-
         from ib_insync import IB, Future
     except ImportError as exc:
         raise ValueError("ib-insync not installed on worker") from exc
@@ -52,7 +51,7 @@ def fetch_ibkr_bars(
             durationStr=f"{duration} D",
             barSizeSetting=bar_size,
             whatToShow="TRADES",
-            useRTH=True,
+            useRTH=use_rth,
             formatDate=1,
         )
         out: list[Bar] = []
@@ -75,8 +74,50 @@ def fetch_ibkr_bars(
                 )
             )
         if not out:
-            raise ValueError(f"IBKR returned no RTH bars for {instrument_symbol}")
+            raise ValueError(f"IBKR returned no bars for {instrument_symbol}")
         return out
+    finally:
+        ib.disconnect()
+
+
+def fetch_ibkr_quote(instrument_symbol: str) -> dict:
+    """Last trade from IB Gateway market data (requires a live/paper market-data subscription)."""
+    settings = get_settings()
+    if not settings.ibkr_configured:
+        raise ValueError("IBKR_HOST not configured — point worker at your IB Gateway.")
+    try:
+        from ib_insync import IB, Future
+    except ImportError as exc:
+        raise ValueError("ib-insync not installed on worker") from exc
+
+    root = _IBKR_SYMBOL.get(instrument_symbol.upper(), instrument_symbol.upper())
+    ib = IB()
+    ib.connect(
+        settings.ibkr_host,
+        int(settings.ibkr_port),
+        clientId=int(settings.ibkr_client_id) + 7,
+        readonly=True,
+    )
+    try:
+        contract = Future(symbol=root, exchange="CME", currency="USD")
+        qualified = ib.qualifyContracts(contract)
+        if not qualified:
+            raise ValueError(f"IBKR could not qualify contract for {instrument_symbol}")
+        ticker = ib.reqMktData(qualified[0], "", False, False)
+        ib.sleep(1.2)
+        last = ticker.marketPrice()
+        if last is None or last != last:  # NaN
+            last = ticker.last or ticker.close
+        if last is None or last != last:
+            raise ValueError(f"IBKR returned no last price for {instrument_symbol}")
+        return {
+            "symbol": root,
+            "last": float(last),
+            "bid": float(ticker.bid) if ticker.bid is not None and ticker.bid == ticker.bid else None,
+            "ask": float(ticker.ask) if ticker.ask is not None and ticker.ask == ticker.ask else None,
+            "ts": datetime.now(UTC),
+            "source": "ibkr",
+        }
     finally:
         ib.disconnect()
 
