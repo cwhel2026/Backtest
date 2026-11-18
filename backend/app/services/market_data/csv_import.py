@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.backtest import OhlcvBar
 from app.models.market_data import HistoricalDataset
 from app.services.market_data.bar_storage import persist_bars_to_dataset
+from app.services.market_data.ohlcv_parquet import drop_dataset
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -64,6 +65,7 @@ def import_csv_bars(
 
 
 def delete_dataset_bars(session: Session, dataset_id: uuid.UUID) -> None:
+    drop_dataset(dataset_id)
     session.execute(delete(OhlcvBar).where(OhlcvBar.dataset_id == dataset_id))
     ds = session.get(HistoricalDataset, dataset_id)
     if ds:

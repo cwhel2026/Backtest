@@ -16,6 +16,7 @@ from app.models.market_data import HistoricalDataset
 from app.models.user import User
 from app.schemas.market_data import HistoricalDatasetOut, OhlcvBarOut, ProviderHealthOut
 from app.services.market_data.csv_import import import_csv_bars
+from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 from app.services.market_data.providers import PROVIDER_REGISTRY, all_provider_health
 from app.worker.tasks import create_ingestion_job, run_data_ingestion
 
@@ -126,11 +127,26 @@ async def dataset_bars(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[OhlcvBarOut]:
+    cap = min(limit, 2000)
+    ds_id = uuid.UUID(dataset_id)
+    if has_store(ds_id):
+        stored = read_parquet_bars(ds_id)[:cap]
+        return [
+            OhlcvBarOut(
+                ts=ts.isoformat(),
+                open=float(o),
+                high=float(h),
+                low=float(low),
+                close=float(c),
+                volume=int(v),
+            )
+            for ts, o, h, low, c, v in stored
+        ]
     result = await db.execute(
         select(OhlcvBar)
-        .where(OhlcvBar.dataset_id == uuid.UUID(dataset_id))
+        .where(OhlcvBar.dataset_id == ds_id)
         .order_by(OhlcvBar.ts)
-        .limit(min(limit, 2000))
+        .limit(cap)
     )
     rows = result.scalars().all()
     return [

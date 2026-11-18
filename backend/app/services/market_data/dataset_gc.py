@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
@@ -10,6 +11,14 @@ from sqlalchemy.orm import Session
 from app.models.backtest import BacktestRun, OhlcvBar
 from app.models.market_data import DataQualityReport, HistoricalDataset
 from app.models.research import ResearchActivity, ResearchJob
+from app.services.market_data.ohlcv_parquet import (
+    bar_count,
+    coverage,
+    drop_dataset,
+    retention_cutoff,
+    trim_dataset,
+    write_bars,
+)
 
 
 def has_stored_history(
@@ -76,6 +85,7 @@ def prune_orphan_datasets(session: Session) -> dict[str, int]:
     orphans = [ds for ds in rows if ds.id not in keep]
     bars_dropped = 0
     for ds in orphans:
+        drop_dataset(ds.id)
         result = session.execute(delete(OhlcvBar).where(OhlcvBar.dataset_id == ds.id))
         bars_dropped += int(result.rowcount or 0)
         session.execute(delete(DataQualityReport).where(DataQualityReport.dataset_id == ds.id))
@@ -111,12 +121,7 @@ def prune_old_jobs(session: Session, *, keep: int = 20) -> int:
 
 
 def ohlcv_trim_cutoff(timeframe: str, now: datetime) -> datetime | None:
-    if timeframe == "1m":
-        # Paid 1m search uses ~30 days; keep a small buffer so GC does not wipe the window.
-        return now - timedelta(days=35)
-    if timeframe in ("5m", "15m"):
-        return now - timedelta(days=70)
-    return None
+    return retention_cutoff(timeframe, now)
 
 
 def trim_intraday_bars(session: Session, *, now: datetime | None = None) -> int:
@@ -128,20 +133,68 @@ def trim_intraday_bars(session: Session, *, now: datetime | None = None) -> int:
         cutoff = ohlcv_trim_cutoff(ds.timeframe, now)
         if cutoff is None:
             continue
+        dropped += trim_dataset(ds.id, cutoff)
         result = session.execute(
             delete(OhlcvBar).where(OhlcvBar.dataset_id == ds.id, OhlcvBar.ts < cutoff)
         )
-        n = int(result.rowcount or 0)
-        if n:
-            ds.row_count = max(0, int(ds.row_count or 0) - n)
+        dropped += int(result.rowcount or 0)
+        stored = bar_count(ds.id)
+        if stored:
+            ds.row_count = stored
+            start, end = coverage(ds.id)
+            if start is not None:
+                ds.coverage_start = start
+            if end is not None:
+                ds.coverage_end = end
+        elif int(result.rowcount or 0):
+            ds.row_count = max(0, int(ds.row_count or 0) - int(result.rowcount or 0))
             if ds.coverage_start is None or _aware(ds.coverage_start) < cutoff:
                 ds.coverage_start = cutoff
-        dropped += n
     return dropped
 
 
+def offload_postgres_ohlcv(session: Session) -> int:
+    """Copy leftover ohlcv_bars rows into parquet, then delete them from Postgres."""
+    moved = 0
+    datasets = session.execute(select(HistoricalDataset)).scalars().all()
+    for ds in datasets:
+        rows = session.execute(
+            select(OhlcvBar).where(OhlcvBar.dataset_id == ds.id).order_by(OhlcvBar.ts)
+        ).scalars().all()
+        if not rows:
+            continue
+        tuples = [
+            (
+                r.ts,
+                Decimal(r.open),
+                Decimal(r.high),
+                Decimal(r.low),
+                Decimal(r.close),
+                int(r.volume or 0),
+            )
+            for r in rows
+        ]
+        try:
+            write_bars(ds.id, tuples)
+        except OSError:
+            continue
+        session.execute(delete(OhlcvBar).where(OhlcvBar.dataset_id == ds.id))
+        ds.row_count = bar_count(ds.id)
+        start, end = coverage(ds.id)
+        if start is not None:
+            ds.coverage_start = start
+        if end is not None:
+            ds.coverage_end = end
+        meta = dict(ds.meta or {})
+        meta["store"] = "parquet"
+        ds.meta = meta
+        moved += len(rows)
+    return moved
+
+
 def reclaim_search_disk(session: Session) -> dict[str, int]:
-    stats = prune_orphan_datasets(session)
+    stats = {"bars_offloaded": offload_postgres_ohlcv(session)}
+    stats.update(prune_orphan_datasets(session))
     stats["bars_trimmed"] = trim_intraday_bars(session)
     stats["activities_dropped"] = prune_old_activity(session)
     stats["jobs_dropped"] = prune_old_jobs(session)

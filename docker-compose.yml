@@ -37,6 +37,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      OHLCV_STORE_DIR: /data/ohlcv
     ports:
       - "8000:8000"
     depends_on:
@@ -46,6 +47,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ohlcv_data:/data/ohlcv
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
@@ -61,6 +63,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      OHLCV_STORE_DIR: /data/ohlcv
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +71,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ohlcv_data:/data/ohlcv
     command: celery -A app.worker.celery_app worker --loglevel=info
 
   beat:
@@ -105,3 +109,4 @@ services:
 
 volumes:
   postgres_data:
+  ohlcv_data:
