@@ -11,9 +11,11 @@ from app.core.config import get_settings
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.services.market_data.bar_storage import append_bars_to_dataset
+from app.services.market_data.dataset_gc import reclaim_search_disk
 from app.services.market_data.finzdata_ingest import fetch_finzdata_ohlcv
 from app.services.market_data.ingestion_runner import run_finzdata_ingestion, run_yahoo_ingestion
 from app.services.market_data.yahoo_ingest import bars_to_storage, fetch_yahoo_ohlcv
+from app.util.db_errors import compact_error, is_disk_full
 
 LIVE_LOOKBACK_HOURS = {"1m": 36, "5m": 72, "15m": 120, "1h": 240}
 
@@ -81,3 +83,23 @@ def refresh_live_bars(session: Session, symbol: str, timeframe: str = "5m") -> d
         "created": False,
         "coverage_end": dataset.coverage_end.isoformat() if dataset.coverage_end else None,
     }
+
+
+def refresh_live_bars_resilient(session: Session, symbol: str, timeframe: str = "5m") -> dict:
+    """Append live bars; on DiskFull prune extra copies and retry once."""
+    try:
+        return refresh_live_bars(session, symbol, timeframe)
+    except Exception as exc:
+        session.rollback()
+        if not is_disk_full(exc):
+            raise RuntimeError(compact_error(exc)) from exc
+        try:
+            reclaim_search_disk(session)
+            session.commit()
+        except Exception:
+            session.rollback()
+        try:
+            return refresh_live_bars(session, symbol, timeframe)
+        except Exception as retry_exc:
+            session.rollback()
+            raise RuntimeError(compact_error(retry_exc)) from retry_exc

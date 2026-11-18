@@ -85,7 +85,9 @@ export default function MarketDataPage() {
     <div className="space-y-8">
       <div>
         <h2 className="page-title">Market data</h2>
-        <p className="page-sub">Provider status and dataset registry.</p>
+        <p className="page-sub">
+          One stored series per symbol and timeframe. Search and paper ticks reuse it and only append new bars.
+        </p>
       </div>
 
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
@@ -121,8 +123,8 @@ export default function MarketDataPage() {
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Default: free Yahoo futures data (no key). Databento is optional when you add a licensed key on the
-          backend.
+          First download is stored. Later searches do not pull the full window again — they append bars since the
+          last coverage end. Default source: free Yahoo futures (no key).
         </p>
         <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">

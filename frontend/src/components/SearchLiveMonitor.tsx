@@ -3,7 +3,7 @@
 const PHASE_LABELS: Record<string, string> = {
   queued: "Waiting for worker",
   starting: "Starting",
-  loading_data: "Downloading market bars (Databento or Yahoo)",
+  loading_data: "Using stored bars (download only if missing)",
   scoring: "Walk-forward scoring",
   saving: "Saving keepers",
   completed: "Finished",

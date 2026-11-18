@@ -51,4 +51,6 @@ def integrity_hint(exc: Exception) -> str | None:
         return "Duplicate key conflict."
     if "foreign key" in text or "job_id" in text:
         return "Search job row was not saved before its activity feed row."
+    if "diskfull" in text or "no space left" in text:
+        return "Postgres ran out of disk. Press Restart search after extra bar copies are cleared."
     return None

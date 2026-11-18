@@ -10,6 +10,7 @@ from app.models.instrument import Instrument
 from app.models.strategy import StrategyDefinition
 from app.models.user import User
 from app.services.paper_book import enroll_strategy, paper_snapshot, tick_paper_book
+from app.util.db_errors import DISK_FULL_MESSAGE, compact_error, is_disk_full
 
 router = APIRouter(prefix="/paper", tags=["paper"])
 
@@ -20,15 +21,24 @@ class EnrollBody(BaseModel):
 
 @router.get("/desk")
 def paper_desk(_: User = Depends(get_current_user), db: Session = Depends(get_sync_db)) -> dict:
-    snap = paper_snapshot(db)
-    db.commit()
-    return snap
+    try:
+        snap = paper_snapshot(db)
+        db.commit()
+        return snap
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=507 if is_disk_full(exc) else 500, detail=compact_error(exc)) from exc
 
 
 @router.post("/tick")
 def paper_tick(_: User = Depends(get_current_user), db: Session = Depends(get_sync_db)) -> dict:
-    result = tick_paper_book(db)
-    return {"tick": result, "desk": paper_snapshot(db)}
+    try:
+        result = tick_paper_book(db)
+        return {"tick": result, "desk": paper_snapshot(db)}
+    except Exception as exc:
+        db.rollback()
+        detail = DISK_FULL_MESSAGE if is_disk_full(exc) else compact_error(exc)
+        raise HTTPException(status_code=507 if is_disk_full(exc) else 500, detail=detail) from exc
 
 
 @router.post("/enroll")

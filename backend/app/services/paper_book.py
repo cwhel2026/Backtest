@@ -18,8 +18,10 @@ from app.models.paper import PaperAccount, PaperFill, PaperSlot
 from app.models.research import ResearchActivity
 from app.models.strategy import StrategyDefinition, StrategyVersion
 from app.services.leaderboard import leaderboard_entries_sync
-from app.services.market_data.live_feed import refresh_live_bars
+from app.services.market_data.dataset_gc import reclaim_search_disk
+from app.services.market_data.live_feed import refresh_live_bars_resilient
 from app.services.paper_engine import ClosedFill, OpenTrade, SlotCursor, advance_slot, apply_prop_rules
+from app.util.db_errors import compact_error, is_disk_full
 
 CHICAGO = ZoneInfo("America/Chicago")
 
@@ -189,21 +191,41 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
     closed = 0
     refreshed = 0
     allow = account.status in ("active", "passed")
+    refresh_errors: dict[tuple[str, str], str] = {}
 
     if refresh_data:
+        try:
+            reclaim_search_disk(session)
+            session.flush()
+        except Exception as exc:
+            session.rollback()
+            account = ensure_paper_account(session)
+            enrolled_new = enroll_verified_keepers(session)
+            slots = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
+            if is_disk_full(exc):
+                refresh_errors[("_", "_")] = compact_error(exc)
+        keys: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for slot in slots:
-            tf = slot.timeframe or "5m"
-            key = (slot.symbol.upper(), tf)
+            key = (slot.symbol.upper(), slot.timeframe or "5m")
             if key in seen:
                 continue
             seen.add(key)
+            keys.append(key)
+        for symbol, tf in keys:
             try:
-                refresh_live_bars(session, slot.symbol, tf)
+                refresh_live_bars_resilient(session, symbol, tf)
+                session.flush()
                 refreshed += 1
             except Exception as exc:
-                slot.last_error = str(exc)[:400]
-                session.add(slot)
+                session.rollback()
+                refresh_errors[(symbol, tf)] = compact_error(exc)
+                account = ensure_paper_account(session)
+                slots = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
+
+    account = ensure_paper_account(session)
+    slots = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
+    allow = account.status in ("active", "passed")
 
     for slot in slots:
         strategy = session.get(StrategyDefinition, slot.strategy_id)
@@ -214,8 +236,9 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         tf = slot.timeframe or (version.specification or {}).get("timeframe") or strategy.timeframe or "5m"
         slot.timeframe = tf
         dataset = _latest_dataset(session, slot.symbol, tf)
+        feed_err = refresh_errors.get((slot.symbol.upper(), tf))
         if not version or not instrument or not dataset:
-            slot.last_error = slot.last_error or f"No {tf} dataset for {slot.symbol}"
+            slot.last_error = feed_err or slot.last_error or f"No {tf} dataset for {slot.symbol}"
             continue
         bars = load_bars(session, dataset.id)
         had_position = slot.open_direction is not None
@@ -243,7 +266,7 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         )
         slot.last_bar_ts = cursor.last_bar_ts
         slot.last_refresh_at = datetime.now(UTC)
-        slot.last_error = None
+        slot.last_error = feed_err
         if cursor.position:
             slot.open_direction = cursor.position.direction
             slot.open_qty = cursor.position.qty
@@ -307,7 +330,17 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             if account.status == "breached":
                 allow = False
 
-    session.commit()
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        if is_disk_full(exc):
+            try:
+                reclaim_search_disk(session)
+                session.commit()
+            except Exception:
+                session.rollback()
+        raise RuntimeError(compact_error(exc)) from exc
     return {
         "slots": len(slots),
         "opened": opened,
@@ -316,6 +349,7 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         "enrolled_new": enrolled_new,
         "status": account.status,
         "equity": _dec(account.equity),
+        "feed_errors": [{ "symbol": s, "timeframe": tf, "error": err } for (s, tf), err in refresh_errors.items() if s != "_"],
     }
 
 
