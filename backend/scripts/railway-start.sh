@@ -9,7 +9,7 @@ PORT="${PORT:-8000}"
 
 case "$ROLE" in
   api)
-    alembic upgrade head
+    python -m app.util.db_wait --timeout 25 --migrate-if-ready || echo "[propedge] Migrations deferred; API will retry when Postgres is up."
     exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
     ;;
   worker)
