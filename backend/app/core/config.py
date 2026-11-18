@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     paper_daily_loss: float = Field(default=2_000, validation_alias="PAPER_DAILY_LOSS")
     paper_trailing_dd: float = Field(default=3_000, validation_alias="PAPER_TRAILING_DD")
     paper_profit_target: float = Field(default=6_000, validation_alias="PAPER_PROFIT_TARGET")
-    paper_max_slots: int = Field(default=4, validation_alias="PAPER_MAX_SLOTS")
+    paper_max_slots: int = Field(default=8, validation_alias="PAPER_MAX_SLOTS")
 
     api_v1_prefix: str = "/api/v1"
 

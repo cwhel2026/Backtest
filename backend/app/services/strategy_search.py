@@ -516,7 +516,9 @@ def _persist_one_hit(
         if extra:
             run.metrics = {**run.metrics, **extra}
             session.add(run)
-    if run.status == "completed" and hit.origin != "near_miss":
+    if run.status == "completed" and is_profitable_backtest(
+        run.metrics, reverse=hit.origin == "reverse"
+    ):
         enroll_strategy(session, strategy, symbol)
     session.commit()
     winners.append(strategy.name)

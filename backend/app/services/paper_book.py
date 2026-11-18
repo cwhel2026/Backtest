@@ -11,11 +11,14 @@ from sqlalchemy.orm import Session
 
 from app.backtest.bars import load_bars
 from app.core.config import get_settings
+from app.models.backtest import BacktestRun
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.models.paper import PaperAccount, PaperFill, PaperSlot
 from app.models.research import ResearchActivity
 from app.models.strategy import StrategyDefinition, StrategyVersion
+from app.services.leaderboard import leaderboard_entries_sync
+from app.services.market_data.live_feed import refresh_live_bars
 from app.services.paper_engine import ClosedFill, OpenTrade, SlotCursor, advance_slot, apply_prop_rules
 
 CHICAGO = ZoneInfo("America/Chicago")
@@ -64,6 +67,33 @@ def _roll_trading_day(account: PaperAccount) -> None:
         account.updated_at = datetime.now(UTC)
 
 
+def strategy_fingerprint(spec: dict | None) -> str:
+    """Same entry+ATR stop profile on one market counts as one live slot."""
+    spec = spec or {}
+    entry = spec.get("entry") or {}
+    exit_spec = spec.get("exit") or {}
+    parts = [
+        str(spec.get("instrument_symbol") or "").upper(),
+        str(spec.get("timeframe") or "5m"),
+        str(spec.get("category") or ""),
+        str(entry.get("type") or ""),
+        str(entry.get("fast_period") or ""),
+        str(entry.get("slow_period") or ""),
+        str(exit_spec.get("stop_atr") or ""),
+        str(exit_spec.get("target_atr") or ""),
+        str(exit_spec.get("stop_ticks") or ""),
+        str(exit_spec.get("target_ticks") or ""),
+    ]
+    return "|".join(parts)
+
+
+def _spec_for_strategy(session: Session, strategy: StrategyDefinition) -> dict:
+    if not strategy.current_version_id:
+        return {}
+    version = session.get(StrategyVersion, strategy.current_version_id)
+    return dict(version.specification or {}) if version else {}
+
+
 def enroll_strategy(session: Session, strategy: StrategyDefinition, symbol: str) -> PaperSlot | None:
     account = ensure_paper_account(session)
     if account.status == "breached":
@@ -73,15 +103,23 @@ def enroll_strategy(session: Session, strategy: StrategyDefinition, symbol: str)
     ).scalar_one_or_none()
     if existing:
         return existing
+    spec = _spec_for_strategy(session, strategy)
+    fp = strategy_fingerprint(spec)
     settings = get_settings()
-    cap = int(getattr(settings, "paper_max_slots", 4) or 4)
+    cap = int(getattr(settings, "paper_max_slots", 8) or 8)
     active = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
     if len(active) >= cap:
         return None
+    for slot in active:
+        other = session.get(StrategyDefinition, slot.strategy_id)
+        if other and strategy_fingerprint(_spec_for_strategy(session, other)) == fp:
+            return slot
+    timeframe = str(spec.get("timeframe") or strategy.timeframe or "5m")
     slot = PaperSlot(
         account_id=account.id,
         strategy_id=strategy.id,
         symbol=symbol.upper(),
+        timeframe=timeframe,
         status="active",
     )
     session.add(slot)
@@ -96,16 +134,34 @@ def enroll_strategy(session: Session, strategy: StrategyDefinition, symbol: str)
     return slot
 
 
-def _latest_dataset(session: Session, symbol: str) -> HistoricalDataset | None:
+def _latest_dataset(session: Session, symbol: str, timeframe: str = "5m") -> HistoricalDataset | None:
     inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
     if not inst:
         return None
     return session.execute(
         select(HistoricalDataset)
-        .where(HistoricalDataset.instrument_id == inst.id, HistoricalDataset.timeframe == "5m")
+        .where(HistoricalDataset.instrument_id == inst.id, HistoricalDataset.timeframe == timeframe)
         .order_by(desc(HistoricalDataset.downloaded_at))
         .limit(1)
     ).scalar_one_or_none()
+
+
+def enroll_verified_keepers(session: Session) -> int:
+    """Enroll full-sample keepers (including search near-misses that still pass the prop screen)."""
+    added = 0
+    for row in leaderboard_entries_sync(session, limit=24, profitable_only=True):
+        if not row.get("passes_prop_screen"):
+            continue
+        strategy = session.get(StrategyDefinition, row["strategy_id"])
+        if not strategy:
+            continue
+        before = session.execute(
+            select(PaperSlot).where(PaperSlot.strategy_id == strategy.id, PaperSlot.status == "active")
+        ).scalar_one_or_none()
+        slot = enroll_strategy(session, strategy, row["symbol"])
+        if slot and before is None and slot.strategy_id == strategy.id:
+            added += 1
+    return added
 
 
 def _apply_fill(account: PaperAccount, fill: ClosedFill) -> str:
@@ -125,12 +181,29 @@ def _apply_fill(account: PaperAccount, fill: ClosedFill) -> str:
     return status
 
 
-def tick_paper_book(session: Session) -> dict:
+def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
     account = ensure_paper_account(session)
+    enrolled_new = enroll_verified_keepers(session)
     slots = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
     opened = 0
     closed = 0
+    refreshed = 0
     allow = account.status in ("active", "passed")
+
+    if refresh_data:
+        seen: set[tuple[str, str]] = set()
+        for slot in slots:
+            tf = slot.timeframe or "5m"
+            key = (slot.symbol.upper(), tf)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                refresh_live_bars(session, slot.symbol, tf)
+                refreshed += 1
+            except Exception as exc:
+                slot.last_error = str(exc)[:400]
+                session.add(slot)
 
     for slot in slots:
         strategy = session.get(StrategyDefinition, slot.strategy_id)
@@ -138,8 +211,11 @@ def tick_paper_book(session: Session) -> dict:
             continue
         version = session.get(StrategyVersion, strategy.current_version_id)
         instrument = session.get(Instrument, strategy.instrument_id)
-        dataset = _latest_dataset(session, slot.symbol)
+        tf = slot.timeframe or (version.specification or {}).get("timeframe") or strategy.timeframe or "5m"
+        slot.timeframe = tf
+        dataset = _latest_dataset(session, slot.symbol, tf)
         if not version or not instrument or not dataset:
+            slot.last_error = slot.last_error or f"No {tf} dataset for {slot.symbol}"
             continue
         bars = load_bars(session, dataset.id)
         had_position = slot.open_direction is not None
@@ -152,6 +228,8 @@ def tick_paper_book(session: Session) -> dict:
                 Decimal(slot.open_stop),
                 Decimal(slot.open_target),
                 slot.open_entry_ts,
+                int(slot.open_bars_held or 0),
+                Decimal(slot.open_initial_risk or 0),
             )
             if slot.open_direction and slot.open_entry_price is not None and slot.open_entry_ts
             else None,
@@ -164,6 +242,8 @@ def tick_paper_book(session: Session) -> dict:
             allow_entries=allow and account.status != "breached",
         )
         slot.last_bar_ts = cursor.last_bar_ts
+        slot.last_refresh_at = datetime.now(UTC)
+        slot.last_error = None
         if cursor.position:
             slot.open_direction = cursor.position.direction
             slot.open_qty = cursor.position.qty
@@ -171,6 +251,8 @@ def tick_paper_book(session: Session) -> dict:
             slot.open_stop = cursor.position.stop
             slot.open_target = cursor.position.target
             slot.open_entry_ts = cursor.position.entry_ts
+            slot.open_bars_held = cursor.position.bars_held
+            slot.open_initial_risk = cursor.position.initial_risk
         else:
             slot.open_direction = None
             slot.open_qty = 0
@@ -178,6 +260,8 @@ def tick_paper_book(session: Session) -> dict:
             slot.open_stop = None
             slot.open_target = None
             slot.open_entry_ts = None
+            slot.open_bars_held = 0
+            slot.open_initial_risk = None
         if cursor.position and not had_position:
             opened += 1
             session.add(
@@ -224,7 +308,15 @@ def tick_paper_book(session: Session) -> dict:
                 allow = False
 
     session.commit()
-    return {"slots": len(slots), "opened": opened, "closed": closed, "status": account.status, "equity": _dec(account.equity)}
+    return {
+        "slots": len(slots),
+        "opened": opened,
+        "closed": closed,
+        "refreshed": refreshed,
+        "enrolled_new": enrolled_new,
+        "status": account.status,
+        "equity": _dec(account.equity),
+    }
 
 
 def paper_snapshot(session: Session) -> dict:
@@ -246,6 +338,8 @@ def paper_snapshot(session: Session) -> dict:
                     "stop": _dec(slot.open_stop or 0),
                     "target": _dec(slot.open_target or 0),
                     "entry_ts": slot.open_entry_ts.isoformat() if slot.open_entry_ts else None,
+                    "bars_held": slot.open_bars_held,
+                    "timeframe": slot.timeframe,
                 }
             )
     day_pnl = Decimal(account.equity) - Decimal(account.day_start_equity)
@@ -263,15 +357,7 @@ def paper_snapshot(session: Session) -> dict:
             "distance_to_target": _dec(Decimal(account.profit_target) - (Decimal(account.equity) - Decimal(account.starting_equity))),
             "trailing_room": _dec(Decimal(account.trailing_drawdown) - (Decimal(account.high_water) - Decimal(account.equity))),
         },
-        "enrolled": [
-            {
-                "slot_id": str(s.id),
-                "symbol": s.symbol,
-                "strategy_name": (session.get(StrategyDefinition, s.strategy_id).name if session.get(StrategyDefinition, s.strategy_id) else s.symbol),
-                "in_trade": s.open_direction is not None,
-            }
-            for s in slots
-        ],
+        "enrolled": [_slot_summary(session, s) for s in slots],
         "open_positions": open_positions,
         "recent_fills": [
             {
@@ -287,4 +373,45 @@ def paper_snapshot(session: Session) -> dict:
             for f in fills
         ],
         "disclaimer": "Delayed market data, simulated fills, prop-style limits. Not a broker and not a funded account.",
+        "heartbeat": datetime.now(UTC).isoformat(),
+    }
+
+
+def _slot_summary(session: Session, slot: PaperSlot) -> dict:
+    strategy = session.get(StrategyDefinition, slot.strategy_id)
+    fills = session.execute(select(PaperFill).where(PaperFill.slot_id == slot.id)).scalars().all()
+    nets = [Decimal(f.net_pnl) for f in fills]
+    wins = [n for n in nets if n > 0]
+    baseline = None
+    run = session.execute(
+        select(BacktestRun)
+        .where(BacktestRun.strategy_id == slot.strategy_id, BacktestRun.status == "completed")
+        .order_by(desc(BacktestRun.completed_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if run and isinstance(run.metrics, dict):
+        baseline = {
+            "net": round(float(run.metrics.get("total_net_profit") or 0), 2),
+            "win_rate_pct": round(float(run.metrics.get("win_rate") or 0) * 100, 1)
+            if run.metrics.get("win_rate") is not None
+            else None,
+            "trades": int(run.metrics.get("trade_count") or 0),
+            "expectancy": round(float(run.metrics.get("expectancy_per_trade") or 0), 2)
+            if run.metrics.get("expectancy_per_trade") is not None
+            else None,
+        }
+    return {
+        "slot_id": str(slot.id),
+        "symbol": slot.symbol,
+        "timeframe": slot.timeframe,
+        "strategy_name": strategy.name if strategy else slot.symbol,
+        "strategy_id": str(slot.strategy_id),
+        "in_trade": slot.open_direction is not None,
+        "last_bar_ts": slot.last_bar_ts.isoformat() if slot.last_bar_ts else None,
+        "last_refresh_at": slot.last_refresh_at.isoformat() if slot.last_refresh_at else None,
+        "last_error": slot.last_error,
+        "paper_trades": len(nets),
+        "paper_net": _dec(sum(nets, Decimal(0))),
+        "paper_win_rate_pct": round(100.0 * len(wins) / len(nets), 1) if nets else None,
+        "baseline": baseline,
     }

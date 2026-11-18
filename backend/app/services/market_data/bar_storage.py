@@ -76,3 +76,35 @@ def persist_bars_to_dataset(
     dataset.meta["duplicate_rows_skipped"] = dupes
     session.flush()
     return dataset
+
+
+def append_bars_to_dataset(
+    session: Session,
+    dataset: HistoricalDataset,
+    bars: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]],
+) -> int:
+    """Insert bars newer than coverage_end. Returns count added."""
+    if not bars:
+        return 0
+    cutoff = dataset.coverage_end
+    added: list[OhlcvBar] = []
+    for ts, o, h, l, c, v in sorted(bars, key=lambda x: x[0]):
+        ts_u = ts.astimezone(UTC) if ts.tzinfo else ts.replace(tzinfo=UTC)
+        if cutoff is not None and ts_u <= cutoff:
+            continue
+        added.append(
+            OhlcvBar(dataset_id=dataset.id, ts=ts_u, open=o, high=h, low=l, close=c, volume=v)
+        )
+    if not added:
+        return 0
+    session.add_all(added)
+    dataset.row_count = int(dataset.row_count or 0) + len(added)
+    dataset.coverage_end = added[-1].ts
+    if dataset.coverage_start is None:
+        dataset.coverage_start = added[0].ts
+    dataset.downloaded_at = datetime.now(UTC)
+    meta = dict(dataset.meta or {})
+    meta["live_appended"] = int(meta.get("live_appended") or 0) + len(added)
+    dataset.meta = meta
+    session.flush()
+    return len(added)
