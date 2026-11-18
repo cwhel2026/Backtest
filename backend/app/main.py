@@ -20,7 +20,7 @@ from app.util.db_errors import (
     is_disk_full,
     is_postgres_recovery,
 )
-from app.util.db_wait import is_retryable_db, run_alembic_upgrade
+from app.util.db_wait import is_retryable_db, probe_postgres, run_alembic_upgrade
 from app.util.serde import integrity_hint
 
 logger = structlog.get_logger()
@@ -31,6 +31,7 @@ async def bring_database_up() -> None:
     delay = 2.0
     while True:
         try:
+            await asyncio.to_thread(probe_postgres)
             await asyncio.to_thread(run_alembic_upgrade)
             async with AsyncSessionLocal() as session:
                 await bootstrap_database(session)
@@ -40,10 +41,10 @@ async def bring_database_up() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if not is_retryable_db(exc):
-                logger.exception("bootstrap_failed", error=compact_error(exc))
-            else:
+            if is_retryable_db(exc) or is_postgres_recovery(exc):
                 logger.warning("database_not_ready", error=compact_error(exc))
+            else:
+                logger.exception("bootstrap_failed", error=compact_error(exc))
             await asyncio.sleep(delay)
             delay = min(delay * 1.5, 15.0)
 

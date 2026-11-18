@@ -1,3 +1,5 @@
+import subprocess
+
 from app.util.db_errors import POSTGRES_RECOVERY_MESSAGE, compact_error
 from app.util.db_wait import is_retryable_db, wait_for_postgres
 
@@ -35,6 +37,17 @@ def test_wait_times_out_while_recovering():
         raise Exception("the database system is in recovery mode")
 
     assert wait_for_postgres(timeout_seconds=0.02, interval_seconds=0.005, probe=probe) is False
+
+
+def test_alembic_calledprocesserror_stderr_is_retryable():
+    err = subprocess.CalledProcessError(
+        1,
+        ["alembic", "upgrade", "head"],
+        output="",
+        stderr="FATAL:  the database system is in recovery mode",
+    )
+    assert is_retryable_db(err)
+    assert compact_error(err) == POSTGRES_RECOVERY_MESSAGE
 
 
 def test_non_retryable_probe_raises():
