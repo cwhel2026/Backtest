@@ -22,8 +22,8 @@ export default function ResultsPage() {
         <div>
           <h2 className="page-title">Prop results</h2>
           <p className="page-sub">
-            Default: keepers that pass the prop screen. Green P&amp;L with too few trades is a sample-size miss,
-            not a losing strategy.
+            Each card shows when it was tested, the sample window, and the stop/$ risk it took. Default:
+            keepers. Green P&amp;L with too few trades is a sample-size miss, not a losing strategy.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-zinc-400">

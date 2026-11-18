@@ -11,9 +11,14 @@ class LeaderboardEntry(BaseModel):
     entry_type: str | None = None
     origin: str = "deep"
     completed_at: str | None = None
+    tested_at: str | None = None
     prop_ready_score: int
     passes_prop_screen: bool
+    gate_miss: str | None = None
     metrics: dict
+    sample: dict | None = None
+    risk: dict | None = None
+    tests: dict | None = None
     rank_score: float = 0
 
 

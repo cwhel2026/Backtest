@@ -12,9 +12,37 @@ export type LeaderboardEntry = {
   category: string;
   timeframe: string;
   origin?: string;
+  completed_at?: string | null;
+  tested_at?: string | null;
   passes_prop_screen?: boolean;
   gate_miss?: string | null;
   prop_ready_score: number;
+  sample?: {
+    start?: string | null;
+    end?: string | null;
+    bars?: number;
+    days?: number | null;
+    summary?: string;
+  } | null;
+  risk?: {
+    stop_ticks?: number | null;
+    target_ticks?: number | null;
+    stop_usd?: number | null;
+    dollar_risk_per_trade?: number | null;
+    max_contracts?: number | null;
+    max_drawdown_usd?: number | null;
+    dd_pct_of_account?: number | null;
+    avg_loss_usd?: number | null;
+    summary?: string;
+  } | null;
+  tests?: {
+    tested_at?: string | null;
+    method?: string;
+    oos_trades?: number | null;
+    oos_win_rate_pct?: number | null;
+    full_trades?: number | null;
+    summary?: string;
+  } | null;
   metrics: {
     net_profit_usd?: number;
     profit_factor?: number | null;
@@ -32,6 +60,35 @@ function fmtUsd(n?: number | null) {
   if (n == null) return "—";
   const sign = n >= 0 ? "+" : "";
   return `${sign}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function fmtLondon(iso?: string | null) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const stamp = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+  return `${stamp} London`;
+}
+
+function fmtRange(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: "Europe/London",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  };
+  const a = new Intl.DateTimeFormat("en-GB", opts).format(new Date(start));
+  const b = new Intl.DateTimeFormat("en-GB", opts).format(new Date(end));
+  return a === b ? a : `${a} – ${b}`;
 }
 
 export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
@@ -80,6 +137,15 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
             <p className="mt-1 text-[11px] text-violet-300/90">
               Faded anti-edge — original signal inverted, stop/target swapped, walk-forward re-tested.
             </p>
+          ) : null}
+          {fmtLondon(row.tested_at || row.completed_at || row.tests?.tested_at) ? (
+            <p className="mt-1 text-[11px] text-zinc-400">
+              Tested {fmtLondon(row.tested_at || row.completed_at || row.tests?.tested_at)}
+              {row.sample?.summary ? ` · ${row.sample.summary}` : ""}
+              {fmtRange(row.sample?.start, row.sample?.end) ? ` · ${fmtRange(row.sample?.start, row.sample?.end)}` : ""}
+            </p>
+          ) : row.sample?.summary ? (
+            <p className="mt-1 text-[11px] text-zinc-400">{row.sample.summary}</p>
           ) : null}
         </div>
         <div className="shrink-0 text-right">
@@ -130,7 +196,37 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           value={m.robustness_pct != null ? `${m.robustness_pct}%` : "—"}
           positive={(m.robustness_pct ?? 0) >= 50}
         />
+        <Metric
+          label="Planned risk"
+          value={
+            row.risk?.dollar_risk_per_trade != null
+              ? `$${row.risk.dollar_risk_per_trade.toFixed(0)} / trade`
+              : row.risk?.stop_usd != null
+                ? `$${row.risk.stop_usd.toFixed(0)} stop`
+                : "—"
+          }
+        />
+        <Metric
+          label="Stop / target"
+          value={
+            row.risk?.stop_ticks != null && row.risk?.target_ticks != null
+              ? `${row.risk.stop_ticks}/${row.risk.target_ticks} ticks`
+              : "—"
+          }
+        />
+        <Metric
+          label="Contracts cap"
+          value={row.risk?.max_contracts != null ? String(row.risk.max_contracts) : "—"}
+        />
       </dl>
+      {row.tests?.summary ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">{row.tests.summary}</p>
+      ) : null}
+      {row.risk?.summary ? (
+        <p className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
+          Risk taken: {row.risk.summary}
+        </p>
+      ) : null}
       {keeper ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
