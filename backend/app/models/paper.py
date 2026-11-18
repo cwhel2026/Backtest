@@ -39,6 +39,7 @@ class PaperSlot(Base):
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("paper_accounts.id"), index=True)
     strategy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("strategy_definitions.id"), index=True)
     symbol: Mapped[str] = mapped_column(String(16), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), default="5m", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
     last_bar_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     open_direction: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -47,6 +48,10 @@ class PaperSlot(Base):
     open_stop: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     open_target: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     open_entry_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    open_bars_held: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    open_initial_risk: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

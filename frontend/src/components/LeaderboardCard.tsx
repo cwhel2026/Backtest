@@ -1,4 +1,8 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
+import { apiFetch } from "@/lib/api";
 
 export type LeaderboardEntry = {
   run_id: string;
@@ -33,8 +37,27 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
   const m = row.metrics;
   const reversed = row.origin === "reverse" || row.category.startsWith("reversed_");
   const nearMiss = row.origin === "near_miss";
+  const keeper = row.passes_prop_screen === true || (row.prop_ready_score ?? 0) > 0;
   const lowHitRate = (m.win_rate_pct ?? 100) < 42;
   const swingStyle = lowHitRate && (m.net_profit_usd ?? 0) > 0;
+  const [watchNote, setWatchNote] = useState<string | null>(null);
+  const [watching, setWatching] = useState(false);
+
+  async function watchLive() {
+    setWatching(true);
+    setWatchNote(null);
+    try {
+      await apiFetch("/api/v1/paper/enroll", {
+        method: "POST",
+        body: JSON.stringify({ strategy_id: row.strategy_id }),
+      });
+      setWatchNote("Enrolled on the forward-test book. Open Paper to track live fills.");
+    } catch (e) {
+      setWatchNote(String(e));
+    } finally {
+      setWatching(false);
+    }
+  }
   return (
     <li className="rounded-xl border border-zinc-800 bg-gradient-to-br from-[#1a1d26] to-[#14171e] p-4 shadow-lg">
       <div className="flex items-start justify-between gap-3">
@@ -42,7 +65,8 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           <p className="text-xs font-medium uppercase tracking-wide text-emerald-500/90">
             {row.symbol} · {row.timeframe} · {row.category.replaceAll("_", " ")}
             {reversed ? " · reverse fade" : ""}
-            {nearMiss ? " · did not pass prop screen" : ""}
+            {keeper && nearMiss ? " · full-sample keeper" : ""}
+            {!keeper && nearMiss ? " · search gate miss" : ""}
             {swingStyle && row.prop_ready_score === 0 ? " · swing-style R:R" : ""}
           </p>
           <Link
@@ -101,6 +125,22 @@ export function LeaderboardCard({ row }: { row: LeaderboardEntry }) {
           positive={(m.robustness_pct ?? 0) >= 50}
         />
       </dl>
+      {keeper ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={watchLive}
+            disabled={watching}
+            className="rounded-lg border border-emerald-700/60 bg-emerald-950/40 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/50 disabled:opacity-50"
+          >
+            {watching ? "Enrolling…" : "Watch live"}
+          </button>
+          <Link href="/paper" className="text-xs text-emerald-500 hover:underline">
+            Forward-test book
+          </Link>
+          {watchNote ? <p className="text-[11px] text-zinc-400">{watchNote}</p> : null}
+        </div>
+      ) : null}
     </li>
   );
 }
