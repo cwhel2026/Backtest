@@ -12,13 +12,9 @@ from app.models.enums import ResearchJobKind, ResearchJobStatus
 from app.models.market_data import HistoricalDataset
 from app.models.instrument import Instrument
 from app.models.research import ResearchActivity, ResearchJob
-from app.services.market_data.dataset_gc import reclaim_search_disk, should_reuse_dataset
-from app.services.market_data.ingestion_runner import (
-    run_databento_ingestion,
-    run_finzdata_ingestion,
-    run_ibkr_ingestion,
-    run_yahoo_ingestion,
-)
+from app.services.market_data.dataset_gc import reclaim_search_disk
+from app.services.market_data.ingestion_runner import run_yahoo_ingestion
+from app.services.market_data.ohlcv_cache import ensure_search_dataset, latest_dataset
 from app.services.search_heartbeat import SearchJobHeartbeat
 from app.services.search_progress import entry_family_label, initial_search_progress, merge_search_progress
 from app.services.strategy_search import persist_search_hits, run_deep_search
@@ -64,42 +60,6 @@ def _ingest_yahoo(session: Session, symbol: str, days: int) -> HistoricalDataset
     return run_yahoo_ingestion(session, payload)
 
 
-def _ingest_search_data(
-    session: Session,
-    symbol: str,
-    days: int,
-    *,
-    timeframe: str = "5m",
-) -> tuple[HistoricalDataset, str]:
-    """IBKR (if reachable) → FinzData → Databento → Yahoo."""
-    settings = get_settings()
-    end = datetime.now(UTC)
-    start = end - timedelta(days=days)
-    payload = {
-        "instrument_symbol": symbol,
-        "timeframe": timeframe,
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-    }
-    if settings.search_prefer_ibkr and settings.ibkr_configured:
-        try:
-            return run_ibkr_ingestion(session, payload), f"IBKR {timeframe}"
-        except Exception:
-            session.rollback()
-    if settings.finzdata_configured:
-        try:
-            return run_finzdata_ingestion(session, payload), f"FinzData {timeframe}"
-        except Exception:
-            session.rollback()
-    if settings.databento_configured:
-        try:
-            label = "Databento GLBX" + (" 1m→" + timeframe if timeframe != "1m" else f" →{timeframe}")
-            return run_databento_ingestion(session, payload), label
-        except Exception:
-            session.rollback()
-    return run_yahoo_ingestion(session, payload), f"Yahoo Finance {timeframe}"
-
-
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
@@ -142,33 +102,7 @@ def find_active_prop_search_job(session: Session) -> ResearchJob | None:
 
 
 def _latest_dataset(session: Session, symbol: str, timeframe: str = "5m") -> HistoricalDataset | None:
-    inst = session.execute(select(Instrument).where(Instrument.symbol == symbol)).scalar_one_or_none()
-    if not inst:
-        return None
-    return session.execute(
-        select(HistoricalDataset)
-        .where(HistoricalDataset.instrument_id == inst.id, HistoricalDataset.timeframe == timeframe)
-        .order_by(desc(HistoricalDataset.downloaded_at))
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _cached_search_dataset(session: Session, symbol: str, timeframe: str, days: int) -> HistoricalDataset | None:
-    ds = _latest_dataset(session, symbol, timeframe)
-    if not ds:
-        return None
-    end = datetime.now(UTC)
-    start = end - timedelta(days=days)
-    if should_reuse_dataset(
-        coverage_start=ds.coverage_start,
-        coverage_end=ds.coverage_end,
-        row_count=int(ds.row_count or 0),
-        window_start=start,
-        window_end=end,
-        timeframe=timeframe,
-    ):
-        return ds
-    return None
+    return latest_dataset(session, symbol, timeframe)
 
 
 def run_autonomous_prop_cycle(
@@ -250,67 +184,62 @@ def run_autonomous_prop_cycle(
                     current_symbol=symbol,
                     symbol_index=idx,
                 )
-                set_job_message(job, f"Downloading {symbol} {tf} ({days} days)")
-                session.commit()
                 key = (symbol, tf)
-                cached = _cached_search_dataset(session, symbol, tf, days)
-                if cached:
-                    datasets[key] = cached
-                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
-                        "dataset_id": str(cached.id),
-                        "row_count": cached.row_count,
-                        "provider": f"cached {tf}",
-                    }
+                stored = _latest_dataset(session, symbol, tf)
+                if stored and int(stored.row_count or 0) >= 80:
+                    set_job_message(job, f"Using stored {symbol} {tf} ({stored.row_count} bars)")
                 else:
-                    try:
-                        with session.begin_nested():
-                            ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
-                        session.commit()
-                        datasets[key] = ds
-                        summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
-                            "dataset_id": str(ds.id),
-                            "row_count": ds.row_count,
-                            "provider": provider_label,
-                        }
-                    except Exception as exc:
-                        session.rollback()
-                        note = compact_error(exc)
-                        if is_disk_full(exc):
-                            try:
-                                reclaim_search_disk(session)
+                    set_job_message(job, f"Downloading {symbol} {tf} ({days} days) — stored for later searches")
+                session.commit()
+                try:
+                    with session.begin_nested():
+                        ds, provider_label = ensure_search_dataset(session, symbol, tf, days)
+                    session.commit()
+                    datasets[key] = ds
+                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                        "dataset_id": str(ds.id),
+                        "row_count": ds.row_count,
+                        "provider": provider_label,
+                    }
+                except Exception as exc:
+                    session.rollback()
+                    note = compact_error(exc)
+                    if is_disk_full(exc):
+                        try:
+                            reclaim_search_disk(session)
+                            session.commit()
+                            cached = _latest_dataset(session, symbol, tf)
+                            if cached:
+                                datasets[key] = cached
+                                summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                                    "dataset_id": str(cached.id),
+                                    "row_count": cached.row_count,
+                                    "provider": f"stored after disk full {tf}",
+                                    "warning": note,
+                                }
+                            else:
+                                with session.begin_nested():
+                                    ds, provider_label = ensure_search_dataset(session, symbol, tf, days)
                                 session.commit()
-                                cached = _latest_dataset(session, symbol, tf)
-                                if cached:
-                                    datasets[key] = cached
-                                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
-                                        "dataset_id": str(cached.id),
-                                        "row_count": cached.row_count,
-                                        "provider": f"cached after disk full {tf}",
-                                        "warning": note,
-                                    }
-                                else:
-                                    with session.begin_nested():
-                                        ds, provider_label = _ingest_search_data(session, symbol, days, timeframe=tf)
-                                    session.commit()
-                                    datasets[key] = ds
-                                    summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
-                                        "dataset_id": str(ds.id),
-                                        "row_count": ds.row_count,
-                                        "provider": provider_label,
-                                    }
-                            except Exception as retry_exc:
-                                session.rollback()
-                                note = compact_error(retry_exc)
-                        if key not in datasets:
-                            warnings.append(f"{symbol} {tf}: {note}")
-                            ds = _latest_dataset(session, symbol, tf)
-                            if ds:
                                 datasets[key] = ds
                                 summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
                                     "dataset_id": str(ds.id),
                                     "row_count": ds.row_count,
-                                    "warning": note,
+                                    "provider": provider_label,
                                 }
+                        except Exception as retry_exc:
+                            session.rollback()
+                            note = compact_error(retry_exc)
+                    if key not in datasets:
+                        warnings.append(f"{symbol} {tf}: {note}")
+                        ds = _latest_dataset(session, symbol, tf)
+                        if ds:
+                            datasets[key] = ds
+                            summary.setdefault("symbols", {}).setdefault(symbol, {})[tf] = {
+                                "dataset_id": str(ds.id),
+                                "row_count": ds.row_count,
+                                "warning": note,
+                            }
                 job = _job()
                 loaded = list((job.payload or {}).get("search_progress", {}).get("markets_loaded") or [])
                 if key in datasets:
@@ -320,7 +249,9 @@ def run_autonomous_prop_cycle(
                 warn_bit = ""
                 if warnings and warnings[-1].startswith(f"{symbol} {tf}"):
                     warn_bit = f" — {compact_error(warnings[-1])}"
-                set_job_message(job, f"Loaded {symbol} {tf}{warn_bit}")
+                label = summary.get("symbols", {}).get(symbol, {}).get(tf, {}).get("provider")
+                loaded_bit = f" · {label}" if label else ""
+                set_job_message(job, f"Loaded {symbol} {tf}{loaded_bit}{warn_bit}")
                 session.commit()
 
         job = _job()

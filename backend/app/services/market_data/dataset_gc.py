@@ -12,6 +12,26 @@ from app.models.market_data import DataQualityReport, HistoricalDataset
 from app.models.research import ResearchActivity, ResearchJob
 
 
+def has_stored_history(
+    *,
+    coverage_start: datetime | None,
+    coverage_end: datetime | None,
+    row_count: int,
+    window_start: datetime,
+    window_end: datetime | None = None,
+    timeframe: str = "5m",
+) -> bool:
+    """True when the stored series already covers the requested lookback (tail may be stale)."""
+    del window_end, timeframe
+    if coverage_start is None or coverage_end is None or row_count < 80:
+        return False
+    start = _aware(coverage_start)
+    w_start = _aware(window_start)
+    if start > w_start + timedelta(days=2):
+        return False
+    return True
+
+
 def should_reuse_dataset(
     *,
     coverage_start: datetime | None,
@@ -21,18 +41,21 @@ def should_reuse_dataset(
     window_end: datetime,
     timeframe: str = "5m",
 ) -> bool:
-    if coverage_start is None or coverage_end is None or row_count < 80:
+    return has_stored_history(
+        coverage_start=coverage_start,
+        coverage_end=coverage_end,
+        row_count=row_count,
+        window_start=window_start,
+        window_end=window_end,
+        timeframe=timeframe,
+    )
+
+
+def tail_is_fresh(coverage_end: datetime | None, now: datetime, timeframe: str = "5m") -> bool:
+    if coverage_end is None:
         return False
-    start = _aware(coverage_start)
-    end = _aware(coverage_end)
-    w_start = _aware(window_start)
-    w_end = _aware(window_end)
-    max_lag = timedelta(hours=36) if timeframe == "1m" else timedelta(hours=48)
-    if w_end - end > max_lag:
-        return False
-    if start > w_start + timedelta(days=2):
-        return False
-    return True
+    max_lag = timedelta(minutes=45) if timeframe == "1m" else timedelta(hours=2)
+    return _aware(now) - _aware(coverage_end) <= max_lag
 
 
 def prune_orphan_datasets(session: Session) -> dict[str, int]:

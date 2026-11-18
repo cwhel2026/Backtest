@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models.backtest import OhlcvBar
@@ -59,22 +59,66 @@ def persist_bars_to_dataset(
     if existing is None:
         session.add(dataset)
         session.flush()
+        _insert_ohlcv_chunks(session, dataset.id, deduped)
+        dataset.row_count = len(deduped)
+        dataset.coverage_start = deduped[0][0]
+        dataset.coverage_end = deduped[-1][0]
     else:
-        session.execute(delete(OhlcvBar).where(OhlcvBar.dataset_id == dataset.id))
-        session.flush()
+        merge_bars_into_dataset(session, dataset, deduped)
         dataset.provider_id = provider.id
         dataset.version_tag = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
 
-    _insert_ohlcv_chunks(session, dataset.id, deduped)
-
-    dataset.row_count = len(deduped)
-    dataset.coverage_start = deduped[0][0]
-    dataset.coverage_end = deduped[-1][0]
     dataset.downloaded_at = datetime.now(UTC)
     dataset.validation_status = DatasetValidationStatus.VALIDATED
     dataset.meta = {**(dataset.meta or {}), **meta, "synthetic": False, "duplicate_rows_skipped": dupes}
     session.flush()
     return dataset
+
+
+def bars_outside_coverage(
+    coverage_start: datetime | None,
+    coverage_end: datetime | None,
+    bars: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]],
+) -> list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]]:
+    """Keep only bars strictly before coverage_start or after coverage_end."""
+    out: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]] = []
+    seen: set[datetime] = set()
+    start = coverage_start.astimezone(UTC) if coverage_start and coverage_start.tzinfo else coverage_start
+    end = coverage_end.astimezone(UTC) if coverage_end and coverage_end.tzinfo else coverage_end
+    if start is not None and start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+    if end is not None and end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    for row in sorted(bars, key=lambda x: x[0]):
+        ts = row[0].astimezone(UTC) if row[0].tzinfo else row[0].replace(tzinfo=UTC)
+        if ts in seen:
+            continue
+        seen.add(ts)
+        if start is not None and end is not None and start <= ts <= end:
+            continue
+        out.append((ts, row[1], row[2], row[3], row[4], row[5]))
+    return out
+
+
+def merge_bars_into_dataset(
+    session: Session,
+    dataset: HistoricalDataset,
+    bars: list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]],
+) -> int:
+    """Insert bars the stored series does not already cover. Never deletes existing rows."""
+    incoming = bars_outside_coverage(dataset.coverage_start, dataset.coverage_end, bars)
+    if not incoming:
+        return 0
+    _insert_ohlcv_chunks(session, dataset.id, incoming)
+    dataset.row_count = int(dataset.row_count or 0) + len(incoming)
+    first, last = incoming[0][0], incoming[-1][0]
+    if dataset.coverage_start is None or first < dataset.coverage_start:
+        dataset.coverage_start = first
+    if dataset.coverage_end is None or last > dataset.coverage_end:
+        dataset.coverage_end = last
+    dataset.downloaded_at = datetime.now(UTC)
+    session.flush()
+    return len(incoming)
 
 
 def _insert_ohlcv_chunks(

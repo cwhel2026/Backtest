@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
-from app.services.market_data.dataset_gc import ohlcv_trim_cutoff, should_reuse_dataset
+from app.services.market_data.bar_storage import bars_outside_coverage
+from app.services.market_data.dataset_gc import ohlcv_trim_cutoff, should_reuse_dataset, tail_is_fresh
 from app.util.db_errors import DISK_FULL_MESSAGE, compact_error, is_disk_full, set_job_message
 from app.util.serde import integrity_hint
 
@@ -21,7 +23,20 @@ def test_should_reuse_fresh_1m_window():
     )
 
 
-def test_should_not_reuse_stale_or_short():
+def test_should_reuse_complete_history_even_if_tail_is_stale():
+    now = datetime(2026, 11, 18, 12, tzinfo=UTC)
+    assert should_reuse_dataset(
+        coverage_start=now - timedelta(days=7),
+        coverage_end=now - timedelta(days=2),
+        row_count=4000,
+        window_start=now - timedelta(days=7),
+        window_end=now,
+        timeframe="1m",
+    )
+    assert not tail_is_fresh(now - timedelta(days=2), now, "1m")
+
+
+def test_should_not_reuse_short_history():
     now = datetime(2026, 11, 18, 12, tzinfo=UTC)
     assert not should_reuse_dataset(
         coverage_start=now - timedelta(days=1),
@@ -39,6 +54,18 @@ def test_should_not_reuse_stale_or_short():
         window_end=now,
         timeframe="1m",
     )
+
+
+def test_bars_outside_coverage_skips_already_stored():
+    start = datetime(2026, 11, 10, tzinfo=UTC)
+    end = datetime(2026, 11, 17, tzinfo=UTC)
+    bars = [
+        (start - timedelta(hours=1), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), 1),
+        (start + timedelta(hours=1), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), 1),
+        (end + timedelta(minutes=5), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), 1),
+    ]
+    extra = bars_outside_coverage(start, end, bars)
+    assert [row[0] for row in extra] == [bars[0][0], bars[2][0]]
 
 
 def test_compact_error_strips_sql_params_and_maps_disk_full():
