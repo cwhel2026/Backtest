@@ -11,15 +11,28 @@ DISK_FULL_MESSAGE = (
 
 RETRY_AFTER_DB_ERROR = "The last database write failed. Try again in a few seconds."
 
+POSTGRES_RECOVERY_MESSAGE = (
+    "Postgres is recovering after the disk filled with 1m bars. "
+    "On Railway: open the Postgres service → Restart. Wait until it is Running, then sign in. "
+    "Increase the Postgres volume so this cannot happen again."
+)
+
 
 def is_disk_full(exc: BaseException) -> bool:
     text = f"{exc} {getattr(exc, 'orig', '')}".lower()
     return "diskfull" in text or "no space left" in text or "could not extend file" in text
 
 
+def is_postgres_recovery(exc: BaseException | str) -> bool:
+    text = f"{exc} {getattr(exc, 'orig', '')}".lower() if not isinstance(exc, str) else exc.lower()
+    return "recovery mode" in text or "the database system is starting up" in text
+
+
 def compact_error(exc: BaseException | str, *, limit: int = JOB_MESSAGE_MAX) -> str:
     if not isinstance(exc, str) and is_disk_full(exc):
         return DISK_FULL_MESSAGE
+    if is_postgres_recovery(exc):
+        return POSTGRES_RECOVERY_MESSAGE
     text = str(getattr(exc, "orig", None) or exc)
     for marker in ("[SQL:", "[parameters:", "(Background on this error"):
         if marker in text:
@@ -27,6 +40,8 @@ def compact_error(exc: BaseException | str, *, limit: int = JOB_MESSAGE_MAX) -> 
     text = " ".join(text.split()).strip()
     if is_disk_full_text(text):
         return DISK_FULL_MESSAGE
+    if is_postgres_recovery(text):
+        return POSTGRES_RECOVERY_MESSAGE
     return text[:limit]
 
 

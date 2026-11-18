@@ -71,7 +71,15 @@ export async function login(email: string, password: string): Promise<TokenRespo
   });
   if (!res.ok) {
     if (res.status === 401) throw new Error("INVALID_CREDENTIALS");
-    throw new Error(`API_ERROR_${res.status}`);
+    const text = await res.text();
+    let detail = "";
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail.trim() || `API_ERROR_${res.status}`);
   }
   return res.json();
 }

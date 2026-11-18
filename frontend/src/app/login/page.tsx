@@ -25,10 +25,12 @@ export default function LoginPage() {
         setError(
           "Password or email does not match the backend database. On Railway backend: re-save INITIAL_ADMIN_PASSWORD (no spaces), redeploy backend, wait 1 minute, try again.",
         );
-      } else {
+      } else if (!msg || /^API_ERROR_/.test(msg) || /failed to fetch/i.test(msg)) {
         setError(
-          `Cannot reach API. On Railway frontend set BACKEND_INTERNAL_URL or NEXT_PUBLIC_API_URL to https://backtest-production-39b9045c.up.railway.app then Redeploy frontend. (${msg})`,
+          "Cannot reach the API. On the Railway frontend, set BACKEND_INTERNAL_URL to the backend public URL, then redeploy the frontend.",
         );
+      } else {
+        setError(msg);
       }
     } finally {
       setLoading(false);

@@ -3,7 +3,14 @@ from decimal import Decimal
 
 from app.services.market_data.bar_storage import bars_outside_coverage
 from app.services.market_data.dataset_gc import ohlcv_trim_cutoff, should_reuse_dataset, tail_is_fresh
-from app.util.db_errors import DISK_FULL_MESSAGE, compact_error, is_disk_full, set_job_message
+from app.util.db_errors import (
+    DISK_FULL_MESSAGE,
+    POSTGRES_RECOVERY_MESSAGE,
+    compact_error,
+    is_disk_full,
+    is_postgres_recovery,
+    set_job_message,
+)
 from app.util.serde import integrity_hint
 
 
@@ -76,6 +83,13 @@ def test_compact_error_strips_sql_params_and_maps_disk_full():
     )
     assert compact_error(raw) == DISK_FULL_MESSAGE
     assert is_disk_full(Exception(raw))
+
+
+def test_compact_error_maps_postgres_recovery():
+    raw = "the database system is in recovery mode"
+    assert is_postgres_recovery(raw)
+    assert compact_error(raw) == POSTGRES_RECOVERY_MESSAGE
+    assert compact_error(Exception(raw)) == POSTGRES_RECOVERY_MESSAGE
 
 
 def test_compact_error_truncates_generic():
