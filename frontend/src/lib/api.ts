@@ -22,7 +22,7 @@ export function friendlyApiDetail(detail: string, status?: number): string {
   const text = (detail || "").trim();
   const lower = text.toLowerCase();
   if (
-    /recovery mode|starting up|is recovering after the disk|could not connect to server/.test(
+    /recovery mode|starting up|is recovering after the disk|could not connect to server|connection reset|last database write failed/.test(
       lower,
     ) ||
     (status === 502 && /failed to respond|application failed/.test(lower))

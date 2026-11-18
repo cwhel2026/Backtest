@@ -92,6 +92,16 @@ def test_compact_error_maps_postgres_recovery():
     assert compact_error(Exception(raw)) == POSTGRES_RECOVERY_MESSAGE
 
 
+def test_compact_error_maps_connection_reset_and_rollback_cause():
+    reset = "[Errno 104] Connection reset by peer"
+    assert is_postgres_recovery(reset)
+    assert compact_error(reset) == POSTGRES_RECOVERY_MESSAGE
+    wrapped = Exception("This Session's transaction has been rolled back due to a previous exception during flush.")
+    wrapped.__cause__ = Exception("the database system is in recovery mode")
+    assert is_postgres_recovery(wrapped)
+    assert compact_error(wrapped) == POSTGRES_RECOVERY_MESSAGE
+
+
 def test_compact_error_truncates_generic():
     assert compact_error("x" * 500) == "x" * 240
 

@@ -17,15 +17,39 @@ POSTGRES_RECOVERY_MESSAGE = (
     "Increase the Postgres volume so this cannot happen again."
 )
 
+RECOVERY_SNIPPETS = (
+    "recovery mode",
+    "the database system is starting up",
+    "connection reset by peer",
+    "server closed the connection",
+    "connection was closed",
+    "errno 104",
+)
+
+
+def exception_text(exc: BaseException | str) -> str:
+    if isinstance(exc, str):
+        return exc.lower()
+    parts: list[str] = []
+    current: BaseException | None = exc
+    seen = 0
+    while current is not None and seen < 8:
+        parts.append(str(current))
+        orig = getattr(current, "orig", None)
+        if orig is not None:
+            parts.append(str(orig))
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return " ".join(parts).lower()
+
 
 def is_disk_full(exc: BaseException) -> bool:
-    text = f"{exc} {getattr(exc, 'orig', '')}".lower()
-    return "diskfull" in text or "no space left" in text or "could not extend file" in text
+    return is_disk_full_text(exception_text(exc))
 
 
 def is_postgres_recovery(exc: BaseException | str) -> bool:
-    text = f"{exc} {getattr(exc, 'orig', '')}".lower() if not isinstance(exc, str) else exc.lower()
-    return "recovery mode" in text or "the database system is starting up" in text
+    text = exception_text(exc)
+    return any(snippet in text for snippet in RECOVERY_SNIPPETS)
 
 
 def compact_error(exc: BaseException | str, *, limit: int = JOB_MESSAGE_MAX) -> str:

@@ -105,9 +105,11 @@ def create_app() -> FastAPI:
     @app.exception_handler(PendingRollbackError)
     async def db_pending_rollback(_request: Request, exc: PendingRollbackError) -> JSONResponse:
         logger.exception("db_pending_rollback", error=str(exc))
+        if is_postgres_recovery(exc) or is_disk_full(exc):
+            return JSONResponse(status_code=503, content={"detail": compact_error(exc)})
         return JSONResponse(
-            status_code=500,
-            content={"detail": RETRY_AFTER_DB_ERROR},
+            status_code=503,
+            content={"detail": compact_error(exc) or RETRY_AFTER_DB_ERROR},
         )
 
     @app.exception_handler(Exception)
