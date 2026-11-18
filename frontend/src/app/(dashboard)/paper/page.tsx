@@ -58,6 +58,17 @@ type Desk = {
   recent_fills: Fill[];
 };
 
+function friendlyPaperError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/diskfull|no space left|could not extend|ran out of disk/i.test(raw)) {
+    return "Postgres ran out of disk while pulling bars. Extra copies will be cleared — press Pull live bars again. If it happens again, increase the Railway Postgres volume.";
+  }
+  if (/interrupted after an error|pendingrollback|last database write failed/i.test(raw)) {
+    return "A previous database write failed (usually a full disk). Press Pull live bars again.";
+  }
+  return raw.replace(/^Error:\s*/i, "");
+}
+
 function money(n: number) {
   const sign = n > 0 ? "+" : "";
   return `${sign}$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -68,7 +79,7 @@ export default function PaperTradingPage() {
   const [note, setNote] = useState<string | null>(null);
 
   function load() {
-    apiFetch<Desk>("/api/v1/paper/desk").then(setDesk).catch((e) => setNote(String(e)));
+    apiFetch<Desk>("/api/v1/paper/desk").then(setDesk).catch((e) => setNote(friendlyPaperError(e)));
   }
 
   useEffect(() => {
@@ -89,7 +100,7 @@ export default function PaperTradingPage() {
         `Live refresh: ${res.tick.refreshed ?? 0} feeds, ${res.tick.opened} new entries, ${res.tick.closed} exits.`,
       );
     } catch (e) {
-      setNote(String(e));
+      setNote(friendlyPaperError(e));
     }
   }
 
@@ -115,7 +126,11 @@ export default function PaperTradingPage() {
         </button>
       </header>
 
-      {note ? <p className="text-sm text-zinc-400">{note}</p> : null}
+      {note ? (
+        <p className={`text-sm ${/disk|failed|error|volume/i.test(note) ? "text-amber-200" : "text-zinc-400"}`}>
+          {note}
+        </p>
+      ) : null}
 
       {account ? (
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

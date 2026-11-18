@@ -6,8 +6,10 @@ JOB_MESSAGE_MAX = 240
 
 DISK_FULL_MESSAGE = (
     "Postgres ran out of disk while loading market bars. Extra 1m/5m copies were cleared. "
-    "Press Restart search. If it happens again, increase the Railway Postgres volume."
+    "Try again. If it happens again, increase the Railway Postgres volume."
 )
+
+RETRY_AFTER_DB_ERROR = "The last database write failed. Try again in a few seconds."
 
 
 def is_disk_full(exc: BaseException) -> bool:

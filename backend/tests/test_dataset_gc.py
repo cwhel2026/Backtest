@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from app.services.market_data.dataset_gc import should_reuse_dataset
+from app.services.market_data.dataset_gc import ohlcv_trim_cutoff, should_reuse_dataset
 from app.util.db_errors import DISK_FULL_MESSAGE, compact_error, is_disk_full, set_job_message
 from app.util.serde import integrity_hint
 
@@ -53,6 +53,13 @@ def test_compact_error_strips_sql_params_and_maps_disk_full():
 
 def test_compact_error_truncates_generic():
     assert compact_error("x" * 500) == "x" * 240
+
+
+def test_ohlcv_trim_cutoffs():
+    now = datetime(2026, 11, 18, 12, tzinfo=UTC)
+    assert ohlcv_trim_cutoff("1m", now) == now - timedelta(days=10)
+    assert ohlcv_trim_cutoff("5m", now) == now - timedelta(days=70)
+    assert ohlcv_trim_cutoff("1d", now) is None
 
 
 def test_integrity_hint_disk_full():

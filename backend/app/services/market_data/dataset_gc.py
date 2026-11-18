@@ -87,8 +87,38 @@ def prune_old_jobs(session: Session, *, keep: int = 20) -> int:
     return dropped
 
 
+def ohlcv_trim_cutoff(timeframe: str, now: datetime) -> datetime | None:
+    if timeframe == "1m":
+        return now - timedelta(days=10)
+    if timeframe in ("5m", "15m"):
+        return now - timedelta(days=70)
+    return None
+
+
+def trim_intraday_bars(session: Session, *, now: datetime | None = None) -> int:
+    """Drop bars older than the search windows so live ticks cannot grow forever."""
+    now = now or datetime.now(UTC)
+    dropped = 0
+    rows = session.execute(select(HistoricalDataset)).scalars().all()
+    for ds in rows:
+        cutoff = ohlcv_trim_cutoff(ds.timeframe, now)
+        if cutoff is None:
+            continue
+        result = session.execute(
+            delete(OhlcvBar).where(OhlcvBar.dataset_id == ds.id, OhlcvBar.ts < cutoff)
+        )
+        n = int(result.rowcount or 0)
+        if n:
+            ds.row_count = max(0, int(ds.row_count or 0) - n)
+            if ds.coverage_start is None or _aware(ds.coverage_start) < cutoff:
+                ds.coverage_start = cutoff
+        dropped += n
+    return dropped
+
+
 def reclaim_search_disk(session: Session) -> dict[str, int]:
     stats = prune_orphan_datasets(session)
+    stats["bars_trimmed"] = trim_intraday_bars(session)
     stats["activities_dropped"] = prune_old_activity(session)
     stats["jobs_dropped"] = prune_old_jobs(session)
     return stats
