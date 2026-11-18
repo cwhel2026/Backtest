@@ -15,6 +15,23 @@ function apiBase(): string {
 
 export type TokenResponse = { access_token: string; token_type: string };
 
+export const POSTGRES_RECOVERY_COPY =
+  "Postgres is recovering after the disk filled with 1m bars. On Railway: open the Postgres plugin → Restart. Wait until it is Running, then sign in. Increase the Postgres volume so this cannot happen again.";
+
+export function friendlyApiDetail(detail: string, status?: number): string {
+  const text = (detail || "").trim();
+  const lower = text.toLowerCase();
+  if (
+    /recovery mode|starting up|is recovering after the disk|could not connect to server/.test(
+      lower,
+    ) ||
+    (status === 502 && /failed to respond|application failed/.test(lower))
+  ) {
+    return POSTGRES_RECOVERY_COPY;
+  }
+  return text;
+}
+
 export function getStoredToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("propedge_token");
@@ -55,7 +72,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
         ? "The server hit an error. Wait a few seconds and press Run prop search again."
         : text.trim().slice(0, 240) || res.statusText || "Request failed";
     }
-    throw new Error(detail);
+    throw new Error(friendlyApiDetail(detail, res.status));
   }
   return res.json() as Promise<T>;
 }
@@ -69,17 +86,20 @@ export async function login(email: string, password: string): Promise<TokenRespo
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) {
+    if (!res.ok) {
     if (res.status === 401) throw new Error("INVALID_CREDENTIALS");
     const text = await res.text();
     let detail = "";
     try {
-      const parsed = JSON.parse(text) as { detail?: string };
+      const parsed = JSON.parse(text) as { detail?: string; message?: string };
       if (typeof parsed.detail === "string") detail = parsed.detail;
+      else if (typeof parsed.message === "string") detail = parsed.message;
     } catch {
       detail = "";
     }
-    throw new Error(detail.trim() || `API_ERROR_${res.status}`);
+    throw new Error(
+      friendlyApiDetail(detail.trim() || text.trim(), res.status) || `API_ERROR_${res.status}`,
+    );
   }
   return res.json();
 }

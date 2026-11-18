@@ -7,8 +7,8 @@ export PYTHONPATH="${PYTHONPATH:-.}"
 
 PORT="${PORT:-8000}"
 
-echo "[propedge] Running database migrations..."
-alembic upgrade head
+echo "[propedge] Waiting for Postgres (will start the API even if it is in recovery)..."
+python -m app.util.db_wait --timeout 25 --migrate-if-ready || echo "[propedge] Migrations deferred; API will retry when Postgres is up."
 
 echo "[propedge] Starting background worker (low concurrency for Railway memory)..."
 celery -A app.worker.celery_app worker --loglevel=info --pool=solo &

@@ -175,6 +175,7 @@ Browsers block the site unless the API allows your frontend URL.
 |---------|------------|
 | `/health` does not load | Backend **Deploy Logs** — usually wrong root directory or branch without `railway.toml` |
 | Login fails | Check `INITIAL_ADMIN_PASSWORD` spelling; redeploy backend |
+| Login says **recovery mode** / API 502 | Postgres crash-recovered after DiskFull. Open the **Postgres** plugin → **Restart**. Wait until Running. Increase the volume. Then sign in again. |
 | “CORS” / network error in browser | `ALLOWED_ORIGINS` must match frontend URL exactly; redeploy backend |
 | Backtest stuck on “queued” | Redeploy backend — worker runs inside the same service (check logs for “celery”) |
 | Build fails on frontend | `NEXT_PUBLIC_API_URL` must be set **before** or redeploy after adding it |

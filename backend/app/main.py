@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request
@@ -19,18 +20,41 @@ from app.util.db_errors import (
     is_disk_full,
     is_postgres_recovery,
 )
+from app.util.db_wait import is_retryable_db, run_alembic_upgrade
 from app.util.serde import integrity_hint
 
 logger = structlog.get_logger()
 
 
+async def bring_database_up() -> None:
+    """Migrate + seed, retrying while Postgres is in crash recovery."""
+    delay = 2.0
+    while True:
+        try:
+            await asyncio.to_thread(run_alembic_upgrade)
+            async with AsyncSessionLocal() as session:
+                await bootstrap_database(session)
+                await session.commit()
+            logger.info("prop_edge_startup_complete")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not is_retryable_db(exc):
+                logger.exception("bootstrap_failed", error=compact_error(exc))
+            else:
+                logger.warning("database_not_ready", error=compact_error(exc))
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, 15.0)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    async with AsyncSessionLocal() as session:
-        await bootstrap_database(session)
-        await session.commit()
-    logger.info("prop_edge_startup_complete")
+    task = asyncio.create_task(bring_database_up())
     yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 def create_app() -> FastAPI:
