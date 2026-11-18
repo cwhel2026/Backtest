@@ -34,8 +34,9 @@ type PaperDesk = {
     trailing_room: number;
     distance_to_target: number;
   };
-  enrolled: { slot_id: string; symbol: string; strategy_name: string; in_trade: boolean }[];
+  enrolled: { slot_id: string; symbol: string; strategy_name: string; in_trade: boolean; last_close?: number | null }[];
   open_positions: { slot_id: string; strategy_name: string; symbol: string; direction: string; quantity: number; entry_price: number }[];
+  scanner?: { live?: boolean; headline?: string; watching_count?: number; slot_count?: number; last_scan_age_sec?: number | null };
 };
 
 type AutopilotStatus = {
@@ -194,25 +195,41 @@ export default function HomePage() {
         active={searching}
       />
 
-      {paper && paper.open_positions.length > 0 ? (
-        <section>
-          <div className="flex items-end justify-between">
-            <h3 className="text-sm font-semibold text-zinc-100">Open paper trades</h3>
+      {paper ? (
+        <section className="rounded-xl border border-emerald-900/40 bg-[#151820] p-4">
+          <div className="flex items-end justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Forward-test scanner</h3>
+              <p className="mt-1 text-sm text-zinc-300">
+                {paper.scanner?.headline ||
+                  (paper.enrolled.length
+                    ? `Watching ${paper.enrolled.length} enrolled setup${paper.enrolled.length === 1 ? "" : "s"}.`
+                    : "Open Forward test to auto-enroll keepers and watch live scans.")}
+              </p>
+            </div>
             <Link href="/paper" className="text-xs text-emerald-500 hover:underline">
-              Prop book
+              Live book
             </Link>
           </div>
-          <ul className="mt-3 space-y-2">
-            {paper.open_positions.map((p) => (
-              <li key={p.slot_id} className="flex items-center justify-between rounded-lg border border-zinc-800 px-3 py-2 text-sm">
-                <span>
-                  {p.symbol} {p.direction} ×{p.quantity}
-                  <span className="ml-2 text-zinc-500">{p.strategy_name}</span>
-                </span>
-                <span className="tabular-nums text-zinc-300">{p.entry_price}</span>
-              </li>
-            ))}
-          </ul>
+          {paper.open_positions.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {paper.open_positions.map((p) => (
+                <li key={p.slot_id} className="flex items-center justify-between rounded-lg border border-zinc-800 px-3 py-2 text-sm">
+                  <span>
+                    {p.symbol} {p.direction} ×{p.quantity}
+                    <span className="ml-2 text-zinc-500">{p.strategy_name}</span>
+                  </span>
+                  <span className="tabular-nums text-zinc-300">{p.entry_price}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs text-zinc-500">
+              Flat right now. {paper.scanner?.watching_count ?? paper.enrolled.length} setup
+              {(paper.scanner?.watching_count ?? paper.enrolled.length) === 1 ? "" : "s"} scanning for the next
+              entry.
+            </p>
+          )}
         </section>
       ) : null}
 

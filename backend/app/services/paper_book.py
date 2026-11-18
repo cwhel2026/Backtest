@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.backtest.bars import load_bars
 from app.core.config import get_settings
-from app.models.backtest import BacktestRun
+from app.models.backtest import BacktestRun, OhlcvBar
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.models.paper import PaperAccount, PaperFill, PaperSlot
@@ -22,10 +22,112 @@ from app.services.market_data.live_feed import refresh_live_bars
 from app.services.paper_engine import ClosedFill, OpenTrade, SlotCursor, advance_slot, apply_prop_rules
 
 CHICAGO = ZoneInfo("America/Chicago")
+TICK_INTERVAL_SEC = 60
+TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 
 def _chicago_today():
     return datetime.now(CHICAGO).date()
+
+
+def globex_session(now: datetime | None = None) -> dict:
+    """CME equity-index Globex window in America/Chicago."""
+    clock = now or datetime.now(CHICAGO)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=UTC)
+    clock = clock.astimezone(CHICAGO)
+    weekday = clock.weekday()
+    minutes = clock.hour * 60 + clock.minute
+    open_flag = True
+    if weekday == 5:
+        state, label, open_flag = "closed", "Weekend — Globex closed", False
+    elif weekday == 6 and minutes < 17 * 60:
+        state, label, open_flag = "closed", "Weekend — Globex opens Sunday 17:00 CT", False
+    elif weekday == 4 and minutes >= 16 * 60:
+        state, label, open_flag = "closed", "Weekend — Globex closed Friday 16:00 CT", False
+    elif 16 * 60 <= minutes < 17 * 60:
+        state, label, open_flag = "halt", "Daily halt 16:00–17:00 CT", False
+    elif (8 * 60 + 30) <= minutes < (15 * 60 + 10):
+        state, label = "rth", "RTH open · scanning for entries"
+    else:
+        state, label = "globex", "Globex electronic session · scanning"
+    return {
+        "state": state,
+        "label": label,
+        "open": open_flag,
+        "chicago": clock.strftime("%H:%M:%S CT"),
+        "weekday": clock.strftime("%A"),
+    }
+
+
+def _aware(ts: datetime | None) -> datetime | None:
+    if ts is None:
+        return None
+    return ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
+
+
+def _age_sec(ts: datetime | None, now: datetime | None = None) -> int | None:
+    aware = _aware(ts)
+    if aware is None:
+        return None
+    clock = now or datetime.now(UTC)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=UTC)
+    return max(0, int((clock.astimezone(UTC) - aware).total_seconds()))
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def scan_headline(
+    *,
+    slot_count: int,
+    opened: int,
+    closed: int,
+    enrolled_new: int,
+    watches: list[dict],
+    session: dict,
+) -> str:
+    prefix = f"Enrolled {enrolled_new} keeper{'s' if enrolled_new != 1 else ''}. " if enrolled_new else ""
+    if slot_count == 0:
+        return "No keepers on the book yet — each scan auto-enrolls prop-screen winners."
+    if opened or closed:
+        return prefix + f"Scan complete: {opened} new entries, {closed} exits."
+    errors = [w for w in watches if w.get("error")]
+    prints = [w for w in watches if w.get("last_close") is not None]
+    in_trade = [w for w in watches if w.get("in_trade")]
+    if errors and not prints:
+        return prefix + f"Feed error: {str(errors[0].get('error') or '')[:120]}"
+    if in_trade:
+        trade = in_trade[0]
+        return prefix + (
+            f"Managing {trade.get('symbol')} {trade.get('direction') or 'open'} "
+            f"· still scanning remaining slots for entries."
+        )
+    if prints:
+        watch = prints[0]
+        symbol = watch.get("symbol")
+        tf = watch.get("timeframe")
+        last_close = watch.get("last_close")
+        if any(w.get("armed") for w in watches):
+            return prefix + (
+                f"Armed {symbol} {tf} at {last_close} — the next new bar will be evaluated for entries."
+            )
+        new_bars = sum(int(w.get("new_bars") or 0) for w in watches)
+        if new_bars:
+            return prefix + (
+                f"Scanned {new_bars} new {tf} bar(s) on {symbol} @ {last_close} — no entry this pass."
+            )
+        return prefix + f"Caught up on {symbol} {tf} @ {last_close} — watching for the next bar."
+    if not session.get("open"):
+        return prefix + f"{session.get('label')} — scanner stays armed and will pull bars when Globex reopens."
+    return prefix + "Scanner is live. Waiting for the first bars to land."
 
 
 def _dec(value: Decimal | float | int) -> float:
@@ -189,6 +291,8 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
     closed = 0
     refreshed = 0
     allow = account.status in ("active", "passed")
+    feeds: dict[tuple[str, str], dict] = {}
+    watches: list[dict] = []
 
     if refresh_data:
         seen: set[tuple[str, str]] = set()
@@ -199,9 +303,11 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
                 continue
             seen.add(key)
             try:
-                refresh_live_bars(session, slot.symbol, tf)
+                result = refresh_live_bars(session, slot.symbol, tf)
+                feeds[key] = result
                 refreshed += 1
             except Exception as exc:
+                feeds[key] = {"error": str(exc)[:400]}
                 slot.last_error = str(exc)[:400]
                 session.add(slot)
 
@@ -213,11 +319,28 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         instrument = session.get(Instrument, strategy.instrument_id)
         tf = slot.timeframe or (version.specification or {}).get("timeframe") or strategy.timeframe or "5m"
         slot.timeframe = tf
+        feed = feeds.get((slot.symbol.upper(), tf), {})
         dataset = _latest_dataset(session, slot.symbol, tf)
         if not version or not instrument or not dataset:
             slot.last_error = slot.last_error or f"No {tf} dataset for {slot.symbol}"
+            watches.append(
+                {
+                    "slot_id": str(slot.id),
+                    "symbol": slot.symbol,
+                    "timeframe": tf,
+                    "strategy_name": strategy.name if strategy else slot.symbol,
+                    "state": "error",
+                    "error": slot.last_error,
+                    "in_trade": slot.open_direction is not None,
+                    "feed_source": feed.get("source"),
+                }
+            )
             continue
         bars = load_bars(session, dataset.id)
+        prev_ts = slot.last_bar_ts
+        last = bars[-1] if bars else None
+        new_count = sum(1 for b in bars if prev_ts is None or b.ts > prev_ts)
+        first_arm = prev_ts is None and last is not None
         had_position = slot.open_direction is not None
         cursor = SlotCursor(
             last_bar_ts=slot.last_bar_ts,
@@ -262,7 +385,8 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             slot.open_entry_ts = None
             slot.open_bars_held = 0
             slot.open_initial_risk = None
-        if cursor.position and not had_position:
+        just_opened = bool(cursor.position and not had_position)
+        if just_opened:
             opened += 1
             session.add(
                 ResearchActivity(
@@ -306,7 +430,80 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
             )
             if account.status == "breached":
                 allow = False
+        if slot.last_error:
+            state = "error"
+        elif cursor.position:
+            state = "in_trade"
+        elif first_arm:
+            state = "armed"
+        elif new_count == 0:
+            state = "watching"
+        else:
+            state = "scanned"
+        watches.append(
+            {
+                "slot_id": str(slot.id),
+                "symbol": slot.symbol,
+                "timeframe": tf,
+                "strategy_name": strategy.name,
+                "state": state,
+                "bars": len(bars),
+                "new_bars": 0 if first_arm else new_count,
+                "armed": first_arm,
+                "last_bar_ts": last.ts.isoformat() if last else None,
+                "last_open": float(last.open) if last else None,
+                "last_high": float(last.high) if last else None,
+                "last_low": float(last.low) if last else None,
+                "last_close": float(last.close) if last else None,
+                "last_volume": int(last.volume) if last else 0,
+                "feed_source": feed.get("source"),
+                "bars_added": feed.get("added"),
+                "in_trade": cursor.position is not None,
+                "direction": cursor.position.direction if cursor.position else None,
+                "opened": 1 if just_opened else 0,
+                "closed": len(fills),
+                "error": slot.last_error,
+            }
+        )
 
+    market = globex_session()
+    headline = scan_headline(
+        slot_count=len(slots),
+        opened=opened,
+        closed=closed,
+        enrolled_new=enrolled_new,
+        watches=watches,
+        session=market,
+    )
+    now = datetime.now(UTC)
+    previous = account.last_scan if isinstance(account.last_scan, dict) else {}
+    history = list(previous.get("history") or [])
+    history.insert(
+        0,
+        {
+            "at": now.isoformat(),
+            "headline": headline,
+            "opened": opened,
+            "closed": closed,
+            "refreshed": refreshed,
+            "enrolled_new": enrolled_new,
+            "new_bars": sum(int(w.get("new_bars") or 0) for w in watches),
+            "slots": len(slots),
+        },
+    )
+    account.last_scan = {
+        "at": now.isoformat(),
+        "headline": headline,
+        "opened": opened,
+        "closed": closed,
+        "refreshed": refreshed,
+        "enrolled_new": enrolled_new,
+        "slots": len(slots),
+        "session": market,
+        "watches": watches,
+        "history": history[:12],
+    }
+    account.updated_at = now
     session.commit()
     return {
         "slots": len(slots),
@@ -316,6 +513,111 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         "enrolled_new": enrolled_new,
         "status": account.status,
         "equity": _dec(account.equity),
+        "headline": headline,
+        "session": market,
+        "watches": watches,
+        "at": now.isoformat(),
+    }
+
+
+def _latest_print(session: Session, symbol: str, timeframe: str) -> dict | None:
+    dataset = _latest_dataset(session, symbol, timeframe)
+    if not dataset:
+        return None
+    bar = session.execute(
+        select(OhlcvBar).where(OhlcvBar.dataset_id == dataset.id).order_by(desc(OhlcvBar.ts)).limit(1)
+    ).scalar_one_or_none()
+    if not bar:
+        return None
+    source = ""
+    if isinstance(dataset.meta, dict):
+        source = str(dataset.meta.get("source") or dataset.source_uri or "")
+    else:
+        source = str(dataset.source_uri or "")
+    return {
+        "ts": bar.ts.isoformat(),
+        "open": float(bar.open),
+        "high": float(bar.high),
+        "low": float(bar.low),
+        "close": float(bar.close),
+        "volume": int(bar.volume or 0),
+        "row_count": int(dataset.row_count or 0),
+        "coverage_end": dataset.coverage_end.isoformat() if dataset.coverage_end else None,
+        "source": source,
+        "age_sec": _age_sec(bar.ts),
+    }
+
+
+def _unrealized(slot: PaperSlot, last_close: float | None, multiplier: Decimal | None) -> float | None:
+    if last_close is None or not slot.open_direction or slot.open_entry_price is None or not multiplier:
+        return None
+    qty = Decimal(slot.open_qty or 0)
+    entry = Decimal(slot.open_entry_price)
+    close = Decimal(str(last_close))
+    diff = close - entry if slot.open_direction == "long" else entry - close
+    return round(float(diff * multiplier * qty), 2)
+
+
+def scanner_payload(
+    *,
+    last_scan: dict | None,
+    enrolled: list[dict],
+    now: datetime | None = None,
+) -> dict:
+    clock = now or datetime.now(UTC)
+    last = last_scan if isinstance(last_scan, dict) else {}
+    last_at = _parse_iso(last.get("at"))
+    age = _age_sec(last_at, clock)
+    live = age is not None and age <= 90
+    stale = age is not None and age > 180
+    market = globex_session(clock)
+    watching = [row for row in enrolled if not row.get("in_trade") and not row.get("last_error")]
+    trading = [row for row in enrolled if row.get("in_trade")]
+    errors = [row for row in enrolled if row.get("last_error")]
+    if not enrolled:
+        status = "empty"
+    elif errors and not any(row.get("last_close") is not None for row in enrolled):
+        status = "error"
+    elif stale:
+        status = "stale"
+    elif trading:
+        status = "in_trade"
+    elif live or last:
+        status = "scanning"
+    else:
+        status = "armed"
+    headline = last.get("headline") or scan_headline(
+        slot_count=len(enrolled),
+        opened=int(last.get("opened") or 0),
+        closed=int(last.get("closed") or 0),
+        enrolled_new=int(last.get("enrolled_new") or 0),
+        watches=enrolled,
+        session=market,
+    )
+    next_due = max(0, TICK_INTERVAL_SEC - age) if age is not None else None
+    return {
+        "status": status,
+        "live": live,
+        "stale": stale,
+        "tick_interval_sec": TICK_INTERVAL_SEC,
+        "last_scan_at": last.get("at"),
+        "last_scan_age_sec": age,
+        "next_scan_sec": next_due,
+        "headline": headline,
+        "session": market,
+        "opened": int(last.get("opened") or 0),
+        "closed": int(last.get("closed") or 0),
+        "refreshed": int(last.get("refreshed") or 0),
+        "enrolled_new": int(last.get("enrolled_new") or 0),
+        "new_bars": sum(int(w.get("new_bars") or 0) for w in (last.get("watches") or [])),
+        "history": last.get("history") or [],
+        "watching_count": len(watching),
+        "in_trade_count": len(trading),
+        "slot_count": len(enrolled),
+        "feed_note": (
+            "Yahoo/FinzData prints are delayed (~15m). The scanner still evaluates every new bar; "
+            "it does not replay history on first arm."
+        ),
     }
 
 
@@ -323,14 +625,22 @@ def paper_snapshot(session: Session) -> dict:
     account = ensure_paper_account(session)
     slots = session.execute(select(PaperSlot).where(PaperSlot.status == "active")).scalars().all()
     fills = session.execute(select(PaperFill).order_by(desc(PaperFill.created_at)).limit(20)).scalars().all()
+    enrolled = [_slot_summary(session, s) for s in slots]
+    last_scan = account.last_scan if isinstance(account.last_scan, dict) else {}
+    watch_by_id = {str(w.get("slot_id")): w for w in (last_scan.get("watches") or []) if w.get("slot_id")}
     open_positions = []
-    for slot in slots:
-        strategy = session.get(StrategyDefinition, slot.strategy_id)
+    for slot, row in zip(slots, enrolled, strict=False):
+        watch = watch_by_id.get(str(slot.id), {})
+        if watch:
+            row["state"] = watch.get("state") or row.get("state")
+            row["new_bars"] = watch.get("new_bars", row.get("new_bars"))
+            row["armed"] = watch.get("armed", row.get("armed"))
+            row["feed_source"] = watch.get("feed_source") or row.get("feed_source")
         if slot.open_direction:
             open_positions.append(
                 {
                     "slot_id": str(slot.id),
-                    "strategy_name": strategy.name if strategy else slot.symbol,
+                    "strategy_name": row["strategy_name"],
                     "symbol": slot.symbol,
                     "direction": slot.open_direction,
                     "quantity": slot.open_qty,
@@ -340,8 +650,12 @@ def paper_snapshot(session: Session) -> dict:
                     "entry_ts": slot.open_entry_ts.isoformat() if slot.open_entry_ts else None,
                     "bars_held": slot.open_bars_held,
                     "timeframe": slot.timeframe,
+                    "last_close": row.get("last_close"),
+                    "unrealized": row.get("unrealized"),
+                    "last_bar_ts": row.get("last_bar_ts"),
                 }
             )
+    now = datetime.now(UTC)
     day_pnl = Decimal(account.equity) - Decimal(account.day_start_equity)
     return {
         "account": {
@@ -357,7 +671,8 @@ def paper_snapshot(session: Session) -> dict:
             "distance_to_target": _dec(Decimal(account.profit_target) - (Decimal(account.equity) - Decimal(account.starting_equity))),
             "trailing_room": _dec(Decimal(account.trailing_drawdown) - (Decimal(account.high_water) - Decimal(account.equity))),
         },
-        "enrolled": [_slot_summary(session, s) for s in slots],
+        "scanner": scanner_payload(last_scan=last_scan, enrolled=enrolled, now=now),
+        "enrolled": enrolled,
         "open_positions": open_positions,
         "recent_fills": [
             {
@@ -373,12 +688,13 @@ def paper_snapshot(session: Session) -> dict:
             for f in fills
         ],
         "disclaimer": "Delayed market data, simulated fills, prop-style limits. Not a broker and not a funded account.",
-        "heartbeat": datetime.now(UTC).isoformat(),
+        "heartbeat": now.isoformat(),
     }
 
 
 def _slot_summary(session: Session, slot: PaperSlot) -> dict:
     strategy = session.get(StrategyDefinition, slot.strategy_id)
+    instrument = session.get(Instrument, strategy.instrument_id) if strategy else None
     fills = session.execute(select(PaperFill).where(PaperFill.slot_id == slot.id)).scalars().all()
     nets = [Decimal(f.net_pnl) for f in fills]
     wins = [n for n in nets if n > 0]
@@ -400,16 +716,59 @@ def _slot_summary(session: Session, slot: PaperSlot) -> dict:
             if run.metrics.get("expectancy_per_trade") is not None
             else None,
         }
+    tf = slot.timeframe or "5m"
+    last_print = _latest_print(session, slot.symbol, tf)
+    last_close = last_print["close"] if last_print else None
+    last_bar_ts = last_print["ts"] if last_print else (slot.last_bar_ts.isoformat() if slot.last_bar_ts else None)
+    caught_up = bool(
+        last_print and slot.last_bar_ts and _aware(slot.last_bar_ts) and last_print["ts"].startswith(_aware(slot.last_bar_ts).isoformat()[:19])
+    )
+    if slot.last_error:
+        state = "error"
+    elif slot.open_direction:
+        state = "in_trade"
+    elif slot.last_bar_ts is None:
+        state = "armed"
+    elif caught_up:
+        state = "watching"
+    else:
+        state = "scanning"
+    next_bar_sec = None
+    if last_print and last_print.get("ts"):
+        bar_ts = _parse_iso(last_print["ts"])
+        step = TF_SECONDS.get(tf, 60)
+        if bar_ts:
+            elapsed = max(0.0, (datetime.now(UTC) - _aware(bar_ts)).total_seconds())
+            next_bar_sec = int(step - (elapsed % step))
     return {
         "slot_id": str(slot.id),
         "symbol": slot.symbol,
-        "timeframe": slot.timeframe,
+        "timeframe": tf,
         "strategy_name": strategy.name if strategy else slot.symbol,
         "strategy_id": str(slot.strategy_id),
         "in_trade": slot.open_direction is not None,
-        "last_bar_ts": slot.last_bar_ts.isoformat() if slot.last_bar_ts else None,
+        "direction": slot.open_direction,
+        "quantity": slot.open_qty,
+        "entry_price": _dec(slot.open_entry_price) if slot.open_entry_price is not None else None,
+        "stop": _dec(slot.open_stop) if slot.open_stop is not None else None,
+        "target": _dec(slot.open_target) if slot.open_target is not None else None,
+        "state": state,
+        "last_bar_ts": last_bar_ts,
+        "cursor_bar_ts": slot.last_bar_ts.isoformat() if slot.last_bar_ts else None,
         "last_refresh_at": slot.last_refresh_at.isoformat() if slot.last_refresh_at else None,
         "last_error": slot.last_error,
+        "last_open": last_print["open"] if last_print else None,
+        "last_high": last_print["high"] if last_print else None,
+        "last_low": last_print["low"] if last_print else None,
+        "last_close": last_close,
+        "last_volume": last_print["volume"] if last_print else None,
+        "bar_age_sec": last_print["age_sec"] if last_print else None,
+        "bars_in_dataset": last_print["row_count"] if last_print else 0,
+        "feed_source": last_print["source"] if last_print else None,
+        "next_bar_sec": next_bar_sec,
+        "caught_up": caught_up,
+        "armed": slot.last_bar_ts is None,
+        "unrealized": _unrealized(slot, last_close, instrument.multiplier if instrument else None),
         "paper_trades": len(nets),
         "paper_net": _dec(sum(nets, Decimal(0))),
         "paper_win_rate_pct": round(100.0 * len(wins) / len(nets), 1) if nets else None,
