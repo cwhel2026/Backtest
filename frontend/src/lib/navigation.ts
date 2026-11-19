@@ -7,6 +7,7 @@ export type NavItem = {
 
 export const MOBILE_PRIMARY: NavItem[] = [
   { href: "/", label: "Home", short: "Home", icon: "⌂" },
+  { href: "/live-lab", label: "Live Strategy Lab", short: "Live", icon: "◎" },
   { href: "/strategies", label: "Strategies", short: "Lab", icon: "◈" },
   { href: "/backtests", label: "Backtests", short: "Tests", icon: "▣" },
   { href: "/research", label: "AI Research", short: "AI", icon: "✦" },
@@ -22,6 +23,7 @@ export const MORE_LINKS: NavItem[] = [
   { href: "/strategy-compare", label: "Compare strategies", short: "Compare" },
   { href: "/berg-tnb", label: "Berg TNB", short: "TNB" },
   { href: "/desk", label: "Prop desk search", short: "Desk" },
+  { href: "/live-lab", label: "Live Strategy Lab", short: "Live" },
   { href: "/paper", label: "Forward test", short: "Paper" },
   { href: "/settings", label: "Settings", short: "Settings" },
   { href: "/market-data/health", label: "System health", short: "Health" },
