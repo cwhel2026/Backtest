@@ -14,8 +14,19 @@ from app.services.live_lab.types import MarketEvent
 
 
 def persist_events(session: Session, events: list[MarketEvent], *, provider: str) -> int:
+    from app.services.live_lab.certification.integrity import quality_gate_ok, reconcile_event_batch, validate_event
+
+    events, batch_warnings = reconcile_event_batch(events)
     inserted = 0
-    for ev in sorted(events, key=lambda e: (e.exchange_ts, e.sequence)):
+    last_ts = None
+    last_seq = None
+    issues: list[str] = list(batch_warnings)
+    for ev in events:
+        issues.extend(validate_event(ev, last_exchange_ts=last_ts, last_sequence=last_seq))
+        if not quality_gate_ok(issues):
+            raise ValueError(f"Market data quality gate: {issues[-1]}")
+        last_ts = ev.exchange_ts
+        last_seq = ev.sequence
         key = ev.idempotency_key
         exists = session.execute(
             select(LiveMarketEvent.id).where(LiveMarketEvent.idempotency_key == key)

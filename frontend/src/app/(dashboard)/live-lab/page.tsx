@@ -76,6 +76,9 @@ export default function LiveStrategyLabPage() {
       <header>
         <p className="text-[10px] font-semibold uppercase tracking-widest text-cyan-400/90">Phase 3</p>
         <h1 className="page-title text-2xl font-semibold text-white">Live Strategy Lab</h1>
+        <Link href="/live-lab/certification" className="mt-2 inline-block text-sm text-cyan-400">
+          Accuracy Certification →
+        </Link>
         <p className="mt-1 text-sm text-zinc-400">
           Forward-tested strategies on genuine incoming data policies — simulated paper execution only.
         </p>

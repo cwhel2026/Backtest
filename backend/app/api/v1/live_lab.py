@@ -110,8 +110,10 @@ def forward_test_chart(run_id: UUID, db: Session = Depends(get_sync_db), _user: 
         ],
         "markers": markers,
         "equity_curve": equity,
-        "open_position": (run.runner_state or {}).get("open_position"),
-        "pending_orders": (run.runner_state or {}).get("pending", []),
+        "open_position": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("open_position"),
+        "pending_orders": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("pending", []),
+        "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+        "runner_state_version": (run.runner_state or {}).get("version"),
         "paper_orders": [
             {
                 "client_order_id": o.client_order_id,
@@ -199,6 +201,8 @@ def get_forward_test(run_id: UUID, db: Session = Depends(get_sync_db), _user: Us
             "trade_count": run.trade_count,
             "max_drawdown": float(run.max_drawdown),
             "last_data_exchange_ts": run.last_data_exchange_ts.isoformat() if run.last_data_exchange_ts else None,
+            "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+            "runner_state_version": (run.runner_state or {}).get("version"),
         },
         "validation": {"passed": ok, "reasons": reasons, "gates": gates},
         "ledger": [
@@ -219,3 +223,61 @@ def manual_tick(db: Session = Depends(get_sync_db), _user: User = Depends(get_cu
     result = tick_live_strategy_lab(db)
     db.commit()
     return result
+
+
+@router.get("/certification/dashboard")
+def certification_dashboard(db: Session = Depends(get_sync_db), _user: User = Depends(get_current_user)):
+    from sqlalchemy import desc, select
+
+    from app.models.certification import AccuracyCertificationRun
+
+    rows = db.execute(select(AccuracyCertificationRun).order_by(desc(AccuracyCertificationRun.created_at)).limit(10)).scalars().all()
+    latest = rows[0] if rows else None
+    from app.services.live_lab.certification.strategy_readiness import strategy_readiness_matrix
+
+    return {
+        "strategy_readiness": strategy_readiness_matrix(),
+        "latest": (
+            {
+                "status": latest.status,
+                "symbol": latest.symbol,
+                "replay_fingerprint": latest.replay_fingerprint,
+                "detail": latest.detail,
+                "payload": latest.payload,
+                "created_at": latest.created_at.isoformat(),
+            }
+            if latest
+            else None
+        ),
+        "history": [
+            {
+                "id": str(r.id),
+                "status": r.status,
+                "symbol": r.symbol,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "disclaimer": "Certification confirms software tests passed, not profitability or live fill guarantees.",
+    }
+
+
+@router.post("/certification/run")
+def run_certification(
+    symbol: str = "MES",
+    db: Session = Depends(get_sync_db),
+    _user: User = Depends(get_current_user),
+):
+    from app.services.live_lab.certification.runner import run_accuracy_certification
+
+    if symbol.upper() not in {"MNQ", "MES", "MGC"}:
+        raise HTTPException(400, detail="Symbol must be MNQ, MES, or MGC")
+    row = run_accuracy_certification(db, symbol=symbol.upper())
+    db.commit()
+    return {
+        "id": str(row.id),
+        "status": row.status,
+        "detail": row.detail,
+        "payload": row.payload,
+        "replay_fingerprint": row.replay_fingerprint,
+    }
