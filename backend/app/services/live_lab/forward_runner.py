@@ -14,8 +14,7 @@ from app.models.live_lab import ForwardTestRun, LiveCompletedCandle
 from app.models.strategy import StrategyDefinition
 from app.services.live_lab.candle_engine import load_closed_bars
 from app.services.live_lab.ledger import append_ledger_event
-from app.services.live_lab.paper_broker import PaperBroker
-from app.services.paper_engine import ClosedFill, SlotCursor, advance_slot
+from app.services.paper_engine import SlotCursor, advance_slot
 
 
 VIDEO_ENTRY_TYPES = frozenset(
