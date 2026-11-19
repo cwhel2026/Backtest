@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { lifecycleLabel } from "@/lib/strategy-catalog";
 import { apiFetch } from "@/lib/api";
 
 type Dataset = { id: string; instrument_id: string; timeframe: string; row_count: number };
@@ -27,6 +31,7 @@ export default function StrategyDetailPage() {
   const [datasetId, setDatasetId] = useState("");
   const [backtestStatus, setBacktestStatus] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [tab, setTab] = useState<"overview" | "performance" | "settings" | "backtest">("overview");
 
   async function cloneStrategy() {
     if (!id) return;
@@ -97,40 +102,59 @@ export default function StrategyDetailPage() {
   if (!detail) return <p className="text-zinc-500">Loading strategy…</p>;
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="max-w-4xl space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <h2 className="page-title">{detail.name}</h2>
           <p className="page-sub">
-            {detail.symbol} · {detail.category} · {detail.timeframe} · {detail.lifecycle}
+            {detail.symbol} · {detail.category} · {detail.timeframe} · {lifecycleLabel(detail.lifecycle)}
           </p>
         </div>
-        <button
-          type="button"
-          disabled={cloning}
-          onClick={cloneStrategy}
-          className="rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900 disabled:opacity-50"
-        >
+        <Button variant="secondary" disabled={cloning} onClick={cloneStrategy} className="text-sm">
           {cloning ? "Cloning…" : "Clone"}
-        </button>
+        </Button>
       </header>
 
-      {detail.latest_backtest ? (
-        <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 text-sm">
+      <SegmentedControl
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "overview", label: "Overview" },
+          { value: "performance", label: "Performance" },
+          { value: "settings", label: "Spec" },
+          { value: "backtest", label: "Run" },
+        ]}
+      />
+
+      {tab === "overview" ? (
+        <Card className="text-sm text-zinc-300">
+          <p>
+            This strategy trades <strong className="text-zinc-100">{detail.symbol}</strong> on the{" "}
+            <strong className="text-zinc-100">{detail.timeframe}</strong> timeframe ({detail.category}).
+          </p>
+          <p className="mt-2 text-zinc-500">
+            Open the Strategy Debugger after a completed backtest to replay decisions candle by candle.
+          </p>
+        </Card>
+      ) : null}
+
+      {tab === "performance" && detail.latest_backtest ? (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p className="font-medium text-zinc-200">Latest backtest (historical simulation only)</p>
           <p className="mt-2 text-zinc-400">
             Repro ID: <span className="font-mono text-xs">{detail.latest_backtest.reproducibility_id}</span>
           </p>
-          <Link href={`/backtests/${detail.latest_backtest.id}`} className="mt-2 inline-block text-emerald-400">
+          <Link href={`/backtests/${detail.latest_backtest.id}`} className="mt-2 inline-block text-[var(--accent)]">
             View run →
           </Link>
         </section>
-      ) : (
+      ) : null}
+      {tab === "performance" && !detail.latest_backtest ? (
         <p className="text-sm text-zinc-500">No completed backtests yet.</p>
-      )}
+      ) : null}
 
-      {detail.current_version ? (
-        <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+      {tab === "backtest" && detail.current_version ? (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4">
           <h3 className="text-sm font-medium text-zinc-200">Run historical backtest</h3>
           <p className="mt-1 text-xs text-zinc-500">
             Simulation only — uses imported OHLCV for {detail.symbol} · {detail.timeframe}.
@@ -139,7 +163,7 @@ export default function StrategyDetailPage() {
             <label className="flex flex-1 flex-col gap-1 text-sm text-zinc-400">
               Dataset
               <select
-                className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2"
+                className="min-h-[44px] rounded-xl border border-[var(--border)] bg-[var(--card-elevated)] px-3 py-2"
                 value={datasetId}
                 onChange={(e) => setDatasetId(e.target.value)}
               >
@@ -153,19 +177,15 @@ export default function StrategyDetailPage() {
                   ))}
               </select>
             </label>
-            <button
-              type="submit"
-              disabled={running || !datasetId}
-              className="rounded-md bg-emerald-700 px-4 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
-            >
+            <Button type="submit" disabled={running || !datasetId} className="md:w-auto">
               {running ? "Running…" : "Run backtest"}
-            </button>
+            </Button>
           </form>
           {backtestStatus ? <p className="mt-2 text-sm text-zinc-400">{backtestStatus}</p> : null}
         </section>
       ) : null}
 
-      {detail.current_version ? (
+      {tab === "settings" && detail.current_version ? (
         <section>
           <h3 className="text-sm font-medium text-zinc-300">Executable specification v{detail.current_version.version_number}</h3>
           <pre className="mt-2 overflow-auto rounded-lg border border-zinc-800 bg-black/40 p-4 text-xs text-zinc-300">
@@ -173,6 +193,10 @@ export default function StrategyDetailPage() {
           </pre>
         </section>
       ) : null}
+
+      <Link href={`/backtests/run`} className="text-sm text-[var(--accent)]">
+        Or use guided backtest wizard →
+      </Link>
     </div>
   );
 }

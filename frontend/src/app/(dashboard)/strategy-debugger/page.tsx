@@ -278,18 +278,18 @@ export default function StrategyDebuggerPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4 lg:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-800 pb-4">
+    <div className="-mx-4 flex flex-col gap-4 md:mx-0">
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border)] px-4 pb-4 md:px-0">
         <div>
-          <p className="text-[10px] font-semibold tracking-[0.2em] text-emerald-400">STRATEGY FIDELITY</p>
-          <h1 className="text-xl font-semibold text-white">Visual Debugger</h1>
+          <p className="text-[10px] font-semibold tracking-[0.2em] text-[var(--accent)]">STRATEGY FIDELITY</p>
+          <h1 className="page-title">Visual Debugger</h1>
           <p className="text-xs text-zinc-500">Run {runId.slice(0, 8)}… · replay driven by persisted simulation events</p>
         </div>
         {trades.length > 0 && (
           <label className="text-sm text-zinc-400">
             Trade{" "}
             <select
-              className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-zinc-100"
+              className="min-h-[44px] rounded-xl border border-[var(--border)] bg-[var(--card-elevated)] px-3 py-2 text-zinc-100"
               value={tradeNum ?? ""}
               onChange={(e) => setTradeNum(Number(e.target.value))}
             >
@@ -310,31 +310,35 @@ export default function StrategyDebuggerPage() {
       {bars4h.length > 0 && (
         <div>
           <p className="mb-1 text-xs text-zinc-500">4H bias context (markers only after confirmation in replay)</p>
-          <div ref={chart4hRef} className="w-full rounded-lg border border-zinc-800 bg-[#0e1015]" />
+          <div ref={chart4hRef} className="h-[200px] w-full rounded-xl border border-[var(--border)] bg-[var(--shell-nav)] sm:h-[240px]" />
         </div>
       )}
       <p className="text-xs text-zinc-500">5m execution · fib/limit/stop/target lines from visible events only</p>
-      <div ref={chartRef} className="w-full rounded-lg border border-zinc-800 bg-[#0e1015]" />
+      <div ref={chartRef} className="h-[min(52vh,420px)] w-full rounded-xl border border-[var(--border)] bg-[var(--shell-nav)]" />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+      <div className="sticky bottom-[calc(72px+env(safe-area-inset-bottom,0px))] z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--card)]/95 p-3 backdrop-blur md:bottom-4">
         <button
           type="button"
-          className="rounded bg-zinc-800 px-3 py-1.5 text-sm"
+          className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--card-elevated)] px-4 text-sm font-medium"
           onClick={() => setReplayIdx((r) => Math.max(0, r - 1))}
         >
           Prev
         </button>
         <button
           type="button"
-          className="rounded bg-zinc-800 px-3 py-1.5 text-sm"
+          className="min-h-[44px] min-w-[44px] rounded-xl bg-[var(--card-elevated)] px-4 text-sm font-medium"
           onClick={() => setReplayIdx((r) => Math.min(bars.length - 1, r + 1))}
         >
           Next
         </button>
-        <button type="button" className="rounded bg-emerald-800 px-3 py-1.5 text-sm" onClick={() => setPlaying((p) => !p)}>
+        <button
+          type="button"
+          className="min-h-[44px] flex-1 rounded-xl bg-[var(--accent)] px-4 text-sm font-semibold text-[#041018] sm:flex-none"
+          onClick={() => setPlaying((p) => !p)}
+        >
           {playing ? "Pause" : "Play"}
         </button>
-        <label className="ml-2 text-xs text-zinc-400">
+        <label className="flex min-h-[44px] flex-1 basis-full items-center gap-2 text-xs text-zinc-400 sm:basis-auto">
           Speed
           <input
             type="range"
@@ -343,13 +347,17 @@ export default function StrategyDebuggerPage() {
             step={0.5}
             value={speed}
             onChange={(e) => setSpeed(Number(e.target.value))}
-            className="ml-2 align-middle"
+            className="flex-1"
           />
         </label>
-        <button type="button" className="rounded bg-zinc-800 px-3 py-1.5 text-sm" onClick={() => setReplayIdx(0)}>
+        <button
+          type="button"
+          className="min-h-[44px] rounded-xl bg-[var(--card-elevated)] px-3 text-sm"
+          onClick={() => setReplayIdx(0)}
+        >
           Reset
         </button>
-        <span className="ml-auto text-xs text-zinc-500">
+        <span className="w-full text-center text-xs text-zinc-500 sm:ml-auto sm:w-auto sm:text-right">
           Bar {bars[replayIdx]?.bar_index ?? "—"} / {bars.length ? bars[bars.length - 1].bar_index : "—"}
         </span>
       </div>

@@ -11,6 +11,13 @@ const geistSans = localFont({
 export const metadata: Metadata = {
   title: "PROP EDGE AI",
   description: "Autonomous futures strategy research and validation platform",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "PropEdge",
+  },
+  icons: { apple: "/icons/icon-192.png" },
 };
 
 export const viewport = {

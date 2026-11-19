@@ -15,6 +15,18 @@ function apiBase(): string {
 
 export type TokenResponse = { access_token: string; token_type: string };
 
+export class ApiHttpError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 export const POSTGRES_RECOVERY_COPY =
   "Postgres is recovering after the disk filled with 1m bars. On Railway: open the Postgres plugin → Restart. Wait until it is Running, then sign in. Increase the Postgres volume so this cannot happen again.";
 
@@ -57,22 +69,25 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!res.ok) {
     const text = await res.text();
-    let detail = "";
+    let detail: unknown = "";
     try {
-      const parsed = JSON.parse(text) as { detail?: string | { msg?: string }[] };
-      if (typeof parsed.detail === "string") detail = parsed.detail;
-      else if (Array.isArray(parsed.detail)) {
-        detail = parsed.detail.map((d) => d.msg).filter(Boolean).join("; ");
-      }
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      if (parsed.detail !== undefined) detail = parsed.detail;
     } catch {
-      detail = "";
+      detail = text.trim();
     }
-    if (!detail) {
-      detail = text.trim().startsWith("Internal")
-        ? "The server hit an error. Wait a few seconds and press Run prop search again."
-        : text.trim().slice(0, 240) || res.statusText || "Request failed";
+    let message = "";
+    if (typeof detail === "string") {
+      message = friendlyApiDetail(detail, res.status);
+    } else if (detail && typeof detail === "object" && "message" in detail) {
+      message = String((detail as { message: string }).message);
+    } else {
+      message =
+        typeof detail === "string" && detail
+          ? friendlyApiDetail(detail, res.status)
+          : text.trim().slice(0, 240) || res.statusText || "Request failed";
     }
-    throw new Error(friendlyApiDetail(detail, res.status));
+    throw new ApiHttpError(message, res.status, detail);
   }
   return res.json() as Promise<T>;
 }

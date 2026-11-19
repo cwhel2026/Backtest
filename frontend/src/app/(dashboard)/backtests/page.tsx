@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
+import { Button } from "@/components/ui/Button";
 import { apiFetch } from "@/lib/api";
 
 export default function ResultsPage() {
@@ -20,22 +22,25 @@ export default function ResultsPage() {
     <div className="space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="page-title">Prop results</h2>
+          <h2 className="page-title">Backtests</h2>
           <p className="page-sub">
-            Default: keepers only (≥15 trades, holdout, expectancy CI above $0). Yahoo 1m ~7-day runs are
-            probes — tick the box to see them. Each card shows the feed, sample window, and stop/$ risk.
+            Completed runs and keeper-grade prop screens. Use the guided flow for a new test on genuine data.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-zinc-400">
-          <input
-            type="checkbox"
-            checked={showAll}
-            onChange={(e) => setShowAll(e.target.checked)}
-            className="rounded border-zinc-600"
-          />
-          Include probes &amp; gate misses
-        </label>
+        <Link href="/backtests/run">
+          <Button className="w-full md:w-auto">New backtest</Button>
+        </Link>
       </header>
+
+      <label className="flex min-h-[44px] items-center gap-2 text-sm text-zinc-400">
+        <input
+          type="checkbox"
+          checked={showAll}
+          onChange={(e) => setShowAll(e.target.checked)}
+          className="h-5 w-5 rounded border-zinc-600"
+        />
+        Include probes &amp; gate misses
+      </label>
 
       {loading ? (
         <p className="text-zinc-500">Loading…</p>

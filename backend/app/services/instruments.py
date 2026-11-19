@@ -56,6 +56,9 @@ INSTRUMENT_SPECS: list[dict] = [
 
 CURATED_SYMBOLS = frozenset(s["symbol"] for s in INSTRUMENT_SPECS)
 
+# Phase 1 prop research — UI defaults and Databento bundle ingest.
+PRIMARY_RESEARCH_SYMBOLS: frozenset[str] = frozenset({"MNQ", "MES", "MGC"})
+
 
 def _instrument_from_spec(spec: dict) -> Instrument:
     return Instrument(
@@ -72,6 +75,7 @@ def _instrument_from_spec(spec: dict) -> Instrument:
         metadata_extra={
             "source": "CME contract specifications (curated seed)",
             "verify_url": "https://www.cmegroup.com/markets.html",
+            "primary_research": spec["symbol"] in PRIMARY_RESEARCH_SYMBOLS,
         },
     )
 

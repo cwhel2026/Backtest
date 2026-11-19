@@ -3,295 +3,214 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
-import { SearchLiveMonitor } from "@/components/SearchLiveMonitor";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
 
-type BackgroundSearch = {
-  job_id: string;
-  status: string;
-  message: string;
-  progress_pct: number;
-  started_at: string | null;
-  error?: string | null;
-  live?: Record<string, unknown> | null;
-  job_log?: { headline: string; detail: string; created_at: string }[];
-};
-
-type SearchPlan = {
-  symbols: string[];
-  combos_per_symbol: number;
-  history_days: number;
-  families: string[];
-  walk_forward: string;
-  reverse_fades: boolean;
-};
-
-type PaperDesk = {
-  account: {
-    status: string;
-    equity: number;
-    day_pnl: number;
-    trailing_room: number;
-    distance_to_target: number;
-  };
-  enrolled: { slot_id: string; symbol: string; strategy_name: string; in_trade: boolean }[];
-  open_positions: { slot_id: string; strategy_name: string; symbol: string; direction: string; quantity: number; entry_price: number }[];
-};
-
-type AutopilotStatus = {
-  hourly_enabled: boolean;
+type Overview = {
+  strategies_total: number;
+  strategies_validated: number;
+  active_research_jobs: number;
+  queued_research_jobs: number;
+  datasets_count: number;
+  genuine_datasets_count: number;
+  backtests_completed_count: number;
+  ai_research_enabled: boolean;
   ai_configured: boolean;
-  message: string;
-  background_search: BackgroundSearch | null;
-  profitable_candidates: LeaderboardEntry[];
-  recent_tests: LeaderboardEntry[];
-  recent_activity: { headline: string; detail: string; created_at: string }[];
-  cycle_stats: { tests_run: number; profitable_count: number; last_cycle_detail: string | null };
-  search_symbols: string[];
-  search_plan: SearchPlan | null;
+  data_providers: { slug: string; state: string; message: string }[];
 };
 
-function compactSearchText(text: string | null | undefined): string {
-  if (!text) return "";
-  if (/diskfull|no space left|could not extend file/i.test(text)) {
-    return "Postgres ran out of disk while loading 1m bars. Extra copies will be cleared on restart — press Restart search. If it happens again, increase the Railway Postgres volume.";
-  }
-  const cut = text.split("[SQL:")[0].split("[parameters:")[0].trim();
-  return cut.length > 280 ? `${cut.slice(0, 280)}…` : cut;
+type BacktestRun = {
+  id: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  metrics: { net_profit_usd?: number; trade_count?: number } | null;
+};
+
+function StatusPill({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
+        ok ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"
+      }`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export default function HomePage() {
-  const [status, setStatus] = useState<AutopilotStatus | null>(null);
-  const [paper, setPaper] = useState<PaperDesk | null>(null);
-  const [running, setRunning] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-
-  function refresh() {
-    apiFetch<AutopilotStatus>("/api/v1/autopilot/status").then(setStatus).catch((e) => setNote(String(e)));
-    apiFetch<PaperDesk>("/api/v1/paper/desk").then(setPaper).catch(() => undefined);
-  }
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [recentRuns, setRecentRuns] = useState<BacktestRun[]>([]);
+  const [topValidated, setTopValidated] = useState<LeaderboardEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    refresh();
-    return () => undefined;
+    Promise.all([
+      apiFetch<Overview>("/api/v1/overview/stats"),
+      apiFetch<BacktestRun[]>("/api/v1/backtests"),
+      apiFetch<LeaderboardEntry[]>("/api/v1/autopilot/leaderboard?profitable_only=true&limit=5"),
+    ])
+      .then(([o, runs, board]) => {
+        setOverview(o);
+        setRecentRuns(runs.slice(0, 6));
+        setTopValidated(board);
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    const busy = status?.background_search?.status === "queued" || status?.background_search?.status === "running";
-    const ms = busy ? 4000 : 15000;
-    const t = setInterval(refresh, ms);
-    return () => clearInterval(t);
-  }, [status?.background_search?.status]);
-
-  async function runNow() {
-    setRunning(true);
-    setNote(null);
-    try {
-      const res = await apiFetch<{ status: string; mode: string; job_id: string | null }>(
-        `/api/v1/autopilot/run${searching ? "?restart=true" : ""}`,
-        { method: "POST" }
-      );
-      if (res.mode === "already_active") {
-        setNote("One search is still scoring. Use Restart search if it has stopped updating.");
-      } else {
-        setNote("Search started on the server. The status line below updates as each market is scored. You can leave this page.");
-      }
-      setTimeout(refresh, 5000);
-    } catch (e) {
-      setNote(String(e));
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  const candidates = status?.profitable_candidates ?? [];
-  const latestTests = (status?.recent_tests ?? []).filter((row) => !candidates.some((c) => c.run_id === row.run_id));
-  const searching =
-    status?.background_search?.status === "queued" || status?.background_search?.status === "running";
+  const engineOk = overview
+    ? overview.data_providers.every(
+        (p) =>
+          p.state === "connected" ||
+          p.state === "configured" ||
+          p.state === "not_configured" ||
+          p.state === "healthy",
+      )
+    : false;
+  const researchActive = (overview?.active_research_jobs ?? 0) + (overview?.queued_research_jobs ?? 0) > 0;
+  const needsGenuineData = overview != null && overview.genuine_datasets_count === 0;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <header>
-        <h2 className="page-title">Prop desk</h2>
-        <p className="page-sub">
-          Search holds out the last 20% of bars, then walk-forward scores the rest. Keepers need a real sample —
-          Yahoo 1m (~7 days) is a probe, not the product.
-        </p>
+        <h1 className="page-title">Research overview</h1>
+        <p className="page-sub">Status of strategies, data, backtests, and AI jobs — at a glance on mobile.</p>
       </header>
 
-      <ol className="grid gap-3 md:grid-cols-3">
-        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">1 · Search</p>
-          <p className="mt-2 text-sm text-zinc-200">
-            {status?.background_search ? "Running now" : status?.hourly_enabled ? "Hourly, even if you leave" : "Manual"}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">Nasdaq + S&P, including reverse fades.</p>
-        </li>
-        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">2 · Backtest</p>
-          <p className="mt-2 text-sm text-zinc-200">{candidates.length} research-grade keepers</p>
-          <p className="mt-1 text-xs text-zinc-500">Holdout, OOS, then expectancy 95% CI.</p>
-        </li>
-        <li className="rounded-xl border border-zinc-800 bg-[#181b22] p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">3 · Forward test</p>
-          <p className="mt-2 text-sm text-zinc-200">
-            {paper ? `$${paper.account.equity.toLocaleString(undefined, { maximumFractionDigits: 0 })} · ${paper.account.status}` : "Paper book"}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            {paper ? `${paper.open_positions.length} open · ${paper.enrolled.length} enrolled` : "New bars every 5 minutes"}
-          </p>
-        </li>
-      </ol>
-
-      <section className="rounded-xl border border-emerald-900/50 bg-gradient-to-r from-emerald-950/40 to-[#181b22] p-4 md:p-6">
-        <p className="text-sm leading-relaxed text-zinc-200">{status?.message}</p>
-        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
-          <span className="rounded-full border border-violet-900/50 bg-violet-950/30 px-2 py-1 text-violet-200/90">
-            Markets: {(status?.search_symbols ?? ["MNQ", "NQ", "MES", "ES"]).join(" · ")}
-          </span>
-          {status?.background_search ? (
-            <span
-              className={`rounded-full border px-2 py-1 ${
-                status.background_search.status === "failed"
-                  ? "border-red-900/70 bg-red-950/40 text-red-200"
-                  : status.background_search.status === "completed"
-                    ? "border-emerald-900/60 bg-emerald-950/30 text-emerald-200"
-                    : "border-amber-800/60 bg-amber-950/40 text-amber-200"
-              }`}
-            >
-              {status.background_search.status === "failed"
-                ? compactSearchText(status.background_search.error || status.background_search.message)
-                : `${status.background_search.status}: ${compactSearchText(status.background_search.message)}`}
-            </span>
-          ) : null}
-          <span className="rounded-full border border-zinc-700 px-2 py-1">Hourly: {status?.hourly_enabled ? "on" : "off"}</span>
-          <span className="rounded-full border border-zinc-700 px-2 py-1">
-            AI: {status?.ai_configured ? "OpenAI" : "rules"}
-          </span>
-          {status?.cycle_stats.last_cycle_detail ? (
-            <span className="max-w-full truncate rounded-full border border-zinc-700 px-2 py-1">
-              Last: {status.cycle_stats.last_cycle_detail}
-            </span>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          disabled={running}
-          onClick={runNow}
-          className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 disabled:opacity-50 md:w-auto"
-        >
-          {running ? "Starting…" : searching ? "Restart search" : "Run prop search"}
-        </button>
-        {searching ? (
-          <p className="mt-3 text-sm text-amber-100">
-            A search is already in progress on the server. Current step:{" "}
-            {compactSearchText(status?.background_search?.message)}
-          </p>
-        ) : status?.background_search?.status === "failed" ? (
-          <p className="mt-3 text-sm text-amber-100">
-            {compactSearchText(status.background_search.error) || "The last search stopped."} Press the green
-            button to start a new one.
-          </p>
-        ) : null}
-        {note ? <p className="mt-3 text-sm text-zinc-400">{note}</p> : null}
-      </section>
-
-      <SearchLiveMonitor
-        status={status?.background_search?.status ?? "idle"}
-        message={
-          compactSearchText(status?.background_search?.message) ||
-          "Press Run prop search to start a walk-forward scan."
-        }
-        progressPct={status?.background_search?.progress_pct ?? 0}
-        live={(status?.background_search?.live as Record<string, unknown> | undefined) ?? null}
-        plan={status?.search_plan ?? null}
-        jobLog={status?.background_search?.job_log ?? []}
-        active={searching}
-      />
-
-      {paper && paper.open_positions.length > 0 ? (
-        <section>
-          <div className="flex items-end justify-between">
-            <h3 className="text-sm font-semibold text-zinc-100">Open paper trades</h3>
-            <Link href="/paper" className="text-xs text-emerald-500 hover:underline">
-              Prop book
-            </Link>
-          </div>
-          <ul className="mt-3 space-y-2">
-            {paper.open_positions.map((p) => (
-              <li key={p.slot_id} className="flex items-center justify-between rounded-lg border border-zinc-800 px-3 py-2 text-sm">
-                <span>
-                  {p.symbol} {p.direction} ×{p.quantity}
-                  <span className="ml-2 text-zinc-500">{p.strategy_name}</span>
-                </span>
-                <span className="tabular-nums text-zinc-300">{p.entry_price}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {error ? (
+        <Card className="border-red-900/50 bg-red-950/30 text-sm text-red-200">{error}</Card>
       ) : null}
 
-      <section>
-        <div className="flex items-end justify-between gap-2">
-          <h3 className="text-sm font-semibold text-zinc-100">Keepers</h3>
-          <Link href="/backtests" className="text-xs text-emerald-500 hover:underline">
-            All results
-          </Link>
-        </div>
-        <p className="mt-1 text-xs text-zinc-500">
-          Keepers: ≥15 trades, PF ≥ 1.1, WR ≥ 42%, holdout not red, expectancy 95% CI above $0. Yahoo 1m
-          four-trade ORBs are probes (include them under Latest tests). 5m ~50-day or paid 1m is the desk path.
-        </p>
-        {searching ? (
-          <p className="mt-4 text-sm text-amber-200/90">
-            Search is running on the server. This list fills as each market finishes — you can leave the page.
-          </p>
-        ) : null}
-        {!candidates.length ? (
-          <div className="mt-4 rounded-lg border border-dashed border-zinc-700 p-8 text-center text-sm text-zinc-500">
-            {searching
-              ? "No keepers yet. The search log above updates per market (MNQ, NQ, MES, ES)."
-              : "No prop-ready setups yet. Latest tests below still show what the search scored."}
-          </div>
-        ) : (
-          <ul className="mt-4 space-y-4">
-            {candidates.map((r) => (
-              <LeaderboardCard key={r.run_id} row={r} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section>
-        <h3 className="text-sm font-semibold text-zinc-100">Latest tests</h3>
-        <p className="mt-1 text-xs text-zinc-500">
-          Probes, candidates, and gate misses — green P&amp;L on a thin sample is not a losing strategy, and it is
-          not a keeper.
-        </p>
-        {!latestTests.length ? (
-          <p className="mt-3 text-sm text-zinc-500">
-            {searching ? "Waiting for the first market to finish scoring." : "Nothing saved yet."}
-          </p>
-        ) : (
-          <ul className="mt-4 space-y-4">
-            {latestTests.map((r) => (
-              <LeaderboardCard key={r.run_id} row={r} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section>
-        <h3 className="text-sm font-medium text-zinc-200">Activity</h3>
-        <ul className="mt-3 space-y-3">
-          {(status?.recent_activity ?? []).slice(0, 6).map((a, i) => (
-            <li key={i} className="border-b border-zinc-800/80 pb-2 text-sm">
-              <p className="text-zinc-100">{a.headline}</p>
-              {a.detail ? <p className="text-xs leading-relaxed text-zinc-500">{a.detail}</p> : null}
-            </li>
+      {loading ? (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-24" />
           ))}
-        </ul>
-      </section>
+        </div>
+      ) : overview ? (
+        <>
+          <Card className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill ok={engineOk} label={engineOk ? "Platform online" : "Data provider issue"} />
+              <StatusPill ok={!researchActive || true} label={researchActive ? "AI / jobs running" : "No queued jobs"} />
+              {overview.ai_configured ? (
+                <StatusPill ok label="OpenAI configured" />
+              ) : overview.ai_research_enabled ? (
+                <StatusPill ok={false} label="Add OPENAI_API_KEY" />
+              ) : (
+                <StatusPill ok label="Heuristic research mode" />
+              )}
+            </div>
+            <p className="text-sm text-zinc-400">
+              {overview.backtests_completed_count} completed backtests · {overview.genuine_datasets_count} genuine
+              datasets · {overview.strategies_validated} validated strategies
+            </p>
+          </Card>
+
+          <MetricTiles overview={overview} />
+
+          {needsGenuineData ? (
+            <Card className="border-[var(--accent)]/30 bg-[var(--accent-muted)]">
+              <h2 className="text-base font-semibold text-zinc-100">Start with licensed history</h2>
+              <p className="mt-2 text-sm text-zinc-300">
+                No dataset is marked <strong className="font-medium text-zinc-100">genuine for research</strong> yet.
+                Import Databento or approved CSV on Market Data before trusting backtest P&amp;L.
+              </p>
+              <Link href="/market-data" className="mt-4 inline-block">
+                <Button variant="primary">Open Market Data</Button>
+              </Link>
+            </Card>
+          ) : null}
+
+          <section className="space-y-3">
+            <SectionTitle title="Quick actions" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Link href="/backtests/run">
+                <Card className="hover:border-[var(--accent)]/40">
+                  <p className="font-semibold text-zinc-100">Run a backtest</p>
+                  <p className="mt-1 text-sm text-zinc-400">Guided 5-step flow — strategy, market, dataset, risk, run.</p>
+                </Card>
+              </Link>
+              <Link href="/research">
+                <Card className="hover:border-[var(--accent)]/40">
+                  <p className="font-semibold text-zinc-100">AI research</p>
+                  <p className="mt-1 text-sm text-zinc-400">Monitor jobs and queue new strategy experiments.</p>
+                </Card>
+              </Link>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <SectionTitle title="Recent backtests" />
+            {recentRuns.length === 0 ? (
+              <p className="text-sm text-zinc-500">No backtests yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {recentRuns.map((r) => (
+                  <li key={r.id}>
+                    <Link href={`/backtests/${r.id}`}>
+                      <Card className="flex items-center justify-between gap-3 py-3">
+                        <p className="text-sm text-zinc-300">
+                          <span className="font-mono text-xs text-zinc-500">{r.id.slice(0, 8)}</span> · {r.status}
+                        </p>
+                        {r.metrics?.net_profit_usd != null ? (
+                          <span className="text-sm tabular-nums text-zinc-200">
+                            ${r.metrics.net_profit_usd.toFixed(0)}
+                          </span>
+                        ) : null}
+                      </Card>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <SectionTitle title="Top validated (genuine screen)" />
+            {topValidated.length === 0 ? (
+              <p className="text-sm text-zinc-500">No keeper-grade results yet — run search or backtests on licensed data.</p>
+            ) : (
+              <ul className="space-y-4">
+                {topValidated.map((row) => (
+                  <LeaderboardCard key={row.run_id} row={row} />
+                ))}
+              </ul>
+            )}
+            <Link href="/leaderboard" className="text-sm font-medium text-[var(--accent)]">
+              Full leaderboard →
+            </Link>
+          </section>
+        </>
+      ) : null}
     </div>
   );
+}
+
+function MetricTiles({ overview }: { overview: Overview }) {
+  const tiles = [
+    { label: "Strategies", value: String(overview.strategies_total) },
+    { label: "Validated", value: String(overview.strategies_validated) },
+    { label: "Genuine data", value: String(overview.genuine_datasets_count) },
+    { label: "Backtests done", value: String(overview.backtests_completed_count) },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      {tiles.map((t) => (
+        <Card key={t.label} className="py-3">
+          <p className="metric-label">{t.label}</p>
+          <p className="metric-value">{t.value}</p>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function SectionTitle({ title }: { title: string }) {
+  return <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">{title}</h2>;
 }

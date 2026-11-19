@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.enums import ResearchJobStatus, StrategyLifecycle
 from app.models.instrument import Instrument
+from app.models.backtest import BacktestRun
 from app.models.market_data import HistoricalDataset
 from app.models.research import ResearchJob
 from app.models.strategy import StrategyDefinition
@@ -72,6 +73,18 @@ async def overview_stats(
         )
     ).scalar_one()
     datasets = (await db.execute(select(func.count()).select_from(HistoricalDataset))).scalar_one()
+    genuine_datasets = (
+        await db.execute(
+            select(func.count())
+            .select_from(HistoricalDataset)
+            .where(HistoricalDataset.meta["genuine_for_research"].astext == "true")
+        )
+    ).scalar_one()
+    completed_backtests = (
+        await db.execute(
+            select(func.count()).select_from(BacktestRun).where(BacktestRun.status == "completed")
+        )
+    ).scalar_one()
     providers = await all_provider_health()
     return OverviewStats(
         instruments_count=instruments,
@@ -94,4 +107,6 @@ async def overview_stats(
         ],
         ai_research_enabled=settings.ai_research_enabled,
         ai_configured=settings.ai_configured,
+        genuine_datasets_count=genuine_datasets,
+        backtests_completed_count=completed_backtests,
     )

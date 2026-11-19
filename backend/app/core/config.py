@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     ohlcv_s3_access_key: str = Field(default="", validation_alias="OHLCV_S3_ACCESS_KEY")
     ohlcv_s3_secret_key: str = Field(default="", validation_alias="OHLCV_S3_SECRET_KEY")
     databento_live_smoke: bool = Field(default=False, validation_alias="DATABENTO_LIVE_SMOKE")
+    live_lab_provider: str = Field(default="replay", validation_alias="LIVE_LAB_PROVIDER")
+    live_lab_symbols: str = Field(default="MNQ,MES,MGC", validation_alias="LIVE_LAB_SYMBOLS")
+    live_lab_replay_path: str = Field(default="", validation_alias="LIVE_LAB_REPLAY_PATH")
+    live_lab_tick_enabled: bool = Field(default=True, validation_alias="LIVE_LAB_TICK_ENABLED")
     research_data_budget_gbp: float = Field(default=50.0, validation_alias="RESEARCH_DATA_BUDGET_GBP")
     gbp_usd_rate: float | None = Field(default=None, validation_alias="GBP_USD_RATE")
 

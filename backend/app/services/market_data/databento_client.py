@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -25,6 +25,11 @@ from app.services.market_data.databento_ingest import (
     DATABENTO_OHLCV_SCHEMA,
     databento_continuous_symbol,
 )
+
+# Initial research universe (Databento continuous .c.0).
+PRIMARY_DATABENTO_ROOTS: tuple[str, ...] = ("MNQ", "MES", "MGC")
+DEFAULT_HISTORY_DAYS = 1825  # ~5 calendar years (Nov 2021 → Nov 2026 target)
+DEFAULT_CHUNK_DAYS = 21
 
 # Micro roots (phase 1) — architecture supports extension to full-size roots.
 DATABENTO_ROOT_SYMBOLS: dict[str, str] = {
@@ -275,3 +280,102 @@ def _extract_symbology_metadata(store) -> dict:
     except Exception:
         pass
     return {"rollover_events": rollovers, "symbology_note": "Continuous symbol; see rollover_events for underlying ids"}
+
+
+def iter_download_chunks(start: datetime, end: datetime, *, chunk_days: int = DEFAULT_CHUNK_DAYS):
+    """UTC windows for chunked get_range (limits peak memory)."""
+    start_utc = _ensure_utc(start)
+    end_utc = _ensure_utc(end)
+    cursor = start_utc
+    while cursor < end_utc:
+        nxt = min(cursor + timedelta(days=chunk_days), end_utc)
+        yield cursor, nxt
+        cursor = nxt
+
+
+def default_research_window(
+    *,
+    days: int = DEFAULT_HISTORY_DAYS,
+    end: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Five-year window ending at latest UTC moment (caller may clamp to Databento entitlement)."""
+    end_utc = _ensure_utc(end or datetime.now(UTC))
+    start_utc = end_utc - timedelta(days=max(1, days))
+    return start_utc, end_utc
+
+
+def quote_bundle_cost(
+    symbols: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    api_key: str | None = None,
+    gbp_usd_rate: float | None = None,
+) -> dict:
+    """Sum official get_cost per symbol; rejects unknown roots."""
+    lines: dict[str, dict] = {}
+    total_usd = 0.0
+    total_gbp = 0.0
+    gbp_rate: float | None = gbp_usd_rate
+    for sym in symbols:
+        root = validate_root_symbol(sym)
+        q = quote_download_cost(root, start, end, api_key=api_key, gbp_usd_rate=gbp_usd_rate)
+        lines[root] = q.to_dict()
+        total_usd += q.usd
+        if q.gbp is not None:
+            total_gbp += q.gbp
+        if gbp_rate is None and q.gbp_rate is not None:
+            gbp_rate = q.gbp_rate
+    return {
+        "symbols": lines,
+        "estimated_usd_total": round(total_usd, 4),
+        "estimated_gbp_total": round(total_gbp, 4) if total_gbp else None,
+        "gbp_usd_rate": gbp_rate,
+        "provider": "databento",
+        "databento_dataset": DATABENTO_FUTURES_DATASET,
+        "schema": DATABENTO_OHLCV_SCHEMA,
+        "requires_approval": True,
+        "note": "Sum of metadata.get_cost per symbol — confirm at Databento checkout before approving.",
+    }
+
+
+def fetch_ohlcv_1m_chunked_to_store(
+    dataset_id,
+    instrument_symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    api_key: str | None = None,
+    series: SeriesSelection | None = None,
+    chunk_days: int = DEFAULT_CHUNK_DAYS,
+    on_chunk=None,
+) -> tuple[int, dict]:
+    """Download 1m OHLCV in date chunks and append to parquet store (bounded memory)."""
+    from app.services.market_data.ohlcv_parquet import write_bars
+
+    sym_meta: dict = {}
+    total_rows = 0
+    chunks = list(iter_download_chunks(start, end, chunk_days=chunk_days))
+    for idx, (chunk_start, chunk_end) in enumerate(chunks):
+        bars, meta = fetch_ohlcv_1m_with_retries(
+            instrument_symbol,
+            chunk_start,
+            chunk_end,
+            api_key=api_key,
+            series=series,
+        )
+        sym_meta = meta
+        if bars:
+            tuples = [(b.ts, b.open, b.high, b.low, b.close, b.volume) for b in bars]
+            total_rows = write_bars(dataset_id, tuples)
+        if on_chunk:
+            on_chunk(
+                {
+                    "chunk": idx + 1,
+                    "chunks_total": len(chunks),
+                    "chunk_end": chunk_end.isoformat(),
+                    "bars_in_chunk": len(bars),
+                    "bars_total_written": total_rows,
+                }
+            )
+    return total_rows, sym_meta

@@ -1,81 +1,14 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 import { setStoredToken } from "@/lib/api";
-
-const NAV = [
-  { href: "/", label: "Desk", short: "Desk" },
-  { href: "/paper", label: "Forward test", short: "Paper" },
-  { href: "/backtests", label: "Backtests", short: "Results" },
-  { href: "/settings", label: "Settings", short: "Settings" },
-  { href: "/market-data", label: "Historical Data", short: "Data" },
-  { href: "/berg-tnb", label: "Berg TNB Model", short: "TNB" },
-  { href: "/strategy-compare", label: "Strategy Compare", short: "Compare" },
-  { href: "/strategy-debugger", label: "Strategy Debugger", short: "Debug" },
-  { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
-  { href: "/research", label: "Jobs (advanced)", short: "Jobs" },
-];
-
-const MOBILE_TABS = NAV.slice(0, 3);
-
-function isNavActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
-
-function NavLinks({
-  pathname,
-  onNavigate,
-  className = "",
-}: {
-  pathname: string;
-  onNavigate?: () => void;
-  className?: string;
-}) {
-  return (
-    <nav className={`flex flex-col gap-1 ${className}`}>
-      {NAV.map((item) => {
-        const active = isNavActive(pathname, item.href);
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            className={`rounded-lg px-3 py-3 text-sm transition md:py-2 ${
-              active
-                ? "bg-zinc-800/80 text-white"
-                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-            }`}
-          >
-            {item.label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
+import { DesktopSidebar } from "@/components/navigation/DesktopSidebar";
+import { MobileTabBar } from "@/components/navigation/MobileTabBar";
+import { Button } from "@/components/ui/Button";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const router = useRouter();
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [pathname]);
-
-  useEffect(() => {
-    if (menuOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [menuOpen]);
+  const pathname = usePathname();
 
   function logout() {
     setStoredToken(null);
@@ -83,84 +16,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#12141a] text-zinc-100 md:flex-row">
+    <div className="flex min-h-[100dvh] flex-col bg-[var(--background)] text-zinc-100 md:flex-row">
       {/* Mobile header */}
-      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-zinc-800 bg-[#0e1015] px-4 py-3 md:hidden">
+      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-[var(--border)] bg-[var(--shell-nav)] px-4 py-3 pt-[max(12px,env(safe-area-inset-top))] md:hidden">
         <div>
-          <p className="text-[10px] font-semibold tracking-[0.2em] text-emerald-400">PROP EDGE</p>
-          <p className="text-sm font-medium text-zinc-50">Research</p>
+          <p className="text-[10px] font-semibold tracking-[0.25em] text-[var(--accent)]">PROP EDGE AI</p>
+          <p className="text-sm font-semibold text-zinc-50">Research</p>
         </div>
-        <button
-          type="button"
-          aria-label={menuOpen ? "Close menu" : "Open menu"}
-          onClick={() => setMenuOpen((o) => !o)}
-          className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-200"
-        >
-          {menuOpen ? "Close" : "Menu"}
-        </button>
+        <Button variant="ghost" className="min-h-[40px] px-3 py-2 text-xs" onClick={logout}>
+          Sign out
+        </Button>
       </header>
 
-      {/* Mobile drawer */}
-      {menuOpen ? (
-        <div className="fixed inset-0 z-50 flex md:hidden">
-          <button
-            type="button"
-            aria-label="Close menu overlay"
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setMenuOpen(false)}
-          />
-          <aside className="relative ml-auto flex h-full w-[min(100%,280px)] flex-col border-l border-zinc-800 bg-[#0e1015] p-4 shadow-xl">
-            <NavLinks pathname={pathname} onNavigate={() => setMenuOpen(false)} className="flex-1 overflow-y-auto" />
-            <button
-              type="button"
-              onClick={logout}
-              className="mt-4 w-full rounded-lg border border-zinc-700 px-3 py-3 text-sm text-zinc-300"
-            >
-              Sign out
-            </button>
-          </aside>
-        </div>
-      ) : null}
+      <DesktopSidebar />
 
-      {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 border-r border-zinc-800 bg-[#0e1015] p-4 md:block">
-        <div className="mb-8 px-2">
-          <p className="text-xs font-semibold tracking-[0.2em] text-emerald-400">PROP EDGE</p>
-          <h1 className="text-lg font-medium text-zinc-50">Prop desk</h1>
-        </div>
-        <NavLinks pathname={pathname} />
-        <button
-          type="button"
-          onClick={logout}
-          className="mt-8 w-full rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900"
-        >
-          Sign out
-        </button>
-      </aside>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* Desktop top bar */}
+        <header className="hidden items-center justify-between border-b border-[var(--border)] bg-[var(--shell-nav)] px-8 py-4 md:flex">
+          <p className="text-sm text-zinc-500">
+            <span className="text-zinc-300">Terminal</span>
+            {pathname && pathname !== "/" ? ` · ${pathname.split("/").filter(Boolean).join(" / ")}` : ""}
+          </p>
+          <Button variant="secondary" className="min-h-[36px] py-2 text-xs" onClick={logout}>
+            Sign out
+          </Button>
+        </header>
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <main className="flex-1 overflow-x-hidden overflow-y-auto p-4 pb-24 md:p-8 md:pb-8">{children}</main>
+        <main className="mx-auto w-full max-w-3xl flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 pb-[calc(88px+env(safe-area-inset-bottom,0px))] md:max-w-6xl md:px-8 md:py-8 md:pb-8">
+          {children}
+        </main>
 
-        {/* Mobile bottom navigation */}
-        <nav
-          className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-3 border-t border-zinc-800 bg-[#0e1015]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
-          aria-label="Primary"
-        >
-          {MOBILE_TABS.map((item) => {
-            const active = isNavActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex flex-col items-center justify-center px-1 py-2.5 text-[10px] leading-tight ${
-                  active ? "text-emerald-400" : "text-zinc-500"
-                }`}
-              >
-                <span className="font-medium">{item.short}</span>
-              </Link>
-            );
-          })}
-        </nav>
+        <MobileTabBar />
       </div>
     </div>
   );

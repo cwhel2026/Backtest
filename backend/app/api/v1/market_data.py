@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,14 +18,22 @@ from app.models.user import User
 from app.schemas.market_data import (
     DatasetReadinessOut,
     HistoricalDatasetOut,
+    IngestBundleEstimateRequest,
+    IngestBundleRequest,
     IngestEstimateRequest,
     OhlcvBarOut,
     ProviderHealthOut,
 )
+from app.services.instruments import PRIMARY_RESEARCH_SYMBOLS
 from app.services.market_data.budget import budget_status, reserve_approval
 from app.services.market_data.csv_import import import_csv_bars
 from app.backtest.bars import Bar
-from app.services.market_data.databento_client import quote_download_cost
+from app.services.market_data.databento_client import (
+    DEFAULT_HISTORY_DAYS,
+    default_research_window,
+    quote_bundle_cost,
+    quote_download_cost,
+)
 from app.services.market_data.dataset_catalog import find_validated_duplicate, ingest_fingerprint
 from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 from app.services.market_data.provider_audit import PROVIDER_TIERS
@@ -44,7 +52,7 @@ router = APIRouter(prefix="/market-data", tags=["market-data"])
 class IngestionRequest(BaseModel):
     provider_slug: str
     instrument_symbol: str
-    timeframe: str = "1m"
+    timeframe: str = "1m"  # Databento always stores canonical 1m; other TFs derived
     start: datetime
     end: datetime
     confirm_paid: bool = False
@@ -97,14 +105,14 @@ async def provider_tiers(_: User = Depends(get_current_user)) -> dict:
 
 @router.get("/provider-comparison")
 async def provider_comparison(
-    days: int = 14,
+    days: int = DEFAULT_HISTORY_DAYS,
     _: User = Depends(get_current_user),
 ) -> dict:
     """MNQ/MES/MGC provider matrix + optional live Databento get_cost when API key is set."""
     from app.services.market_data.provider_comparison import comparison_catalog, quote_micro_bundle_days
 
     payload = comparison_catalog()
-    payload["estimates"] = quote_micro_bundle_days(max(1, min(days, 90)))
+    payload["estimates"] = quote_micro_bundle_days(max(1, min(days, DEFAULT_HISTORY_DAYS)))
     return payload
 
 
@@ -222,6 +230,142 @@ async def ingest_cost_estimate(
         days=body.days,
         timeframe=body.timeframe,
     )
+
+
+@router.get("/databento/setup")
+async def databento_setup_info(_: User = Depends(get_current_user)) -> dict:
+    start, end = default_research_window()
+    from app.services.market_data.databento_ingest import DATABENTO_FUTURES_DATASET, DATABENTO_OHLCV_SCHEMA
+    from app.services.market_data.storage_backend import ensure_ohlcv_storage
+
+    storage = ensure_ohlcv_storage()
+    return {
+        "provider": "databento",
+        "dataset": DATABENTO_FUTURES_DATASET,
+        "schema": DATABENTO_OHLCV_SCHEMA,
+        "symbols": list(PRIMARY_RESEARCH_SYMBOLS),
+        "databento_symbols": [f"{s}.c.0" for s in sorted(PRIMARY_RESEARCH_SYMBOLS)],
+        "default_history_days": DEFAULT_HISTORY_DAYS,
+        "default_start": start.isoformat(),
+        "default_end": end.isoformat(),
+        "continuous_series": "unadjusted volume roll (.c.0)",
+        "storage_hint_gb_per_symbol_5y_1m": "roughly 0.25–0.6 GB parquet per micro contract (verify after import)",
+        "storage_total_hint_gb": "plan ~1–2 GB for three micros on /data volume",
+        "storage_boot": storage,
+        "requires_confirm_paid": True,
+        "configured": settings.databento_configured,
+    }
+
+
+@router.post("/ingest/estimate-bundle", response_model=dict)
+async def ingest_estimate_bundle(
+    body: IngestBundleEstimateRequest,
+    _: User = Depends(get_current_user),
+) -> dict:
+    start = datetime.fromisoformat(body.start.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(body.end.replace("Z", "+00:00"))
+    syms = [s.strip().upper() for s in body.symbols]
+    for s in syms:
+        if s not in PRIMARY_RESEARCH_SYMBOLS:
+            raise HTTPException(400, detail=f"Symbol {s} not in primary research universe {sorted(PRIMARY_RESEARCH_SYMBOLS)}")
+    if body.provider_slug != "databento":
+        raise HTTPException(400, detail="Bundle estimate is Databento-only in phase 1")
+    try:
+        return {**quote_bundle_cost(syms, start, end), "symbols_requested": syms, "start": start.isoformat(), "end": end.isoformat()}
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/ingest/bundle")
+async def request_bundle_ingestion(
+    body: IngestBundleRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if body.provider_slug != "databento":
+        raise HTTPException(400, detail="Bundle ingest supports Databento only")
+    syms = [s.strip().upper() for s in body.symbols]
+    for s in syms:
+        if s not in PRIMARY_RESEARCH_SYMBOLS:
+            raise HTTPException(400, detail=f"Unknown primary symbol {s}")
+    start = datetime.fromisoformat(body.start.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(body.end.replace("Z", "+00:00"))
+    try:
+        cost = quote_bundle_cost(syms, start, end)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+    estimated_total = float(cost.get("estimated_usd_total") or 0)
+    if cost.get("requires_approval") and not body.confirm_paid:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": "Approve the bundle estimate before starting a paid Databento download.",
+                "estimate": cost,
+            },
+        )
+
+    if estimated_total > 0:
+        with SyncSession() as session:
+            try:
+                reserve_approval(session, estimated_total, allow_over_budget=body.budget_override)
+                session.commit()
+            except ValueError as exc:
+                raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+    provider = PROVIDER_REGISTRY["databento"]
+    job_ids: list[str] = []
+    per_symbol = estimated_total / max(1, len(syms))
+    for sym in syms:
+        inst = (await db.execute(select(Instrument).where(Instrument.symbol == sym))).scalar_one_or_none()
+        if not inst:
+            raise HTTPException(404, detail=f"Instrument {sym} missing")
+        fingerprint = ingest_fingerprint(
+            provider_slug="databento",
+            instrument_symbol=sym,
+            timeframe="1m",
+            start=start,
+            end=end,
+        )
+        if not body.force_refresh:
+            with SyncSession() as session:
+                cached = find_validated_duplicate(
+                    session,
+                    fingerprint=fingerprint,
+                    instrument_id=inst.id,
+                    timeframe="1m",
+                )
+                if cached:
+                    job_ids.append(
+                        f"cached:{cached.id}"
+                    )
+                    continue
+        try:
+            meta = await provider.ingest_historical(sym, "1m", start, end)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        sym_quote = (cost.get("symbols") or {}).get(sym, {})
+        meta = {
+            **meta,
+            "ingest_fingerprint": fingerprint,
+            "derive_timeframes": body.derive_timeframes,
+            "approved_cost_usd": body.approved_cost_usd or sym_quote.get("estimated_usd") or per_symbol,
+            "cost_estimate_source": sym_quote.get("source", "bundle"),
+            "bundle_total_usd": estimated_total,
+        }
+        job_id = create_ingestion_job(meta, actor=user.email)
+        try:
+            run_data_ingestion.delay(job_id)
+        except Exception:
+            background_tasks.add_task(run_data_ingestion, job_id)
+        job_ids.append(job_id)
+    return {
+        "status": "queued",
+        "job_ids": job_ids,
+        "estimate": cost,
+        "message": f"Queued {len([j for j in job_ids if not j.startswith('cached:')])} ingest jobs — track under AI Research.",
+    }
 
 
 @router.post("/ingest/estimate-range", response_model=dict)
@@ -390,6 +534,128 @@ async def request_ingestion(
         background_tasks.add_task(run_data_ingestion, job_id)
         status = "processing"
     return {"job_id": job_id, "status": status, "meta": meta}
+
+
+@router.get("/databento/batch-jobs")
+async def databento_batch_jobs_list(_: User = Depends(get_current_user)) -> dict:
+    """List existing Databento batch jobs (purchased/historical) — does not submit new jobs."""
+    from app.services.market_data.databento_batch import list_purchased_batch_jobs
+
+    if not settings.databento_configured:
+        return {
+            "configured": False,
+            "jobs": [],
+            "note": "Set DATABENTO_API_KEY on the server to list your purchased batch downloads.",
+        }
+    jobs = list_purchased_batch_jobs()
+    return {
+        "configured": True,
+        "jobs": jobs,
+        "note": "Select a completed (done) job to import. This re-downloads files you already paid for — no new charge.",
+    }
+
+
+@router.post("/databento/batch-import")
+async def databento_batch_import(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+) -> dict:
+    from app.schemas.market_data import DatabentoBatchImportRequest
+
+    req = DatabentoBatchImportRequest(**body)
+    if not settings.databento_configured:
+        raise HTTPException(400, detail="DATABENTO_API_KEY not configured")
+    from app.services.market_data.databento_batch import list_purchased_batch_jobs
+
+    jobs = {j["id"]: j for j in list_purchased_batch_jobs()}
+    meta_job = jobs.get(req.databento_batch_job_id)
+    if meta_job and meta_job.get("state") not in ("done", None):
+        raise HTTPException(
+            400,
+            detail=f"Batch job is not complete (state={meta_job.get('state')}). Wait until Databento marks it done.",
+        )
+    job_id = create_ingestion_job(
+        {
+            "provider": "databento_batch",
+            "databento_batch_job_id": req.databento_batch_job_id,
+            "instrument_symbol": "MNQ",
+            "timeframe": "1m",
+        },
+        actor=user.email,
+    )
+    try:
+        run_data_ingestion.delay(job_id)
+    except Exception:
+        background_tasks.add_task(run_data_ingestion, job_id)
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "message": "Downloading your purchased batch — track progress under AI Research.",
+    }
+
+
+@router.post("/databento/upload/init")
+async def databento_upload_init(
+    body: dict,
+    _: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import init_upload_session
+
+    files = body.get("files") or []
+    try:
+        return init_upload_session(files)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/databento/upload/{upload_id}/chunk")
+async def databento_upload_chunk(
+    upload_id: str,
+    file_name: str = Query(...),
+    index: int = Query(...),
+    total: int = Query(...),
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import save_upload_chunk
+
+    data = await file.read()
+    try:
+        return save_upload_chunk(upload_id, file_name, index, total, data)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/databento/upload/complete")
+async def databento_upload_complete(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import complete_upload_session
+
+    upload_id = body.get("upload_id")
+    if not upload_id:
+        raise HTTPException(400, detail="upload_id required")
+    try:
+        files = complete_upload_session(upload_id)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    job_id = create_ingestion_job(
+        {"provider": "databento_upload", "upload_id": upload_id, "files": files, "instrument_symbol": "MNQ", "timeframe": "1m"},
+        actor=user.email,
+    )
+    try:
+        run_data_ingestion.delay(job_id)
+    except Exception:
+        background_tasks.add_task(run_data_ingestion, job_id)
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "files": files,
+        "message": "Processing uploaded files — track progress under AI Research.",
+    }
 
 
 @router.get("/health")

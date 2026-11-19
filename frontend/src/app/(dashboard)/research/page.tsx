@@ -80,11 +80,11 @@ export default function ResearchPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="page-title">Live research monitor</h2>
-        <p className="page-sub">Background jobs from Celery workers (refreshes every 5s).</p>
+        <h2 className="page-title">AI research</h2>
+        <p className="page-sub">Engine activity, queued experiments, and strategy generation (refreshes every 5s).</p>
       </div>
 
-      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 md:p-6">
         <h3 className="text-sm font-medium text-zinc-200">Generate strategy (Phase 3)</h3>
         <p className="mt-1 text-xs text-zinc-500">{aiLabel}. Creates a DSL strategy and optional backtest.</p>
         <form onSubmit={onGenerate} className="mt-4 flex flex-col gap-3">
@@ -92,7 +92,7 @@ export default function ResearchPage() {
             <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
               Instrument
               <select
-                className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+                className="min-h-[44px] w-full rounded-xl border border-[var(--border)] bg-[var(--card-elevated)] px-3 py-2.5"
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
               >
@@ -106,7 +106,7 @@ export default function ResearchPage() {
             <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
               Timeframe
               <select
-                className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+                className="min-h-[44px] w-full rounded-xl border border-[var(--border)] bg-[var(--card-elevated)] px-3 py-2.5"
                 value={timeframe}
                 onChange={(e) => setTimeframe(e.target.value)}
               >
@@ -119,7 +119,7 @@ export default function ResearchPage() {
             <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:flex-1">
               Backtest dataset
               <select
-                className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+                className="min-h-[44px] w-full rounded-xl border border-[var(--border)] bg-[var(--card-elevated)] px-3 py-2.5"
                 value={datasetId}
                 onChange={(e) => setDatasetId(e.target.value)}
               >
@@ -143,7 +143,7 @@ export default function ResearchPage() {
           </label>
           <button
             type="submit"
-            className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 md:w-auto md:py-2"
+            className="min-h-[44px] w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[#041018] md:w-auto"
           >
             Generate &amp; queue
           </button>
@@ -163,7 +163,7 @@ export default function ResearchPage() {
           <p className="text-zinc-500">No jobs in queue.</p>
         ) : (
           jobs.map((j) => (
-            <div key={j.id} className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+            <div key={j.id} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4">
               <div className="flex items-center justify-between gap-4">
                 <p className="font-medium text-zinc-100">{j.title}</p>
                 <span className="text-xs text-zinc-400">
@@ -183,7 +183,7 @@ export default function ResearchPage() {
 function ProgressBar({ pct }: { pct: number }) {
   return (
     <div className="mt-3 h-1.5 w-full overflow-hidden rounded bg-zinc-800">
-      <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+      <div className="h-full bg-[var(--accent)] transition-all" style={{ width: `${pct}%` }} />
     </div>
   );
 }

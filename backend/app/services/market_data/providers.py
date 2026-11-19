@@ -75,11 +75,14 @@ class DatabentoProvider(MarketDataProvider):
         return {
             "provider": self.slug,
             "instrument_symbol": instrument_symbol,
-            "timeframe": timeframe,
+            "timeframe": "1m",
             "start": start.isoformat(),
             "end": end.isoformat(),
             "status": "queued",
-            "note": "Worker downloads licensed 1m bars and stores your requested timeframe.",
+            "chunked": True,
+            "derive_timeframes": True,
+            "series_kind": "continuous_unadjusted",
+            "note": "Worker downloads GLBX.MDP3 ohlcv-1m to parquet, validates, then derives 5m/15m/1h/4h.",
         }
 
 
