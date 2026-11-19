@@ -20,6 +20,8 @@ type RunDetail = {
     trade_count: number;
     max_drawdown: number;
     last_data_exchange_ts: string | null;
+    strategy_phase: string | null;
+    runner_state_version: number | null;
   };
   validation: { passed: boolean; reasons: string[] };
   ledger: {
@@ -112,6 +114,12 @@ export default function LiveStrategyRunPage() {
           {r.symbol} {r.timeframe} · {r.research_state.replaceAll("_", " ")}
           {r.experimental ? " · experimental" : ""}
         </p>
+        {r.strategy_phase && (
+          <p className="mt-1 text-xs text-amber-200/80">
+            Strategy phase: {r.strategy_phase.replaceAll("_", " ")}
+            {r.runner_state_version ? ` · state v${r.runner_state_version}` : ""}
+          </p>
+        )}
       </header>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

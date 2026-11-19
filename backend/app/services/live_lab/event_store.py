@@ -14,13 +14,14 @@ from app.services.live_lab.types import MarketEvent
 
 
 def persist_events(session: Session, events: list[MarketEvent], *, provider: str) -> int:
-    from app.services.live_lab.certification.integrity import quality_gate_ok, validate_event
+    from app.services.live_lab.certification.integrity import quality_gate_ok, reconcile_event_batch, validate_event
 
+    events, batch_warnings = reconcile_event_batch(events)
     inserted = 0
     last_ts = None
     last_seq = None
-    issues: list[str] = []
-    for ev in sorted(events, key=lambda e: (e.exchange_ts, e.sequence)):
+    issues: list[str] = list(batch_warnings)
+    for ev in events:
         issues.extend(validate_event(ev, last_exchange_ts=last_ts, last_sequence=last_seq))
         if not quality_gate_ok(issues):
             raise ValueError(f"Market data quality gate: {issues[-1]}")
