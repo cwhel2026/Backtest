@@ -52,8 +52,16 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
             else None,
         )
 
+        spec = dict(version.specification)
+        entry_type = (spec.get("entry") or {}).get("type")
+        if entry_type in ("video_liquidity_sweep", "video_anchor_bos"):
+            spec["data_context"] = {
+                **(spec.get("data_context") or {}),
+                "rollover_events": meta.get("rollover_events") or [],
+            }
+
         result = run_backtest(
-            version.specification,
+            spec,
             bars,
             instrument,
             dataset.timeframe,

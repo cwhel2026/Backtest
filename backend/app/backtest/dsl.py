@@ -95,6 +95,11 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     exit_spec = spec.get("exit") or {}
     if "stop_ticks" not in exit_spec or "target_ticks" not in exit_spec:
         errors.append("exit.stop_ticks and exit.target_ticks required")
+    entry_type = entry.get("type")
+    if entry_type in ("video_liquidity_sweep", "video_anchor_bos"):
+        fib = Decimal(str(entry.get("fib_ratio", "0.618")))
+        if not (Decimal("0") < fib < Decimal("1")):
+            errors.append("entry.fib_ratio must be between 0 and 1 (default 0.618; alternatives e.g. 0.595 are config-only)")
     return errors
 
 

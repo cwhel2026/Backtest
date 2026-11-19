@@ -12,7 +12,6 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Literal
 
 from app.backtest.bars import Bar
-from app.backtest.costs import apply_slippage, settle_trade
 from app.models.instrument import Instrument
 
 
@@ -116,7 +115,13 @@ def order_from_impulse(strategy: str, direction: str, i: int, low: Decimal, high
     return Order(strategy, direction, i, limit, stop, target, i + cfg.expiry_bars, reason)
 
 
-def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[str]) -> list[Order]:
+def session_sweep_orders(
+    bars: list[Bar],
+    cfg: VideoConfig,
+    session_keys: list[str],
+    *,
+    suppress_indices: set[int] | None = None,
+) -> list[Order]:
     if len(bars) != len(session_keys):
         raise ValueError("session key mismatch")
     completed: dict[str, tuple[Decimal, Decimal]] = {}
@@ -126,7 +131,10 @@ def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[s
     candidates: list[tuple] = []
     out: list[Order] = []
     pv = pivots(bars, cfg)
+    suppress = suppress_indices or set()
     for i, b in enumerate(bars):
+        if i in suppress:
+            continue
         key = session_keys[i]
         if key != active_key:
             if active_key is not None:
@@ -181,7 +189,7 @@ def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[s
     return out
 
 
-def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig) -> list[Order]:
+def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig, *, suppress_indices: set[int] | None = None) -> list[Order]:
     pv = pivots(bars, cfg)
     by_confirmation: dict[int, list] = {}
     for p in pv:
@@ -189,8 +197,13 @@ def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig) -> list[Order]:
     last: dict[str, tuple | None] = {"high": None, "low": None}
     used: set[tuple] = set()
     out: list[Order] = []
+    suppress = suppress_indices or set()
     for i, b in enumerate(bars):
         if i < 1:
+            for p in by_confirmation.get(i, []):
+                last[p[2]] = p
+            continue
+        if i in suppress:
             for p in by_confirmation.get(i, []):
                 last[p[2]] = p
             continue
@@ -240,108 +253,36 @@ def validate_bars(bars: list[Bar]) -> None:
         raise ValueError("invalid OHLC")
 
 
+def rollover_suppress_indices(
+    bars: list[Bar],
+    tick: Decimal,
+    rollover_events: list[dict] | None = None,
+    *,
+    jump_ticks: int = 80,
+) -> set[int]:
+    """Bar indices where signals should not fire (rolls / unadjusted continuous gaps)."""
+    from app.services.market_data.contract_series import detect_rollover_jumps
+
+    suppress: set[int] = set()
+    for hit in detect_rollover_jumps(bars, rollover_events or [], tick_size=tick, jump_ticks=jump_ticks):
+        suppress.add(int(hit["index"]))
+        if int(hit["index"]) > 0:
+            suppress.add(int(hit["index"]) - 1)
+    if not rollover_events:
+        threshold = tick * jump_ticks
+        for i in range(1, len(bars)):
+            if abs(bars[i].open - bars[i - 1].close) >= threshold:
+                suppress.add(i)
+                suppress.add(i - 1)
+    return suppress
+
+
 def simulate(bars: list[Bar], orders: list[Order], cfg: VideoConfig, instrument: Instrument) -> list[dict]:
     if cfg.slippage_ticks < 0 or cfg.commission_side < 0:
         raise ValueError("invalid costs")
-    ledger: list[dict] = []
-    busy_until = -1
-    slip = cfg.slippage_ticks
-    tick = cfg.tick
-    for o in sorted(orders, key=lambda x: (x.signal_index, x.strategy)):
-        if o.signal_index <= busy_until:
-            continue
-        valid_long = o.stop < o.limit < o.target
-        valid_short = o.target < o.limit < o.stop
-        if not (valid_long if o.direction == "long" else valid_short):
-            continue
-        risk_per = (abs(o.limit - o.stop) + tick * slip * 2) * cfg.multiplier + cfg.commission_side * 2
-        qty = min(cfg.max_contracts, int(cfg.risk_dollars / risk_per)) if risk_per > 0 else 0
-        if qty <= 0:
-            continue
-        fill: int | None = None
-        for j in range(o.signal_index + 1, min(o.expiry_index, len(bars) - 1) + 1):
-            b = bars[j]
-            touched = b.low <= o.limit if o.direction == "long" else b.high >= o.limit
-            if touched:
-                fill = j
-                break
-        if fill is None:
-            continue
-        ref_entry = o.limit
-        exec_entry = apply_slippage(ref_entry, o.direction, "entry", tick, slip)
-        ref_exit = ref_entry
-        exec_exit = exec_entry
-        exit_reason = "end_of_data"
-        exit_j = len(bars) - 1
-        for j in range(fill, len(bars)):
-            b = bars[j]
-            stop_hit = b.low <= o.stop if o.direction == "long" else b.high >= o.stop
-            target_hit = b.high >= o.target if o.direction == "long" else b.low <= o.target
-            if stop_hit:
-                if j > fill and o.direction == "long" and b.open < o.stop:
-                    ref_exit = min(o.stop, b.open)
-                elif j > fill and o.direction == "short" and b.open > o.stop:
-                    ref_exit = max(o.stop, b.open)
-                else:
-                    ref_exit = o.stop
-                exec_exit = apply_slippage(ref_exit, o.direction, "exit", tick, slip)
-                exit_reason = "stop"
-                exit_j = j
-                break
-            if target_hit:
-                ref_exit = o.target
-                exec_exit = apply_slippage(ref_exit, o.direction, "exit", tick, slip)
-                exit_reason = "target"
-                exit_j = j
-                break
-        if exit_reason == "end_of_data":
-            ref_exit = bars[-1].close
-            exec_exit = apply_slippage(ref_exit, o.direction, "exit", tick, slip)
+    from app.backtest.video_execution import run_video_orders
 
-        settlement = settle_trade(
-            direction=o.direction,
-            qty=qty,
-            instrument=instrument,
-            ref_entry=ref_entry,
-            exec_entry=exec_entry,
-            ref_exit=ref_exit,
-            exec_exit=exec_exit,
-            commission_per_side=cfg.commission_side,
-        )
-        ledger.append(
-            {
-                "trade_number": len(ledger) + 1,
-                "direction": o.direction,
-                "quantity": qty,
-                "signal_ts": bars[o.signal_index].ts,
-                "entry_ts": bars[fill].ts,
-                "entry_price": exec_entry,
-                "exit_ts": bars[exit_j].ts,
-                "exit_price": exec_exit,
-                "stop_price": o.stop,
-                "target_price": o.target,
-                "exit_reason": exit_reason,
-                "gross_pnl": settlement.gross_pnl,
-                "commissions": settlement.commissions,
-                "slippage": settlement.slippage,
-                "net_pnl": settlement.net_pnl,
-                "mae": Decimal(0),
-                "mfe": Decimal(0),
-                "meta": {
-                    "signal_reason": o.reason,
-                    "strategy": o.strategy,
-                    "entry_mode": "limit",
-                    "limit_price": str(o.limit),
-                    "reference_entry": str(ref_entry),
-                    "reference_exit": str(ref_exit),
-                    "order_events": [
-                        {"ts": bars[o.signal_index].ts.isoformat(), "event": "placed", "detail": f"limit {o.limit}"},
-                        {"ts": bars[fill].ts.isoformat(), "event": "filled", "detail": "limit touched"},
-                    ],
-                },
-            }
-        )
-        busy_until = exit_j
+    ledger, _stats, _analytics = run_video_orders(bars, orders, cfg, instrument)
     return ledger
 
 
