@@ -20,6 +20,7 @@ class HistoricalDatasetOut(BaseModel):
     coverage_end: str | None
     version_tag: str
     content_checksum: str | None = None
+    storage_uri: str | None = None
     quality_class: str | None = None
     meta: dict = {}
 

@@ -14,6 +14,7 @@ from app.models.enums import DatasetValidationStatus
 from app.models.instrument import Instrument
 from app.models.market_data import DataProvider, HistoricalDataset
 from app.services.market_data.ohlcv_parquet import bar_count, checksum_sha256, coverage, has_store, write_bars
+from app.services.market_data.storage_backend import canonical_storage_uri
 
 QualityClass = str  # ready | warning | blocked
 
@@ -102,5 +103,9 @@ def create_versioned_dataset(
         dataset.content_checksum = checksum_sha256(dataset.id)
     except Exception:
         dataset.content_checksum = None
+    dataset.storage_uri = canonical_storage_uri(dataset.id)
+    meta = dict(dataset.meta or {})
+    meta["storage_uri"] = dataset.storage_uri
+    dataset.meta = meta
     session.flush()
     return dataset

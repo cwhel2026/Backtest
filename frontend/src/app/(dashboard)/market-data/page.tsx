@@ -51,6 +51,12 @@ type EngineHealth = {
     persistent_ok: boolean;
     persistent_detail: string;
     resolved_path: string;
+    railway_volume_mounted?: boolean;
+    recommended_path?: string;
+    s3_ok?: boolean;
+    s3_detail?: string;
+    s3_mirror_configured?: boolean;
+    boot?: Record<string, unknown>;
   };
   databento: { configured: boolean; live_smoke_enabled: boolean };
   datasets: { count_recent: number; ready: number; blocked: number };
@@ -220,8 +226,14 @@ export default function HistoricalDataPage() {
             </li>
             <li>
               Parquet store: {health.storage.writable ? "writable" : "fail"} ·{" "}
-              {health.storage.persistent_ok ? "persistent path" : "ephemeral risk"} — {health.storage.resolved_path}
+              {health.storage.persistent_ok ? "persistent" : "ephemeral risk"} — {health.storage.resolved_path}
+              {health.storage.railway_volume_mounted === false ? " · /data not mounted" : ""}
             </li>
+            <li>
+              S3 mirror: {health.storage.s3_mirror_configured ? health.storage.s3_ok ? "ok" : "fail" : "off"}
+              {health.storage.s3_detail ? ` — ${health.storage.s3_detail}` : ""}
+            </li>
+            <li>Recommended Railway path: {health.storage.recommended_path ?? "/data/ohlcv"}</li>
             <li>Databento: {health.databento.configured ? "key set" : "not configured"}</li>
             <li>
               Datasets (recent): {health.datasets.ready} ready · {health.datasets.blocked} blocked

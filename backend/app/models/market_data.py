@@ -49,6 +49,7 @@ class HistoricalDataset(Base):
     quality_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     content_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    storage_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     meta: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 

@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AliasChoices, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -99,6 +100,10 @@ class Settings(BaseSettings):
     ohlcv_store_dir: str = Field(default="data/ohlcv", validation_alias="OHLCV_STORE_DIR")
     ohlcv_persistent_required: bool = Field(default=False, validation_alias="OHLCV_PERSISTENT_REQUIRED")
     ohlcv_s3_bucket: str = Field(default="", validation_alias="OHLCV_S3_BUCKET")
+    ohlcv_s3_endpoint: str = Field(default="", validation_alias="OHLCV_S3_ENDPOINT")
+    ohlcv_s3_region: str = Field(default="", validation_alias="OHLCV_S3_REGION")
+    ohlcv_s3_access_key: str = Field(default="", validation_alias="OHLCV_S3_ACCESS_KEY")
+    ohlcv_s3_secret_key: str = Field(default="", validation_alias="OHLCV_S3_SECRET_KEY")
     databento_live_smoke: bool = Field(default=False, validation_alias="DATABENTO_LIVE_SMOKE")
     research_data_budget_gbp: float = Field(default=50.0, validation_alias="RESEARCH_DATA_BUDGET_GBP")
     gbp_usd_rate: float | None = Field(default=None, validation_alias="GBP_USD_RATE")
@@ -161,6 +166,10 @@ class Settings(BaseSettings):
             self.database_url_sync = to_sync_database_url(self.database_url)
 
         on_railway = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+        if on_railway and os.getenv("OHLCV_PERSISTENT_REQUIRED") is None:
+            self.ohlcv_persistent_required = True
+        if on_railway and os.getenv("OHLCV_STORE_DIR") is None and Path("/data").is_dir():
+            self.ohlcv_store_dir = "/data/ohlcv"
         if on_railway and self.redis_url:
             broker, backend = celery_urls_from_redis(self.redis_url)
             self.celery_broker_url = broker
@@ -169,6 +178,18 @@ class Settings(BaseSettings):
 
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+
+    @property
+    def on_railway(self) -> bool:
+        return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
+    @property
+    def ohlcv_s3_configured(self) -> bool:
+        return bool(
+            self.ohlcv_s3_bucket.strip()
+            and self.ohlcv_s3_access_key.strip()
+            and self.ohlcv_s3_secret_key.strip()
+        )
 
     @property
     def databento_configured(self) -> bool:

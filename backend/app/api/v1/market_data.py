@@ -73,6 +73,7 @@ def _dataset_out(d: HistoricalDataset) -> HistoricalDatasetOut:
         coverage_end=d.coverage_end.isoformat() if d.coverage_end else None,
         version_tag=d.version_tag,
         content_checksum=d.content_checksum,
+        storage_uri=d.storage_uri or meta.get("storage_uri"),
         quality_class=meta.get("quality_class"),
         meta=meta,
     )
@@ -383,12 +384,16 @@ async def market_data_health(
     from app.core.config import get_settings
     from app.models.instrument import Instrument
     from app.services.market_data.databento_client import check_dataset_range
+    from app.services.market_data.ohlcv_s3 import check_s3_reachable
+    from app.services.market_data.storage_backend import ensure_ohlcv_storage
     from app.services.market_data.storage_health import (
         check_database,
         check_not_ephemeral,
         check_store_writable,
         store_paths,
     )
+
+    storage_boot = ensure_ohlcv_storage()
 
     settings = get_settings()
 
@@ -407,6 +412,7 @@ async def market_data_health(
 
     store_ok, store_msg = check_store_writable()
     persist_ok, persist_msg = check_not_ephemeral()
+    s3_ok, s3_msg = check_s3_reachable()
 
     databento = {
         "configured": settings.databento_configured,
@@ -430,6 +436,9 @@ async def market_data_health(
             "writable_detail": store_msg,
             "persistent_ok": persist_ok,
             "persistent_detail": persist_msg,
+            "s3_ok": s3_ok,
+            "s3_detail": s3_msg,
+            "boot": storage_boot,
         },
         "databento": databento,
         "budget": budget,
