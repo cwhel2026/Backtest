@@ -23,16 +23,24 @@ export const MORE_LINKS: NavItem[] = [
   { href: "/strategy-compare", label: "Compare strategies", short: "Compare" },
   { href: "/berg-tnb", label: "Berg TNB", short: "TNB" },
   { href: "/desk", label: "Prop desk search", short: "Desk" },
-  { href: "/live-lab", label: "Live Strategy Lab", short: "Live" },
   { href: "/paper", label: "Forward test", short: "Paper" },
   { href: "/settings", label: "Settings", short: "Settings" },
   { href: "/market-data/health", label: "System health", short: "Health" },
 ];
 
-export const DESKTOP_NAV: NavItem[] = [
+function dedupeNavByHref(items: NavItem[]): NavItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.href)) return false;
+    seen.add(item.href);
+    return true;
+  });
+}
+
+export const DESKTOP_NAV: NavItem[] = dedupeNavByHref([
   ...MOBILE_PRIMARY.filter((i) => i.href !== "/more"),
   ...MORE_LINKS,
-];
+]);
 
 export function isNavActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
