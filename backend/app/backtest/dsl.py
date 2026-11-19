@@ -53,6 +53,8 @@ ENTRY_TYPES = frozenset(
         "liquidity_sweep_reversal",
         "anchor_bos_retrace",
         "sweep_bos_combined",
+        "video_liquidity_sweep",
+        "video_anchor_bos",
         "order_block_retest",
         "premium_discount",
         "mtf_ema_pullback",

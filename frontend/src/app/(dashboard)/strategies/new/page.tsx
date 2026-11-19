@@ -26,6 +26,34 @@ const TEMPLATES: Record<
     entry: { type: "vwap_reversion", deviation_ticks: 16 },
     exit: { stop_ticks: 24, target_ticks: 32, session_end_flatten: true },
   },
+  video_sweep: {
+    category: "video_liquidity_sweep",
+    entry: {
+      type: "video_liquidity_sweep",
+      pivot_left: 3,
+      pivot_right: 3,
+      sweep_ticks: 1,
+      stop_buffer_ticks: 2,
+      fib_ratio: "0.618",
+      reward_risk: "2",
+      order_expire_bars: 12,
+      bos_window: 20,
+      require_bos_after_sweep: true,
+    },
+    exit: { stop_ticks: 16, target_ticks: 32, session_end_flatten: false },
+  },
+  video_anchor: {
+    category: "video_anchor_bos",
+    entry: {
+      type: "video_anchor_bos",
+      pivot_left: 3,
+      pivot_right: 3,
+      fib_ratio: "0.618",
+      reward_risk: "2",
+      order_expire_bars: 16,
+    },
+    exit: { stop_ticks: 20, target_ticks: 40, session_end_flatten: false },
+  },
 };
 
 export default function NewStrategyPage() {
@@ -96,6 +124,8 @@ export default function NewStrategyPage() {
             <option value="orb">Opening range breakout</option>
             <option value="ema">EMA crossover</option>
             <option value="vwap">VWAP reversion</option>
+            <option value="video_sweep">Video liquidity sweep (limit + fib)</option>
+            <option value="video_anchor">Video anchor BOS (limit + fib)</option>
           </select>
         </label>
         <div className="flex flex-col gap-3 md:flex-row">

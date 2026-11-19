@@ -17,6 +17,8 @@ from app.backtest.metrics import SimulatedTrade, compute_metrics
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
 
+VIDEO_ENTRY_TYPES = frozenset({"video_liquidity_sweep", "video_anchor_bos"})
+
 
 @dataclass
 class BacktestAssumptions:
@@ -43,6 +45,12 @@ def run_backtest(
     errors = validate_spec(spec)
     if errors:
         raise ValueError("; ".join(errors))
+
+    entry_type = (spec.get("entry") or {}).get("type")
+    if entry_type in VIDEO_ENTRY_TYPES:
+        from app.backtest.video_backtest import run_video_backtest
+
+        return run_video_backtest(spec, bars, instrument, dataset_timeframe, assumptions, starting_equity)
 
     warnings: list[str] = []
     warnings.append(
