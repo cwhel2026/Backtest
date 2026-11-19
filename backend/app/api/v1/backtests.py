@@ -1,14 +1,19 @@
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.db.session import get_db
-from app.models.backtest import BacktestRun, BacktestTrade
+from app.backtest.bars import TIMEFRAME_MINUTES, load_bars
+from app.db.session import SyncSessionLocal, get_db
+from app.models.backtest import BacktestRun, BacktestTrade, OhlcvBar
+from app.models.market_data import HistoricalDataset
 from app.models.user import User
 from app.schemas.backtest import BacktestCreateRequest, BacktestRunSummary, BacktestTradeOut
+from app.schemas.market_data import OhlcvBarOut
+from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 from app.util.serde import enum_value, provisional_reproducibility_id
 from app.worker.tasks import enqueue_backtest
 
@@ -103,6 +108,8 @@ async def get_backtest_trades(
             entry_price=float(t.entry_price),
             exit_ts=t.exit_ts.isoformat(),
             exit_price=float(t.exit_price),
+            stop_price=float(t.stop_price) if t.stop_price is not None else None,
+            target_price=float(t.target_price) if t.target_price is not None else None,
             exit_reason=t.exit_reason,
             gross_pnl=float(t.gross_pnl),
             commissions=float(t.commissions),
@@ -110,8 +117,87 @@ async def get_backtest_trades(
             net_pnl=float(t.net_pnl),
             mae=float(t.mae) if t.mae is not None else None,
             mfe=float(t.mfe) if t.mfe is not None else None,
+            meta=t.meta or {},
         )
         for t in trades
+    ]
+
+
+@router.get("/{run_id}/chart-bars", response_model=list[OhlcvBarOut])
+async def backtest_chart_bars(
+    run_id: str,
+    trade_number: int,
+    padding: int = 80,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[OhlcvBarOut]:
+    run = await db.get(BacktestRun, uuid.UUID(run_id))
+    if not run:
+        raise HTTPException(404, "Backtest not found")
+    result = await db.execute(
+        select(BacktestTrade)
+        .where(BacktestTrade.backtest_run_id == run.id)
+        .where(BacktestTrade.trade_number == trade_number)
+    )
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(404, "Trade not found")
+    dataset = await db.get(HistoricalDataset, run.dataset_id)
+    if not dataset:
+        raise HTTPException(404, "Dataset not found")
+    pad = max(10, min(padding, 400))
+    minutes = TIMEFRAME_MINUTES.get(dataset.timeframe, 5)
+    window = timedelta(minutes=minutes * pad)
+    start = trade.signal_ts - window
+    end = trade.exit_ts + window
+
+    if has_store(run.dataset_id):
+        stored = read_parquet_bars(run.dataset_id, start=start, end=end)
+        return [
+            OhlcvBarOut(
+                ts=ts.isoformat(),
+                open=float(o),
+                high=float(h),
+                low=float(low),
+                close=float(c),
+                volume=int(v),
+            )
+            for ts, o, h, low, c, v in stored
+        ]
+
+    result = await db.execute(
+        select(OhlcvBar)
+        .where(OhlcvBar.dataset_id == run.dataset_id)
+        .where(OhlcvBar.ts >= start)
+        .where(OhlcvBar.ts <= end)
+        .order_by(OhlcvBar.ts)
+    )
+    rows = result.scalars().all()
+    if rows:
+        return [
+            OhlcvBarOut(
+                ts=r.ts.isoformat(),
+                open=float(r.open),
+                high=float(r.high),
+                low=float(r.low),
+                close=float(r.close),
+                volume=int(r.volume),
+            )
+            for r in rows
+        ]
+
+    with SyncSessionLocal() as session:
+        bars = load_bars(session, run.dataset_id, start=start, end=end)
+    return [
+        OhlcvBarOut(
+            ts=b.ts.isoformat(),
+            open=float(b.open),
+            high=float(b.high),
+            low=float(b.low),
+            close=float(b.close),
+            volume=b.volume,
+        )
+        for b in bars
     ]
 
 

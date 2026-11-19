@@ -52,7 +52,17 @@ def test_open_trade_preserves_bars_held_across_ticks():
         Bar(start, Decimal("19000"), Decimal("19002"), Decimal("18998"), Decimal("19001"), 10),
         Bar(start + timedelta(minutes=1), Decimal("19001"), Decimal("19003"), Decimal("18999"), Decimal("19002"), 10),
     ]
-    pos = OpenTrade("long", 1, Decimal("19000"), Decimal("18800"), Decimal("19500"), bars[0].ts, 3, Decimal("200"))
+    pos = OpenTrade(
+        "long",
+        1,
+        Decimal("19000"),
+        Decimal("19000"),
+        Decimal("18800"),
+        Decimal("19500"),
+        bars[0].ts,
+        3,
+        Decimal("200"),
+    )
     cursor, fills = advance_slot(
         {
             "entry": {"type": "ema_crossover", "fast_period": 3, "slow_period": 5},

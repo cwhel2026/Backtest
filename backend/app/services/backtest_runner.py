@@ -33,6 +33,13 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         if not all([version, strategy, dataset, instrument]):
             raise ValueError("Missing strategy, version, dataset, or instrument")
 
+        meta = dataset.meta or {}
+        qclass = (meta.get("quality_class") or "").lower()
+        if qclass == "blocked" or dataset.validation_status.value == "failed":
+            raise ValueError(
+                "Dataset quality is BLOCKED — fix or ingest validated data before backtesting."
+            )
+
         bars = load_bars(session, dataset.id)
         if not bars:
             raise ValueError("Dataset has no OHLCV bars — import CSV or connect a data provider.")
@@ -65,6 +72,17 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         run.equity_curve = result.equity_curve
         run.warnings = result.warnings
         run.engine_version = ENGINE_VERSION
+        run.parameters = {
+            **(run.parameters or {}),
+            "dataset_version_tag": dataset.version_tag,
+            "dataset_checksum": dataset.content_checksum,
+            "dataset_quality_class": meta.get("quality_class"),
+            "dataset_provider_id": str(dataset.provider_id),
+            "instrument_symbol": instrument.symbol,
+            "timeframe": dataset.timeframe,
+            "coverage_start": dataset.coverage_start.isoformat() if dataset.coverage_start else None,
+            "coverage_end": dataset.coverage_end.isoformat() if dataset.coverage_end else None,
+        }
         run.performance_category = PerformanceCategory.BACKTEST
         run.completed_at = datetime.now(UTC)
         run.status = "completed"

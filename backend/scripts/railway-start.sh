@@ -13,6 +13,7 @@ case "$ROLE" in
     exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
     ;;
   worker)
+    python -c "from app.services.market_data.storage_backend import ensure_ohlcv_storage; ensure_ohlcv_storage()"
     exec celery -A app.worker.celery_app worker --loglevel=info
     ;;
   beat)

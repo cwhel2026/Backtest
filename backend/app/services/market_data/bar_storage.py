@@ -71,12 +71,17 @@ def persist_bars_to_dataset(
 
     dataset.downloaded_at = datetime.now(UTC)
     dataset.validation_status = DatasetValidationStatus.VALIDATED
+    from app.services.market_data.storage_backend import canonical_storage_uri
+
+    uri = canonical_storage_uri(dataset.id)
+    dataset.storage_uri = uri
     dataset.meta = {
         **(dataset.meta or {}),
         **meta,
         "synthetic": False,
         "duplicate_rows_skipped": dupes,
         "store": "parquet",
+        "storage_uri": uri,
     }
     session.flush()
     return dataset

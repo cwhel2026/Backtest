@@ -51,15 +51,32 @@ def resolve_stop_target(
 
 
 def check_intrabar_exit(direction: str, stop: Decimal, target: Decimal, bar: Bar) -> tuple[Decimal | None, str | None]:
+    """Conservative: stop before target on same bar; gap-through uses open when worse than stop."""
     if direction == "long":
-        if bar.low <= stop:
+        stop_hit = bar.low <= stop
+        target_hit = bar.high >= target
+        if stop_hit and target_hit:
+            if bar.open <= stop:
+                return bar.open, "stop_loss_gap"
             return stop, "stop_loss"
-        if bar.high >= target:
+        if stop_hit:
+            if bar.open <= stop:
+                return bar.open, "stop_loss_gap"
+            return stop, "stop_loss"
+        if target_hit:
             return target, "take_profit"
     else:
-        if bar.high >= stop:
+        stop_hit = bar.high >= stop
+        target_hit = bar.low <= target
+        if stop_hit and target_hit:
+            if bar.open >= stop:
+                return bar.open, "stop_loss_gap"
             return stop, "stop_loss"
-        if bar.low <= target:
+        if stop_hit:
+            if bar.open >= stop:
+                return bar.open, "stop_loss_gap"
+            return stop, "stop_loss"
+        if target_hit:
             return target, "take_profit"
     return None, None
 

@@ -16,6 +16,7 @@ from app.backtest.exits import (
     time_stop_hit,
 )
 from app.models.instrument import Instrument
+from app.backtest.costs import apply_slippage, settle_trade
 from app.services.futures_math import contracts_for_risk
 
 
@@ -24,6 +25,7 @@ class OpenTrade:
     direction: str
     qty: int
     entry_price: Decimal
+    ref_entry: Decimal
     stop: Decimal
     target: Decimal
     entry_ts: datetime
@@ -49,26 +51,27 @@ class ClosedFill:
     net_pnl: Decimal
 
 
-def _slip(price: Decimal, direction: str, side: str, tick: Decimal, ticks: int) -> Decimal:
-    adj = tick * Decimal(ticks)
-    if side == "entry":
-        return price + adj if direction == "long" else price - adj
-    return price - adj if direction == "long" else price + adj
-
-
 def _net_pnl(
-    entry: Decimal,
-    exit_px: Decimal,
+    ref_entry: Decimal,
+    exec_entry: Decimal,
+    ref_exit: Decimal,
+    exec_exit: Decimal,
     direction: str,
     qty: int,
     instrument: Instrument,
     slip_ticks: int,
 ) -> Decimal:
-    diff = exit_px - entry if direction == "long" else entry - exit_px
-    gross = diff * instrument.multiplier * Decimal(qty)
-    slip_cost = instrument.tick_size * Decimal(slip_ticks) * instrument.multiplier * Decimal(qty) * Decimal(2)
-    commissions = instrument.default_commission_per_side * Decimal(2) * Decimal(qty)
-    return gross - commissions - slip_cost
+    settlement = settle_trade(
+        direction=direction,
+        qty=qty,
+        instrument=instrument,
+        ref_entry=ref_entry,
+        exec_entry=exec_entry,
+        ref_exit=ref_exit,
+        exec_exit=exec_exit,
+        commission_per_side=instrument.default_commission_per_side,
+    )
+    return settlement.net_pnl
 
 
 def apply_prop_rules(
@@ -144,7 +147,7 @@ def advance_slot(
                 if time_stop_hit(managed, spec):
                     exit_px, reason = bar.close, "time_stop"
             if exit_px is not None and reason is not None:
-                slipped = _slip(exit_px, pos.direction, "exit", tick, slip_ticks)
+                slipped = apply_slippage(exit_px, pos.direction, "exit", tick, slip_ticks)
                 fills.append(
                     ClosedFill(
                         pos.direction,
@@ -154,7 +157,16 @@ def advance_slot(
                         bar.ts,
                         slipped,
                         reason,
-                        _net_pnl(pos.entry_price, slipped, pos.direction, pos.qty, instrument, slip_ticks),
+                        _net_pnl(
+                            pos.ref_entry,
+                            pos.entry_price,
+                            exit_px,
+                            slipped,
+                            pos.direction,
+                            pos.qty,
+                            instrument,
+                            slip_ticks,
+                        ),
                     )
                 )
                 pos = None
@@ -167,7 +179,7 @@ def advance_slot(
                 qty = contracts_for_risk(raw, sig.stop_price, dollar_risk, instrument)
                 qty = min(max(qty, 1 if qty > 0 else 0), max_qty)
                 if qty >= 1:
-                    entry_px = _slip(raw, sig.direction, "entry", tick, slip_ticks)
+                    entry_px = apply_slippage(raw, sig.direction, "entry", tick, slip_ticks)
                     atr_sig = signal_ctx.atr[i - 1] if signal_ctx.atr else None
                     stop, target = resolve_stop_target(
                         spec,
@@ -182,6 +194,7 @@ def advance_slot(
                         sig.direction,
                         qty,
                         entry_px,
+                        raw,
                         stop,
                         target,
                         bar.ts,
@@ -192,7 +205,7 @@ def advance_slot(
                     if hit_px is not None and hit_reason is not None:
                         reason = hit_reason
                         raw_exit = hit_px
-                        slipped = _slip(raw_exit, pos.direction, "exit", tick, slip_ticks)
+                        slipped = apply_slippage(raw_exit, pos.direction, "exit", tick, slip_ticks)
                         fills.append(
                             ClosedFill(
                                 pos.direction,
@@ -202,7 +215,16 @@ def advance_slot(
                                 bar.ts,
                                 slipped,
                                 reason,
-                                _net_pnl(pos.entry_price, slipped, pos.direction, pos.qty, instrument, slip_ticks),
+                                _net_pnl(
+                                    pos.ref_entry,
+                                    pos.entry_price,
+                                    raw_exit,
+                                    slipped,
+                                    pos.direction,
+                                    pos.qty,
+                                    instrument,
+                                    slip_ticks,
+                                ),
                             )
                         )
                         pos = None
@@ -221,7 +243,7 @@ def advance_slot(
                         pos.target = managed.target
                         pos.bars_held = managed.bars_held
                         if time_stop_hit(managed, spec):
-                            slipped = _slip(bar.close, pos.direction, "exit", tick, slip_ticks)
+                            slipped = apply_slippage(bar.close, pos.direction, "exit", tick, slip_ticks)
                             fills.append(
                                 ClosedFill(
                                     pos.direction,
@@ -231,7 +253,16 @@ def advance_slot(
                                     bar.ts,
                                     slipped,
                                     "time_stop",
-                                    _net_pnl(pos.entry_price, slipped, pos.direction, pos.qty, instrument, slip_ticks),
+                                    _net_pnl(
+                                        pos.ref_entry,
+                                        pos.entry_price,
+                                        bar.close,
+                                        slipped,
+                                        pos.direction,
+                                        pos.qty,
+                                        instrument,
+                                        slip_ticks,
+                                    ),
                                 )
                             )
                             pos = None

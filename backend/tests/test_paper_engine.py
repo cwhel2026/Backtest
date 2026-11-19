@@ -49,7 +49,7 @@ def test_open_long_stops_out_on_new_bar():
         _bar(0, "5200", "5201", "5199", "5200"),
         _bar(1, "5200", "5201", "5180", "5185"),
     ]
-    pos = OpenTrade("long", 1, Decimal("5200"), Decimal("5190"), Decimal("5220"), bars[0].ts)
+    pos = OpenTrade("long", 1, Decimal("5200"), Decimal("5200"), Decimal("5190"), Decimal("5220"), bars[0].ts)
     cursor, fills = advance_slot(
         {"entry": {"type": "ema_crossover"}, "exit": {}, "risk": {}},
         bars,

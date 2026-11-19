@@ -155,6 +155,73 @@ LIBRARY: list[dict] = [
     },
 ]
 
+_VIDEO_SWEEP_TEMPLATE = {
+    "category": "video_liquidity_sweep",
+    "timeframe": "5m",
+    "hypothesis": "Prior completed session H/L sweep, rejection close, optional pivot BOS, fib limit entry.",
+    "entry": {
+        "type": "video_liquidity_sweep",
+        "pivot_left": 3,
+        "pivot_right": 3,
+        "sweep_ticks": 1,
+        "stop_buffer_ticks": 2,
+        "fib_ratio": "0.618",
+        "reward_risk": "2",
+        "order_expire_bars": 12,
+        "bos_window": 20,
+        "require_bos_after_sweep": True,
+    },
+    "exit": {"stop_ticks": 16, "target_ticks": 32, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+_VIDEO_ANCHOR_TEMPLATE = {
+    "category": "video_anchor_bos",
+    "timeframe": "5m",
+    "hypothesis": "Confirmed pivot anchor, close break vs prior bar, fib retracement limit entry.",
+    "entry": {
+        "type": "video_anchor_bos",
+        "pivot_left": 3,
+        "pivot_right": 3,
+        "fib_ratio": "0.618",
+        "reward_risk": "2",
+        "order_expire_bars": 16,
+    },
+    "exit": {"stop_ticks": 20, "target_ticks": 40, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+for _sym in ("MNQ", "MES", "MGC"):
+    _sweep = {**_VIDEO_SWEEP_TEMPLATE}
+    _sweep["name"] = f"{_sym} 5m Video Liquidity Sweep"
+    _sweep["symbol"] = _sym
+    _sweep["spec"] = {
+        "name": _sweep["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": _VIDEO_SWEEP_TEMPLATE["category"],
+        "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+        "entry": dict(_VIDEO_SWEEP_TEMPLATE["entry"]),
+        "exit": dict(_VIDEO_SWEEP_TEMPLATE["exit"]),
+        "risk": dict(_VIDEO_SWEEP_TEMPLATE["risk"]),
+    }
+    LIBRARY.append(_sweep)
+
+    _anchor = {**_VIDEO_ANCHOR_TEMPLATE}
+    _anchor["name"] = f"{_sym} 5m Video Anchor BOS"
+    _anchor["symbol"] = _sym
+    _anchor["spec"] = {
+        "name": _anchor["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": _VIDEO_ANCHOR_TEMPLATE["category"],
+        "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+        "entry": dict(_VIDEO_ANCHOR_TEMPLATE["entry"]),
+        "exit": dict(_VIDEO_ANCHOR_TEMPLATE["exit"]),
+        "risk": dict(_VIDEO_ANCHOR_TEMPLATE["risk"]),
+    }
+    LIBRARY.append(_anchor)
+
 
 async def seed_strategy_library(session: AsyncSession) -> int:
     created = 0

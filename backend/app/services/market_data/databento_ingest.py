@@ -3,11 +3,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import databento as db
-from databento import BentoClientError, BentoError
-
 from app.backtest.bars import Bar, TIMEFRAME_MINUTES, aggregate_bars
-from app.core.config import get_settings
 
 DATABENTO_FUTURES_DATASET = "GLBX.MDP3"
 DATABENTO_OHLCV_SCHEMA = "ohlcv-1m"
@@ -31,55 +27,23 @@ def fetch_databento_ohlcv_1m(
     api_key: str | None = None,
 ) -> list[Bar]:
     """Download 1-minute OHLCV bars; returns empty list only when the API returns no rows."""
-    settings = get_settings()
-    key = (api_key or settings.databento_api_key).strip()
-    if not key:
-        raise ValueError("Databento API key not configured")
+    from app.services.market_data.databento_client import fetch_ohlcv_1m_with_retries
 
-    start_utc = _ensure_utc(start)
-    end_utc = _ensure_utc(end)
-    if end_utc <= start_utc:
-        raise ValueError("end must be after start")
+    bars, _meta = fetch_ohlcv_1m_with_retries(instrument_symbol, start, end, api_key=api_key)
+    return bars
 
-    symbol = databento_continuous_symbol(instrument_symbol)
-    client = db.Historical(key)
-    try:
-        store = client.timeseries.get_range(
-            dataset=DATABENTO_FUTURES_DATASET,
-            schema=DATABENTO_OHLCV_SCHEMA,
-            symbols=symbol,
-            start=start_utc,
-            end=end_utc,
-            stype_in="continuous",
-            stype_out="instrument_id",
-        )
-        frame = store.to_df()
-    except BentoClientError as exc:
-        raise ValueError(f"Databento rejected request: {exc}") from exc
-    except BentoError as exc:
-        raise ValueError(f"Databento error: {exc}") from exc
 
-    if frame is None or frame.empty:
-        return []
+def fetch_databento_ohlcv_1m_with_meta(
+    *,
+    instrument_symbol: str,
+    start: datetime,
+    end: datetime,
+    api_key: str | None = None,
+    series=None,
+) -> tuple[list[Bar], dict]:
+    from app.services.market_data.databento_client import fetch_ohlcv_1m_with_retries
 
-    bars: list[Bar] = []
-    for ts, row in frame.iterrows():
-        bar_ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-        if getattr(bar_ts, "tzinfo", None) is None:
-            bar_ts = bar_ts.replace(tzinfo=UTC)
-        else:
-            bar_ts = bar_ts.astimezone(UTC)
-        bars.append(
-            Bar(
-                ts=bar_ts,
-                open=Decimal(str(row["open"])),
-                high=Decimal(str(row["high"])),
-                low=Decimal(str(row["low"])),
-                close=Decimal(str(row["close"])),
-                volume=int(row.get("volume", 0)),
-            )
-        )
-    return sorted(bars, key=lambda b: b.ts)
+    return fetch_ohlcv_1m_with_retries(instrument_symbol, start, end, api_key=api_key, series=series)
 
 
 def bars_for_timeframe(bars_1m: list[Bar], timeframe: str) -> list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]]:

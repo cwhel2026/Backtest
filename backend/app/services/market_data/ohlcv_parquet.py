@@ -32,10 +32,9 @@ def store_root() -> Path:
     if _STORE_OVERRIDE is not None:
         root = _STORE_OVERRIDE
     else:
-        raw = (get_settings().ohlcv_store_dir or "data/ohlcv").strip()
-        root = Path(raw)
-        if not root.is_absolute():
-            root = Path.cwd() / root
+        from app.services.market_data.storage_backend import resolved_store_path
+
+        root = resolved_store_path()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -47,6 +46,9 @@ def dataset_dir(dataset_id: UUID | str) -> Path:
 
 
 def has_store(dataset_id: UUID | str) -> bool:
+    from app.services.market_data.storage_backend import hydrate_dataset_from_remote
+
+    hydrate_dataset_from_remote(dataset_id)
     path = store_root() / str(dataset_id)
     return path.is_dir() and any(path.glob("*.parquet"))
 
@@ -79,7 +81,11 @@ def write_bars(dataset_id: UUID | str, bars: list[BarTuple]) -> int:
                 chunk = pd.concat([existing, chunk], ignore_index=True)
             chunk = chunk.drop_duplicates(subset=["ts"], keep="last").sort_values("ts")
             chunk.to_parquet(path, index=False)
-        return bar_count(dataset_id)
+        count = bar_count(dataset_id)
+        from app.services.market_data.storage_backend import after_local_write
+
+        after_local_write(dataset_id)
+        return count
 
 
 def read_bars(
@@ -241,6 +247,20 @@ def _as_date(value: datetime | pd.Timestamp | date) -> date:
         dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
         return dt.date()
     raise TypeError(f"Cannot date-cast {type(value)}")
+
+
+def checksum_sha256(dataset_id: UUID | str) -> str:
+    """Content hash over sorted parquet day files (metadata only — not mutating data)."""
+    import hashlib
+
+    folder = store_root() / str(dataset_id)
+    if not folder.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for path in sorted(folder.glob("*.parquet")):
+        h.update(path.name.encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
 
 
 def retention_cutoff(timeframe: str, now: datetime | None = None) -> datetime | None:

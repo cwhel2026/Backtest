@@ -36,6 +36,8 @@ class BacktestTradeOut(BaseModel):
     entry_price: float
     exit_ts: str
     exit_price: float
+    stop_price: float | None = None
+    target_price: float | None = None
     exit_reason: str
     gross_pnl: float
     commissions: float
@@ -43,3 +45,4 @@ class BacktestTradeOut(BaseModel):
     net_pnl: float
     mae: float | None
     mfe: float | None
+    meta: dict | None = None

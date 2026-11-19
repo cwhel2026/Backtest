@@ -26,6 +26,12 @@ from app.util.serde import integrity_hint
 logger = structlog.get_logger()
 
 
+def _ensure_ohlcv_on_startup() -> None:
+    from app.services.market_data.storage_backend import ensure_ohlcv_storage
+
+    ensure_ohlcv_storage()
+
+
 async def bring_database_up() -> None:
     """Migrate + seed, retrying while Postgres is in crash recovery."""
     delay = 2.0
@@ -36,6 +42,7 @@ async def bring_database_up() -> None:
             async with AsyncSessionLocal() as session:
                 await bootstrap_database(session)
                 await session.commit()
+            await asyncio.to_thread(_ensure_ohlcv_on_startup)
             logger.info("prop_edge_startup_complete")
             return
         except asyncio.CancelledError:
