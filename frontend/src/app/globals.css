@@ -3,16 +3,20 @@
 @tailwind utilities;
 
 :root {
-  --background: #0b0f17;
+  --background: #0a0e17;
   --foreground: #e8eaed;
-  --card: #121825;
-  --card-elevated: #161d2e;
+  --card: #101826;
+  --card-elevated: #151d2e;
   --border: #243044;
-  --shell-nav: #0d121c;
+  --shell-nav: #080c14;
   --accent: #38bdf8;
+  --accent-teal: #2dd4bf;
   --accent-muted: rgba(56, 189, 248, 0.12);
+  --teal-muted: rgba(45, 212, 191, 0.12);
   --warning: #fbbf24;
   --success: #4ade80;
+  --profit: #34d399;
+  --loss: #f87171;
 }
 
 body {
@@ -36,5 +40,14 @@ body {
   }
   .touch-target {
     @apply min-h-[44px] min-w-[44px];
+  }
+  .panel {
+    @apply bg-[var(--card)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)];
+  }
+  .data-table-wrap {
+    @apply -mx-1 overflow-x-auto rounded-xl border border-[var(--border)];
+  }
+  .data-table-wrap table {
+    @apply min-w-full text-left text-sm;
   }
 }

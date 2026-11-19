@@ -40,8 +40,8 @@ export default function StrategiesPage() {
     <div className="space-y-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="page-title">Strategy lab</h1>
-          <p className="page-sub">Featured templates and your full research library.</p>
+          <h1 className="page-title">Strategy Lab</h1>
+          <p className="page-sub">Berg TNB, liquidity sweep, anchor BOS, and your saved research definitions.</p>
         </div>
         <Link href="/strategies/new">
           <Button variant="secondary" className="w-full sm:w-auto">

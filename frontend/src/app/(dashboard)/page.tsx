@@ -2,18 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { LeaderboardCard, type LeaderboardEntry } from "@/components/LeaderboardCard";
-import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PnlText } from "@/components/ui/PnlText";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
+import { latencyLabel } from "@/lib/navigation";
 
 type Overview = {
   strategies_total: number;
   strategies_validated: number;
+  strategies_paper: number;
   active_research_jobs: number;
   queued_research_jobs: number;
-  datasets_count: number;
   genuine_datasets_count: number;
   backtests_completed_count: number;
   ai_research_enabled: boolean;
@@ -21,148 +23,169 @@ type Overview = {
   data_providers: { slug: string; state: string; message: string }[];
 };
 
+type PaperDash = {
+  active_strategy_count: number;
+  aggregate_net_pnl: number;
+  aggregate_equity: number;
+  feed: { connection_status: string; latency_mode: string; provider: string | null; is_paused: boolean };
+  runs: {
+    id: string;
+    strategy_name: string;
+    symbol: string;
+    net_pnl: number;
+    trade_count: number;
+    research_state: string;
+  }[];
+};
+
 type BacktestRun = {
   id: string;
   status: string;
-  created_at: string;
-  completed_at: string | null;
-  metrics: { net_profit_usd?: number; trade_count?: number } | null;
+  metrics: { net_profit_usd?: number; trade_count?: number; win_rate?: number; profit_factor?: number } | null;
 };
 
-function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
-        ok ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200"
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
-export default function HomePage() {
+export default function DashboardPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [recentRuns, setRecentRuns] = useState<BacktestRun[]>([]);
-  const [topValidated, setTopValidated] = useState<LeaderboardEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [paper, setPaper] = useState<PaperDash | null>(null);
+  const [backtests, setBacktests] = useState<BacktestRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
       apiFetch<Overview>("/api/v1/overview/stats"),
+      apiFetch<PaperDash>("/api/v1/live-lab/dashboard"),
       apiFetch<BacktestRun[]>("/api/v1/backtests"),
-      apiFetch<LeaderboardEntry[]>("/api/v1/autopilot/leaderboard?profitable_only=true&limit=5"),
     ])
-      .then(([o, runs, board]) => {
+      .then(([o, p, bt]) => {
         setOverview(o);
-        setRecentRuns(runs.slice(0, 6));
-        setTopValidated(board);
+        setPaper(p);
+        setBacktests(bt.filter((r) => r.status === "completed").slice(0, 5));
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
 
-  const engineOk = overview
-    ? overview.data_providers.every(
-        (p) =>
-          p.state === "connected" ||
-          p.state === "configured" ||
-          p.state === "not_configured" ||
-          p.state === "healthy",
-      )
-    : false;
-  const researchActive = (overview?.active_research_jobs ?? 0) + (overview?.queued_research_jobs ?? 0) > 0;
-  const needsGenuineData = overview != null && overview.genuine_datasets_count === 0;
+  const feedLatency = latencyLabel(paper?.feed?.latency_mode);
+  const workersOk = paper?.feed && !paper.feed.is_paused;
 
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="page-title">Research overview</h1>
-        <p className="page-sub">Status of strategies, data, backtests, and AI jobs — at a glance on mobile.</p>
+        <h1 className="page-title">Dashboard</h1>
+        <p className="page-sub">What the platform is monitoring, simulating, and researching — from live API data.</p>
       </header>
 
-      {error ? (
-        <Card className="border-red-900/50 bg-red-950/30 text-sm text-red-200">{error}</Card>
-      ) : null}
+      {error ? <Card className="border-red-900/40 text-sm text-red-200">{error}</Card> : null}
 
       {loading ? (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-24" />
-          ))}
-        </div>
-      ) : overview ? (
+        <LoadingGrid />
+      ) : (
         <>
-          <Card className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusPill ok={engineOk} label={engineOk ? "Platform online" : "Data provider issue"} />
-              <StatusPill ok={!researchActive || true} label={researchActive ? "AI / jobs running" : "No queued jobs"} />
-              {overview.ai_configured ? (
-                <StatusPill ok label="OpenAI configured" />
-              ) : overview.ai_research_enabled ? (
-                <StatusPill ok={false} label="Add OPENAI_API_KEY" />
-              ) : (
-                <StatusPill ok label="Heuristic research mode" />
-              )}
-            </div>
-            <p className="text-sm text-zinc-400">
-              {overview.backtests_completed_count} completed backtests · {overview.genuine_datasets_count} genuine
-              datasets · {overview.strategies_validated} validated strategies
-            </p>
-          </Card>
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DashMetric label="Strategies in library" value={String(overview?.strategies_total ?? 0)} href="/strategy-lab" />
+            <DashMetric
+              label="Historically validated"
+              value={String(overview?.strategies_validated ?? 0)}
+              href="/analytics"
+            />
+            <DashMetric label="Paper runs active" value={String(paper?.active_strategy_count ?? 0)} href="/paper-trading" />
+            <DashMetric
+              label="Completed backtests"
+              value={String(overview?.backtests_completed_count ?? 0)}
+              href="/backtests"
+            />
+          </section>
 
-          <MetricTiles overview={overview} />
-
-          {needsGenuineData ? (
-            <Card className="border-[var(--accent)]/30 bg-[var(--accent-muted)]">
-              <h2 className="text-base font-semibold text-zinc-100">Start with licensed history</h2>
-              <p className="mt-2 text-sm text-zinc-300">
-                No dataset is marked <strong className="font-medium text-zinc-100">genuine for research</strong> yet.
-                Import Databento or approved CSV on Market Data before trusting backtest P&amp;L.
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="panel space-y-3">
+              <h2 className="text-sm font-semibold text-zinc-200">Market data & worker</h2>
+              <p className="text-sm text-zinc-400">
+                Connection: <span className="text-zinc-100">{paper?.feed.connection_status ?? "—"}</span>
               </p>
-              <Link href="/market-data" className="mt-4 inline-block">
-                <Button variant="primary">Open Market Data</Button>
+              <p className="text-sm text-zinc-400">
+                Latency class: <span className="text-[var(--accent-teal)]">{feedLatency}</span>
+                {paper?.feed.provider ? ` · ${paper.feed.provider}` : ""}
+              </p>
+              {!workersOk ? (
+                <p className="text-xs text-amber-200/90">Feed paused or disconnected — new paper signals may be withheld.</p>
+              ) : (
+                <p className="text-xs text-zinc-500">Worker tick processes closed bars and paper ledger events.</p>
+              )}
+              <Link href="/scanner">
+                <Button variant="secondary">Open Market Scanner</Button>
               </Link>
             </Card>
+
+            <Card className="panel space-y-3">
+              <h2 className="text-sm font-semibold text-zinc-200">Simulated paper P&amp;L</h2>
+              <p className="text-3xl font-semibold tabular-nums">
+                {paper ? <PnlText value={paper.aggregate_net_pnl} className="text-3xl" /> : "—"}
+              </p>
+              <p className="text-sm text-zinc-500">Equity across runs: ${paper?.aggregate_equity.toLocaleString() ?? "—"}</p>
+              <Link href="/paper-trading">
+                <Button variant="secondary">Paper Trading</Button>
+              </Link>
+            </Card>
+          </div>
+
+          {overview?.genuine_datasets_count === 0 ? (
+            <EmptyState
+              title="Import licensed history first"
+              description="Backtests on unverified data are blocked or flagged. Use Settings → Historical data to import Databento or approved CSV."
+              actionHref="/settings"
+              actionLabel="Open Settings"
+            />
           ) : null}
 
           <section className="space-y-3">
-            <SectionTitle title="Quick actions" />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Link href="/backtests/run">
-                <Card className="hover:border-[var(--accent)]/40">
-                  <p className="font-semibold text-zinc-100">Run a backtest</p>
-                  <p className="mt-1 text-sm text-zinc-400">Guided 5-step flow — strategy, market, dataset, risk, run.</p>
-                </Card>
-              </Link>
-              <Link href="/research">
-                <Card className="hover:border-[var(--accent)]/40">
-                  <p className="font-semibold text-zinc-100">AI research</p>
-                  <p className="mt-1 text-sm text-zinc-400">Monitor jobs and queue new strategy experiments.</p>
-                </Card>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-zinc-200">Active paper &amp; recent signals</h2>
+              <Link href="/paper-trading" className="text-xs text-[var(--accent)]">
+                View all
               </Link>
             </div>
+            {paper?.runs?.length ? (
+              <ul className="space-y-2">
+                {paper.runs.slice(0, 6).map((r) => (
+                  <li key={r.id}>
+                    <Link href={`/paper-trading/${r.id}`}>
+                      <Card className="flex items-center justify-between gap-2 py-3">
+                        <span className="text-sm text-zinc-200">
+                          {r.strategy_name} · {r.symbol}
+                        </span>
+                        <PnlText value={r.net_pnl} />
+                      </Card>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-zinc-500">No forward paper runs yet.</p>
+            )}
           </section>
 
           <section className="space-y-3">
-            <SectionTitle title="Recent backtests" />
-            {recentRuns.length === 0 ? (
-              <p className="text-sm text-zinc-500">No backtests yet.</p>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-zinc-200">Recent backtests</h2>
+              <Link href="/backtests/run" className="text-xs text-[var(--accent)]">
+                New backtest
+              </Link>
+            </div>
+            {backtests.length === 0 ? (
+              <p className="text-sm text-zinc-500">No completed backtests yet.</p>
             ) : (
               <ul className="space-y-2">
-                {recentRuns.map((r) => (
+                {backtests.map((r) => (
                   <li key={r.id}>
                     <Link href={`/backtests/${r.id}`}>
-                      <Card className="flex items-center justify-between gap-3 py-3">
-                        <p className="text-sm text-zinc-300">
-                          <span className="font-mono text-xs text-zinc-500">{r.id.slice(0, 8)}</span> · {r.status}
-                        </p>
+                      <Card className="flex items-center justify-between py-3">
+                        <span className="text-sm text-zinc-300">Backtest complete</span>
                         {r.metrics?.net_profit_usd != null ? (
-                          <span className="text-sm tabular-nums text-zinc-200">
-                            ${r.metrics.net_profit_usd.toFixed(0)}
-                          </span>
-                        ) : null}
+                          <PnlText value={r.metrics.net_profit_usd} />
+                        ) : (
+                          <span className="text-xs text-zinc-500">View report</span>
+                        )}
                       </Card>
                     </Link>
                   </li>
@@ -171,46 +194,42 @@ export default function HomePage() {
             )}
           </section>
 
-          <section className="space-y-3">
-            <SectionTitle title="Top validated (genuine screen)" />
-            {topValidated.length === 0 ? (
-              <p className="text-sm text-zinc-500">No keeper-grade results yet — run search or backtests on licensed data.</p>
-            ) : (
-              <ul className="space-y-4">
-                {topValidated.map((row) => (
-                  <LeaderboardCard key={row.run_id} row={row} />
-                ))}
-              </ul>
-            )}
-            <Link href="/leaderboard" className="text-sm font-medium text-[var(--accent)]">
-              Full leaderboard →
+          <section className="flex flex-wrap gap-3">
+            <Link href="/research">
+              <Button variant="secondary">
+                AI Research
+                {(overview?.active_research_jobs ?? 0) + (overview?.queued_research_jobs ?? 0) > 0
+                  ? ` (${(overview?.active_research_jobs ?? 0) + (overview?.queued_research_jobs ?? 0)} jobs)`
+                  : ""}
+              </Button>
+            </Link>
+            <Link href="/backtests/run">
+              <Button>Run backtest wizard</Button>
             </Link>
           </section>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
 
-function MetricTiles({ overview }: { overview: Overview }) {
-  const tiles = [
-    { label: "Strategies", value: String(overview.strategies_total) },
-    { label: "Validated", value: String(overview.strategies_validated) },
-    { label: "Genuine data", value: String(overview.genuine_datasets_count) },
-    { label: "Backtests done", value: String(overview.backtests_completed_count) },
-  ];
+function DashMetric({ label, value, href }: { label: string; value: string; href: string }) {
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-      {tiles.map((t) => (
-        <Card key={t.label} className="py-3">
-          <p className="metric-label">{t.label}</p>
-          <p className="metric-value">{t.value}</p>
-        </Card>
+    <Link href={href}>
+      <Card className="panel hover:border-[var(--accent)]/25">
+        <p className="metric-label">{label}</p>
+        <p className="metric-value">{value}</p>
+      </Card>
+    </Link>
+  );
+}
+
+function LoadingGrid() {
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {[1, 2, 3, 4].map((i) => (
+        <Skeleton key={i} className="h-20" />
       ))}
     </div>
   );
-}
-
-function SectionTitle({ title }: { title: string }) {
-  return <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">{title}</h2>;
 }

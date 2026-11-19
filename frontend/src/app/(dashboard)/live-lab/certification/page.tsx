@@ -55,8 +55,8 @@ export default function AccuracyCertificationPage() {
   return (
     <div className="space-y-5 pb-24">
       <header>
-        <Link href="/live-lab" className="text-xs text-cyan-400">
-          ← Live Strategy Lab
+        <Link href="/paper-trading" className="text-xs text-cyan-400">
+          ← Paper Trading
         </Link>
         <h1 className="page-title mt-2 text-xl font-semibold text-white">Accuracy Certification</h1>
         <p className="text-sm text-zinc-400">Replay, restart recovery, and backtest/forward parity checks.</p>

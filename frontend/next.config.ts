@@ -8,6 +8,15 @@ const backendUrl = (
 ).replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [
+      { source: "/strategies", destination: "/strategy-lab", permanent: false },
+      { source: "/more", destination: "/menu", permanent: false },
+      { source: "/leaderboard", destination: "/analytics", permanent: false },
+      { source: "/live-lab/certification", destination: "/paper-trading/certification", permanent: false },
+      { source: "/live-lab/:runId", destination: "/paper-trading/:runId", permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       {

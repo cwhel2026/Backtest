@@ -1,26 +1,87 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { apiFetch } from "@/lib/api";
+import { ADVANCED_NAV } from "@/lib/navigation";
+
+type Health = {
+  database: { async_ok: boolean; sync_ok: boolean };
+  storage?: { writable?: boolean; persistent_ok?: boolean };
+};
+
 export default function SettingsPage() {
+  const [health, setHealth] = useState<Health | null>(null);
+
+  useEffect(() => {
+    apiFetch<Health>("/api/v1/market-data/health").then(setHealth).catch(() => setHealth(null));
+  }, []);
+
+  const sections = [
+    {
+      title: "Market data",
+      body: "Import licensed history, estimate Databento bundles, and check dataset readiness.",
+      href: "/market-data",
+      cta: "Historical data",
+    },
+    {
+      title: "Paper trading policy",
+      body: "Forward simulation uses the Live Strategy Lab worker. Certification status is in Accuracy Certification.",
+      href: "/paper-trading/certification",
+      cta: "Certification",
+    },
+    {
+      title: "System health",
+      body: health
+        ? `Database ${health.database?.sync_ok ? "OK" : "check"} · store ${health.storage?.writable ? "writable" : "verify volume"}`
+        : "Could not load health endpoint.",
+      href: "/market-data/health",
+      cta: "Health panel",
+    },
+  ];
+
   return (
-    <div className="max-w-2xl space-y-6">
-      <h2 className="page-title">Settings</h2>
-      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6 text-sm text-zinc-400">
-        <p className="font-medium text-zinc-200">Server-side configuration</p>
-        <ul className="mt-3 list-inside list-disc space-y-2">
-          <li>
-            <code className="text-emerald-400">FINZDATA_API_KEY</code> — FinzData historical futures (free =
-            daily only; paid market unlocks 1m/5m)
+    <div className="max-w-2xl space-y-6 pb-8">
+      <header>
+        <h1 className="page-title">Settings</h1>
+        <p className="page-sub">Data providers, execution assumptions, and worker health. API keys stay on the server only.</p>
+      </header>
+
+      <ul className="space-y-3">
+        {sections.map((s) => (
+          <li key={s.title}>
+            <Card className="panel space-y-2">
+              <h2 className="font-semibold text-zinc-100">{s.title}</h2>
+              <p className="text-sm text-zinc-400">{s.body}</p>
+              <Link href={s.href}>
+                <Button variant="secondary">{s.cta}</Button>
+              </Link>
+            </Card>
           </li>
-          <li>
-            <code className="text-emerald-400">DATABENTO_API_KEY</code> — licensed historical futures data
-          </li>
-          <li>
-            <code className="text-emerald-400">OPENAI_API_KEY</code> +{" "}
-            <code className="text-emerald-400">AI_RESEARCH_ENABLED=true</code> — autonomous hypothesis generation
-          </li>
-          <li>
-            <code className="text-emerald-400">SECRET_KEY</code> — JWT signing for API authentication
-          </li>
+        ))}
+      </ul>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-zinc-200">Backtest assumptions</h2>
+        <Card className="panel text-sm text-zinc-400">
+          Slippage and commissions are set per backtest run and in strategy definitions. Use the Backtesting wizard step
+          “Execution assumptions” to adjust friction; defaults are not hidden in environment variables on this screen.
+        </Card>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-zinc-200">Advanced</h2>
+        <ul className="space-y-1 text-sm">
+          {ADVANCED_NAV.map((item) => (
+            <li key={item.href}>
+              <Link href={item.href} className="text-[var(--accent)] hover:underline">
+                {item.label}
+              </Link>
+            </li>
+          ))}
         </ul>
-        <p className="mt-4 text-xs text-zinc-500">Edit via <code>.env</code> or your deployment secret store, then restart the API and workers.</p>
       </section>
     </div>
   );
