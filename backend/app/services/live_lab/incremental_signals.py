@@ -27,9 +27,21 @@ def discover_video_orders(spec: dict, bars: list[Bar], instrument, *, at_index: 
     return [o for o in orders if o.signal_index == at_index]
 
 
-def discover_berg_orders(spec: dict, bars_5m: list[Bar], instrument, *, at_index: int) -> list:
-    if at_index < 1:
-        return []
-    engine = BergTnbEngine(spec, bars_5m[: at_index + 1], instrument.tick_size)
-    _setups, orders, _events, _rej = engine.run()
-    return [o for o in orders if o.signal_index == at_index]
+def discover_berg_orders(
+    spec: dict,
+    bars_5m: list[Bar],
+    instrument,
+    *,
+    at_index: int,
+    bars_4h: list[Bar] | None = None,
+    runtime: dict | None = None,
+) -> tuple[list, dict]:
+    """Deprecated path; prefer berg_forward.berg_forward_step."""
+    from app.services.live_lab.berg_forward import BergForwardRuntime, berg_forward_step
+
+    rt = BergForwardRuntime.from_dict(runtime)
+    bars_4h = bars_4h or []
+    if len(bars_5m) <= at_index:
+        return [], rt.to_dict()
+    rt, orders, _ = berg_forward_step(rt, spec, bars_5m[: at_index + 1], bars_4h, instrument.tick_size)
+    return orders, rt.to_dict()

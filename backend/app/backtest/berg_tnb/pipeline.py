@@ -161,6 +161,7 @@ class BergTnbEngine:
     def run(self) -> tuple[list[BergTnbSetup], list[Order], list[DecisionEvent], list[RejectedSetup]]:
         events: list[DecisionEvent] = []
         rejections: list[RejectedSetup] = []
+        self._forward_snapshots: dict[int, dict] = {}
         if not self.bars:
             return [], [], events, rejections
         suppress = set()
@@ -176,7 +177,12 @@ class BergTnbEngine:
 
         setups: list[BergTnbSetup] = []
         orders: list[Order] = []
-        setup = BergTnbSetup(str(uuid.uuid4()), [])
+        def _setup_id(bar_index: int, tag: str = "main") -> str:
+            if self.spec.get("forward_test"):
+                return f"berg-{bar_index}-{tag}"
+            return str(uuid.uuid4())
+
+        setup = BergTnbSetup(_setup_id(0, "main"), [])
         state = BergTnbState.WAITING_FOR_4H_BIAS
         liquidity_level: Decimal | None = None
         session_rec: SessionLevelRecord | None = None
@@ -201,7 +207,7 @@ class BergTnbEngine:
             nonlocal setup, state, liquidity_level, session_rec, fakeout, fakeout_done, bos_done
             nonlocal reversal_idx, pending_order, sweep_idx, post_bos_high, post_bos_low
             nonlocal session_low_track, session_high_track, post_bos_extreme_start, order_tracking_start
-            setup_holder = BergTnbSetup(str(uuid.uuid4()), [])
+            setup_holder = BergTnbSetup(_setup_id(i, "reset"), [])
             setup = setup_holder
             state = BergTnbState.WAITING_FOR_SESSION_LEVEL if bias_dir else BergTnbState.WAITING_FOR_4H_BIAS
             liquidity_level = None
@@ -415,9 +421,34 @@ class BergTnbEngine:
                     after_state={"limit": str(limit)},
                 )
 
+        def _capture_forward_state(bar_index: int) -> dict:
+            return {
+                "version": 1,
+                "bar_index": bar_index,
+                "state": state.value,
+                "bias_dir": bias_dir,
+                "fakeout_done": fakeout_done,
+                "bos_done": bos_done,
+                "reversal_idx": reversal_idx,
+                "sweep_idx": sweep_idx,
+                "setup_id": setup.setup_id,
+                "pending_order": (
+                    {
+                        "signal_index": pending_order.signal_index,
+                        "limit": str(pending_order.limit),
+                        "direction": pending_order.direction,
+                    }
+                    if pending_order
+                    else None
+                ),
+                "order_tracking_start": order_tracking_start,
+            }
+
         for i, b in enumerate(self.bars):
             if i in suppress:
                 continue
+            if i > 0 and self.spec.get("forward_test"):
+                self._forward_snapshots[i - 1] = _capture_forward_state(i - 1)
 
             bias_snap = bias_for_5m_bar(bars_4h, bias_series, b.ts) if bars_4h else None
             new_dir = bias_snap.direction if bias_snap else None
@@ -434,7 +465,7 @@ class BergTnbEngine:
                         cfg=self.cfg,
                     )
                     setups.append(setup)
-                    setup = BergTnbSetup(str(uuid.uuid4()), [])
+                    setup = BergTnbSetup(_setup_id(i, "bias_reset"), [])
                     state = BergTnbState.WAITING_FOR_4H_BIAS
                     liquidity_level = session_rec = None
                     fakeout = None
@@ -634,6 +665,9 @@ class BergTnbEngine:
             if state in (BergTnbState.TRACKING_ENTRY_FIB, BergTnbState.LIMIT_ORDER_PENDING) and bos_done:
                 _process_entry_fib()
                 continue
+
+        if self.spec.get("forward_test") and self.bars:
+            self._forward_snapshots[len(self.bars) - 1] = _capture_forward_state(len(self.bars) - 1)
 
         if setup.transitions and setup not in setups:
             setups.append(setup)

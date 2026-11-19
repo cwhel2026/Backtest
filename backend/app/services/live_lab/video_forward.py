@@ -13,6 +13,7 @@ from app.models.instrument import Instrument
 from app.models.live_lab import ForwardTestRun
 from app.services.live_lab.candle_engine import load_closed_bars
 from app.services.live_lab.incremental_executor import ForwardExecutorState, IncrementalVideoForwardEngine
+from app.services.live_lab.berg_forward import BergForwardRuntime
 from app.services.live_lab.incremental_signals import discover_berg_orders, discover_video_orders
 from app.services.live_lab.ledger import append_ledger_event
 
@@ -95,7 +96,14 @@ def tick_video_forward(
         return
 
     if entry == "berg_tnb_model_v1":
-        new_orders = discover_berg_orders(spec, bars, instrument, at_index=bar_index)
+        bars_4h = load_closed_bars(session, run.symbol, "4h", limit=200)
+        berg_rt = BergForwardRuntime.from_dict((run.runner_state or {}).get("berg_runtime"))
+        new_orders, berg_rt_dict = discover_berg_orders(
+            spec, bars, instrument, at_index=bar_index, bars_4h=bars_4h, runtime=berg_rt.to_dict()
+        )
+        st = run.runner_state or {}
+        st["berg_runtime"] = berg_rt_dict
+        run.runner_state = st
     else:
         new_orders = discover_video_orders(spec, bars, instrument, at_index=bar_index)
 
