@@ -9,6 +9,7 @@ from app.models.enums import AssetClass
 from app.models.instrument import Instrument
 
 CME_INDEX_HOURS = {
+    "exchange_calendar": "CMES",
     "sessions": [
         {"name": "RTH", "start": "08:30", "end": "15:15", "timezone": "America/Chicago"},
         {
@@ -22,7 +23,14 @@ CME_INDEX_HOURS = {
 }
 
 CME_GLOBEX_COMMODITY = {
+    "exchange_calendar": "CMES",
     "sessions": [
+        {
+            "name": "RTH",
+            "start": "08:20",
+            "end": "13:30",
+            "timezone": "America/Chicago",
+        },
         {
             "name": "ETH",
             "start": "17:00",

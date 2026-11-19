@@ -73,8 +73,12 @@ def test_stop_first_on_ambiguous_bar():
     from app.models.instrument import Instrument
     from app.backtest.video_strategies import Order
 
-    bars = [bar(0, 100, 100, 100, 100), bar(1, 100, 106, 94, 100)]
-    o = Order("test", "long", 0, D("100"), D("95"), D("105"), 1, "test")
+    bars = [
+        bar(0, 100, 100, 100, 100),
+        bar(1, 100, 101, 99, 100),
+        bar(2, 100, 106, 94, 100),
+    ]
+    o = Order("test", "long", 0, D("100"), D("95"), D("105"), 2, "test")
     inst = Instrument(
         symbol="TST",
         name="Test",
