@@ -1,10 +1,16 @@
-# Live Strategy Lab (Phase 3)
+# Live Strategy Lab (Phase 3 / 3.1 / 3.2)
 
 ## Status
 
-Forward-testing platform with **replay-verified** logic. **No live CME/Databento/IBKR feed tested** on the agent VM (no credentials).
+**Phase 3.2B:** incremental Berg FSM resume (`loop_start` + `BergTnbFsmState`), video sweep/anchor incremental engines, runner_state v3, market-event reorder tolerance, strategy readiness matrix on certification dashboard.
 
-Default provider: `LIVE_LAB_PROVIDER=replay` (deterministic JSONL-style events).
+**Phase 3.2:** execution accuracy certification package (`services/live_lab/certification/`), market-event integrity gate on ingest, Berg forward runtime snapshots (`berg_forward.py`), Accuracy Certification UI (`/live-lab/certification`). Replay triple-pass + restart fingerprinting in `certify_replay_triple()`; parity comparator documents batch vs incremental differences.
+
+**Phase 3.1:** chronological `IncrementalVideoForwardEngine` (pending orders, amendments, fills, stops, position carry in `runner_state`). Berg/video signals discovered **per closed bar** (`incremental_signals.py`) — not bar-close trade reconciliation.
+
+**IBKR stream adapter:** implemented (`ibkr_stream`); **connectivity unverified** without `IBKR_HOST` + gateway on the worker network.
+
+Default provider: `LIVE_LAB_PROVIDER=replay`. Persisted archive: `live_market_events` + `LIVE_LAB_PROVIDER=event_store` for worker restart recovery.
 
 ## Architecture
 
@@ -27,7 +33,8 @@ Market adapter (replay | delayed_bars | stubs)
 ## Honest limitations
 
 - Real-time adapters are **stubs** until you connect licensed feeds.
-- Video/Berg forward path is **experimental** (bar-close reconciliation; not incremental state machine yet).
+- Berg forward uses deterministic setup IDs and persisted snapshots but still runs `BergTnbEngine` on a growing prefix per step — not a fully isolated single-bar state transition yet. Liquidity sweep / anchor BOS still prefix-scan.
+- Certification **CERTIFIED_FOR_PAPER_RESEARCH** means software replay/contract tests passed on fixtures — not profitability or live fill guarantees.
 - Live charts on run detail: ledger-first; candle chart API optional follow-up.
 - No broker order submission; `IBKR` paper is read-only probe when implemented.
 
@@ -35,4 +42,4 @@ Market adapter (replay | delayed_bars | stubs)
 
 On branch `cursor/live-strategy-lab-3c6d` — base `cursor/databento-mnq-mes-mgc-3c6d` (or your merged trunk).
 
-Deploy after DB migration `009`.
+Deploy after DB migrations `009`, `010`, `011` (`accuracy_certification_runs`).

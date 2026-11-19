@@ -1,0 +1,1 @@
+"""Execution accuracy certification — replay, parity, contracts."""

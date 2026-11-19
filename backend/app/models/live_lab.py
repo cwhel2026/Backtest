@@ -15,6 +15,21 @@ from app.db.enums import pg_enum
 from app.models.enums import ForwardTestState, LiveFeedConnectionStatus, MarketLatencyMode, PaperOrderState
 
 
+class LiveMarketEvent(Base):
+    __tablename__ = "live_market_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    exchange_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    server_received_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    latency_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+
 class LiveFeedStatus(Base):
     __tablename__ = "live_feed_status"
 

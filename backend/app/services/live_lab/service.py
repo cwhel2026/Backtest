@@ -113,68 +113,43 @@ def pause_all_forward_tests(session: Session, reason: str) -> int:
 
 
 def tick_live_strategy_lab(session: Session) -> dict:
-    adapter = get_market_data_adapter(session)
-    feed = ensure_feed_status(session, adapter.provider_id)
-    try:
-        adapter.connect()
-        feed.connection_status = LiveFeedConnectionStatus.CONNECTED
-        feed.is_paused = False
-        desc_meta = adapter.describe()
-        feed.meta = desc_meta
-        mode = desc_meta.get("latency_mode") or MarketLatencyMode.SYNTHETIC.value
-        feed.latency_mode = MarketLatencyMode(mode)
-    except Exception as exc:
-        feed.connection_status = LiveFeedConnectionStatus.ERROR
-        feed.is_paused = True
-        feed.incidents = (feed.incidents or [])[-49:] + [
-            {"ts": datetime.now(UTC).isoformat(), "kind": "connect_error", "detail": str(exc)}
-        ]
-        pause_all_forward_tests(session, f"Feed error: {exc}")
-        session.flush()
-        return {"ok": False, "error": str(exc)}
+    from app.services.live_lab.stream_ingest import ingest_stream_once
 
-    events = adapter.poll_events()
+    ingest = ingest_stream_once(session)
+    feed = session.execute(select(LiveFeedStatus).order_by(LiveFeedStatus.updated_at.desc()).limit(1)).scalar_one_or_none()
+    if not ingest.get("ok"):
+        return ingest
     now = datetime.now(UTC)
-    feed.last_heartbeat_at = now
-    if events:
-        feed.last_event_exchange_ts = events[-1].exchange_ts
-        feed.last_event_server_ts = events[-1].server_received_ts
-
-    if feed.latency_mode == MarketLatencyMode.REALTIME:
-        stale_cutoff = now - timedelta(seconds=feed.stale_seconds)
-        if feed.last_event_exchange_ts and feed.last_event_exchange_ts < stale_cutoff:
-            feed.connection_status = LiveFeedConnectionStatus.STALE
-            pause_all_forward_tests(session, "Stale realtime feed")
-            allow_trading = False
-        else:
-            allow_trading = True
-    elif feed.latency_mode == MarketLatencyMode.DELAYED:
-        allow_trading = True
-    else:
-        allow_trading = True
-
-    completed = ingest_market_events(session, events)
+    allow_trading = bool(feed and feed.connection_status == LiveFeedConnectionStatus.CONNECTED and not feed.is_paused)
+    completed_count = int(ingest.get("candles") or 0)
     processed = 0
     runs = session.execute(
         select(ForwardTestRun).where(ForwardTestRun.research_state == ForwardTestState.FORWARD_TEST_RUNNING)
     ).scalars().all()
-    for candle in completed:
-        decision_ts = candle.server_received_ts or now
-        for run in runs:
-            on_closed_candle(session, run, candle, decision_ts=decision_ts, allow_trading=allow_trading)
-            processed += 1
+    from app.services.live_lab.forward_runner import on_closed_candle
 
-    feed.updated_at = now
-    adapter.disconnect()
+    if completed_count and feed:
+        from app.models.live_lab import LiveCompletedCandle
+
+        recent = session.execute(
+            select(LiveCompletedCandle).order_by(LiveCompletedCandle.ts.desc()).limit(completed_count)
+        ).scalars().all()
+        for candle in reversed(list(recent)):
+            decision_ts = candle.server_received_ts or now
+            for run in runs:
+                on_closed_candle(session, run, candle, decision_ts=decision_ts, allow_trading=allow_trading)
+                processed += 1
+
     return {
         "ok": True,
-        "provider": adapter.provider_id,
-        "latency_mode": feed.latency_mode.value,
-        "events": len(events),
-        "candles_closed": len(completed),
+        "provider": feed.provider if feed else None,
+        "latency_mode": feed.latency_mode.value if feed else None,
+        "events": ingest.get("events", 0),
+        "candles_closed": completed_count,
         "runs_touched": len(runs),
         "allow_trading": allow_trading,
-        "connection_status": feed.connection_status.value,
+        "connection_status": feed.connection_status.value if feed else "disconnected",
+        "ingest": ingest,
     }
 
 

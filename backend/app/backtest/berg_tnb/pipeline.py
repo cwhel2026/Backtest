@@ -23,6 +23,7 @@ from app.backtest.berg_tnb.sessions import (
     entry_fib_trading_active,
     get_profile,
 )
+from app.backtest.berg_tnb.fsm_state import BergTnbFsmState
 from app.backtest.berg_tnb.types import (
     BergTnbSetup,
     BergTnbState,
@@ -158,11 +159,23 @@ class BergTnbEngine:
             "dataset_version": (spec.get("data_context") or {}).get("dataset_version"),
         }
 
-    def run(self) -> tuple[list[BergTnbSetup], list[Order], list[DecisionEvent], list[RejectedSetup]]:
+    def run(
+        self,
+        *,
+        through_bar: int | None = None,
+    ) -> tuple[list[BergTnbSetup], list[Order], list[DecisionEvent], list[RejectedSetup]]:
         events: list[DecisionEvent] = []
         rejections: list[RejectedSetup] = []
+        self._forward_snapshots: dict[int, dict] = {}
+        self._fsm_export: BergTnbFsmState | None = None
         if not self.bars:
             return [], [], events, rejections
+        restored: BergTnbFsmState | None = None
+        if self.spec.get("forward_test") and self.spec.get("_fsm_state"):
+            try:
+                restored = BergTnbFsmState.from_dict(self.spec["_fsm_state"])
+            except ValueError:
+                restored = None
         suppress = set()
         rollover_events = (self.spec.get("data_context") or {}).get("rollover_events")
         suppress = _rollover_suppress(self.bars, self.tick, rollover_events)
@@ -176,7 +189,12 @@ class BergTnbEngine:
 
         setups: list[BergTnbSetup] = []
         orders: list[Order] = []
-        setup = BergTnbSetup(str(uuid.uuid4()), [])
+        def _setup_id(bar_index: int, tag: str = "main") -> str:
+            if self.spec.get("forward_test"):
+                return f"berg-{bar_index}-{tag}"
+            return str(uuid.uuid4())
+
+        setup = BergTnbSetup(_setup_id(0, "main"), [])
         state = BergTnbState.WAITING_FOR_4H_BIAS
         liquidity_level: Decimal | None = None
         session_rec: SessionLevelRecord | None = None
@@ -197,11 +215,56 @@ class BergTnbEngine:
         post_bos_extreme_start: int | None = None
         order_tracking_start: int | None = None
 
+        if restored:
+            setup = BergTnbSetup(restored.setup_id or _setup_id(max(restored.last_processed_bar, 0), "main"), [])
+            state = restored.state
+            liquidity_level = restored.liquidity_level
+            bias_dir = restored.bias_dir
+            fakeout_done = restored.fakeout_done
+            bos_done = restored.bos_done
+            reversal_idx = restored.reversal_idx
+            sweep_idx = restored.sweep_idx
+            post_bos_high = restored.post_bos_high
+            post_bos_low = restored.post_bos_low
+            session_low_track = restored.session_low_track
+            session_high_track = restored.session_high_track
+            pending_order = restored.pending_order
+            current_session_lo = restored.current_session_lo
+            current_session_hi = restored.current_session_hi
+            post_bos_extreme_start = restored.post_bos_extreme_start
+            order_tracking_start = restored.order_tracking_start
+            extra = restored.extra or {}
+            if extra.get("session_rec"):
+                sr = extra["session_rec"]
+                session_rec = SessionLevelRecord(
+                    sr["session_id"],
+                    datetime.fromisoformat(sr["measurement_start"]),
+                    datetime.fromisoformat(sr["measurement_end"]),
+                    Decimal(sr["session_high"]),
+                    Decimal(sr["session_low"]),
+                    Decimal(sr["liquidity_level"]),
+                    sr["bias"],
+                    sr["profile"],
+                    sr["setup_preset"],
+                )
+            if extra.get("fakeout"):
+                fo = extra["fakeout"]
+                fakeout = FakeoutFibRecord(
+                    Decimal(fo["anchor_high"]),
+                    Decimal(fo["anchor_low"]),
+                    datetime.fromisoformat(fo["anchor_high_ts"]),
+                    datetime.fromisoformat(fo["anchor_low_ts"]),
+                    Decimal(fo["level_0079"]),
+                    datetime.fromisoformat(fo["confirmed_ts"]) if fo.get("confirmed_ts") else None,
+                    fo.get("bar_index"),
+                )
+        loop_start = (restored.last_processed_bar + 1) if restored else 0
+
         def _reset_active_setup() -> None:
             nonlocal setup, state, liquidity_level, session_rec, fakeout, fakeout_done, bos_done
             nonlocal reversal_idx, pending_order, sweep_idx, post_bos_high, post_bos_low
             nonlocal session_low_track, session_high_track, post_bos_extreme_start, order_tracking_start
-            setup_holder = BergTnbSetup(str(uuid.uuid4()), [])
+            setup_holder = BergTnbSetup(_setup_id(i, "reset"), [])
             setup = setup_holder
             state = BergTnbState.WAITING_FOR_SESSION_LEVEL if bias_dir else BergTnbState.WAITING_FOR_4H_BIAS
             liquidity_level = None
@@ -415,9 +478,85 @@ class BergTnbEngine:
                     after_state={"limit": str(limit)},
                 )
 
+        def _capture_forward_state(bar_index: int) -> dict:
+            return {
+                "version": 1,
+                "bar_index": bar_index,
+                "state": state.value,
+                "bias_dir": bias_dir,
+                "fakeout_done": fakeout_done,
+                "bos_done": bos_done,
+                "reversal_idx": reversal_idx,
+                "sweep_idx": sweep_idx,
+                "setup_id": setup.setup_id,
+                "pending_order": (
+                    {
+                        "signal_index": pending_order.signal_index,
+                        "limit": str(pending_order.limit),
+                        "direction": pending_order.direction,
+                    }
+                    if pending_order
+                    else None
+                ),
+                "order_tracking_start": order_tracking_start,
+            }
+
+        def _export_fsm(i: int) -> BergTnbFsmState:
+            extra: dict[str, Any] = {}
+            if session_rec:
+                extra["session_rec"] = {
+                    "session_id": session_rec.session_id,
+                    "measurement_start": session_rec.measurement_start.isoformat(),
+                    "measurement_end": session_rec.measurement_end.isoformat(),
+                    "session_high": str(session_rec.session_high),
+                    "session_low": str(session_rec.session_low),
+                    "liquidity_level": str(session_rec.liquidity_level),
+                    "bias": session_rec.bias,
+                    "profile": session_rec.profile,
+                    "setup_preset": session_rec.setup_preset,
+                }
+            if fakeout:
+                extra["fakeout"] = {
+                    "anchor_high": str(fakeout.anchor_high),
+                    "anchor_low": str(fakeout.anchor_low),
+                    "anchor_high_ts": fakeout.anchor_high_ts.isoformat(),
+                    "anchor_low_ts": fakeout.anchor_low_ts.isoformat(),
+                    "level_0079": str(fakeout.level_0079),
+                    "confirmed_ts": fakeout.confirmed_ts.isoformat() if fakeout.confirmed_ts else None,
+                    "bar_index": fakeout.bar_index,
+                }
+            return BergTnbFsmState(
+                last_processed_bar=i,
+                setup_id=setup.setup_id,
+                state=state,
+                liquidity_level=liquidity_level,
+                bias_dir=bias_dir,
+                fakeout_done=fakeout_done,
+                bos_done=bos_done,
+                reversal_idx=reversal_idx,
+                sweep_idx=sweep_idx,
+                post_bos_high=post_bos_high,
+                post_bos_low=post_bos_low,
+                session_low_track=session_low_track,
+                session_high_track=session_high_track,
+                pending_order=pending_order,
+                current_session_lo=current_session_lo,
+                current_session_hi=current_session_hi,
+                post_bos_extreme_start=post_bos_extreme_start,
+                order_tracking_start=order_tracking_start,
+                extra=extra,
+            )
+
+        end_i = through_bar if through_bar is not None else len(self.bars) - 1
         for i, b in enumerate(self.bars):
+            if i < loop_start:
+                continue
+            if i > end_i:
+                break
             if i in suppress:
                 continue
+            if i > 0 and self.spec.get("forward_test"):
+                self._forward_snapshots[i - 1] = _capture_forward_state(i - 1)
 
             bias_snap = bias_for_5m_bar(bars_4h, bias_series, b.ts) if bars_4h else None
             new_dir = bias_snap.direction if bias_snap else None
@@ -434,7 +573,7 @@ class BergTnbEngine:
                         cfg=self.cfg,
                     )
                     setups.append(setup)
-                    setup = BergTnbSetup(str(uuid.uuid4()), [])
+                    setup = BergTnbSetup(_setup_id(i, "bias_reset"), [])
                     state = BergTnbState.WAITING_FOR_4H_BIAS
                     liquidity_level = session_rec = None
                     fakeout = None
@@ -634,6 +773,15 @@ class BergTnbEngine:
             if state in (BergTnbState.TRACKING_ENTRY_FIB, BergTnbState.LIMIT_ORDER_PENDING) and bos_done:
                 _process_entry_fib()
                 continue
+
+            if self.spec.get("forward_test"):
+                self._fsm_export = _export_fsm(i)
+
+        if self.spec.get("forward_test") and self.bars:
+            cap_i = min(end_i, len(self.bars) - 1)
+            self._forward_snapshots[cap_i] = _capture_forward_state(cap_i)
+            if self._fsm_export is None:
+                self._fsm_export = _export_fsm(cap_i)
 
         if setup.transitions and setup not in setups:
             setups.append(setup)

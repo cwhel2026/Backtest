@@ -1,4 +1,4 @@
-"""Incremental video/Berg forward tests — bar-close only, experimental label required."""
+"""Incremental chronological forward tests for video + Berg strategies."""
 
 from __future__ import annotations
 
@@ -8,12 +8,42 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.backtest.bars import Bar
-from app.backtest.engine import BacktestAssumptions
-from app.backtest.video_backtest import run_video_backtest
+from app.backtest.video_strategies import Order, VideoConfig
 from app.models.instrument import Instrument
 from app.models.live_lab import ForwardTestRun
 from app.services.live_lab.candle_engine import load_closed_bars
+from app.services.live_lab.incremental_executor import IncrementalVideoForwardEngine
+from app.services.live_lab.berg_forward import BergForwardRuntime
+from app.services.live_lab.incremental_signals import discover_berg_orders, discover_video_orders
 from app.services.live_lab.ledger import append_ledger_event
+from app.services.live_lab.runner_state import load_runner_state, save_runner_state
+
+
+def _apply_berg_amendments(eng: IncrementalVideoForwardEngine, amendments: list, bar_index: int, bars: list[Bar]) -> None:
+    if not amendments:
+        return
+    pending = eng.load_pending()
+    for pv in pending:
+        for amd in amendments:
+            if amd.bar_index != bar_index:
+                continue
+            dup = any(a.bar_index == amd.bar_index and a.limit == amd.limit for a in pv.order.amendments)
+            if not dup:
+                pv.order.amendments.append(amd)
+    eng.save_pending(pending)
+
+
+def _current_phase(runner_state: dict, entry: str) -> str | None:
+    st = runner_state or {}
+    if entry == "berg_tnb_model_v1":
+        snap = (st.get("berg_runtime") or {}).get("last_snapshot") or {}
+        return snap.get("state")
+    vr = st.get("video_runtime") or {}
+    if entry == "video_liquidity_sweep":
+        return "session_sweep" if vr.get("session_sweep") else None
+    if entry == "video_anchor_bos":
+        return "anchor_bos" if vr.get("anchor_bos") else None
+    return None
 
 
 def tick_video_forward(
@@ -25,19 +55,17 @@ def tick_video_forward(
     *,
     allow_trading: bool,
 ) -> None:
-    """Reconcile new closed trade(s) using chronological video backtest on available history.
-
-    Trades are only committed when their exit timestamp equals the current closed bar (no future fills).
-    committed_trade_keys prevents duplicate ledger writes across ticks.
-    """
     if not allow_trading:
         return
     spec = dict(run.frozen_specification or {})
     entry = (spec.get("entry") or {}).get("type", "")
-    if entry == "berg_tnb_model_v1":
-        from app.backtest.berg_tnb.backtest import run_berg_tnb_backtest
+    cfg = VideoConfig.from_instrument(instrument, spec)
+    state, strategy_fsm = load_runner_state(run.runner_state)
+    eng = IncrementalVideoForwardEngine(state, cfg, instrument)
 
-        bars_5m = load_closed_bars(session, run.symbol, "5m", limit=600)
+    berg_amendments: list = []
+    if entry == "berg_tnb_model_v1":
+        bars_5m = load_closed_bars(session, run.symbol, "5m", limit=1200)
         if not bars_5m or bars_5m[-1].ts < bar.ts:
             bars_5m.append(bar)
         bars_4h = load_closed_bars(session, run.symbol, "4h", limit=200)
@@ -47,68 +75,98 @@ def tick_video_forward(
                 run_id=run.id,
                 event_type="rejected_setup",
                 idempotency_key=f"berg:no_4h:{bar.ts.isoformat()}",
-                payload={"reason": "Berg TNB requires confirmed closed 4H bias candles in live store"},
+                payload={"reason": "Berg TNB requires confirmed closed 4H candles", "unresolved": "4h bias sourced from live store"},
                 exchange_ts=bar.ts,
                 decision_ts=decision_ts,
             )
             return
-        result = run_berg_tnb_backtest(
-            spec,
-            bars_5m,
-            instrument,
-            dataset_timeframe=run.timeframe,
-            assumptions=BacktestAssumptions(),
-        )
-        trades = result.trades or []
+        bars = bars_5m
     else:
-        bars = load_closed_bars(session, run.symbol, run.timeframe, limit=600)
+        bars = load_closed_bars(session, run.symbol, run.timeframe, limit=1200)
         if not bars or bars[-1].ts < bar.ts:
             bars.append(bar)
-        result = run_video_backtest(
-            spec,
-            bars,
-            instrument,
-            dataset_timeframe=run.timeframe,
-            assumptions=BacktestAssumptions(),
-        )
-        trades = result.trades or []
 
-    state = run.runner_state or {}
-    seen = set(state.get("committed_trade_keys") or [])
-    new_keys: list[str] = []
-    for t in trades:
-        exit_ts = t.get("exit_ts")
-        entry_ts = t.get("entry_ts")
-        if exit_ts is None or entry_ts is None:
-            continue
-        if exit_ts != bar.ts:
-            continue
-        key = f"{t.get('direction')}:{entry_ts.isoformat()}:{exit_ts.isoformat()}"
-        if key in seen:
-            continue
-        pnl = Decimal(str(t.get("net_pnl", 0)))
+    bar_index = len(bars) - 1
+    if state.last_bar_ts == bar.ts.isoformat():
+        return
+
+    if entry == "berg_tnb_model_v1":
+        bars_4h = load_closed_bars(session, run.symbol, "4h", limit=200)
+        berg_rt = BergForwardRuntime.from_dict(strategy_fsm.get("berg_runtime"))
+        new_orders, berg_dict, berg_amendments = discover_berg_orders(
+            spec, bars, instrument, at_index=bar_index, bars_4h=bars_4h, runtime=berg_rt.to_dict()
+        )
+        strategy_fsm["berg_runtime"] = berg_dict
+        strategy_fsm["berg_phase"] = (berg_dict.get("last_snapshot") or {}).get("state")
+    else:
+        new_orders, vrt = discover_video_orders(
+            spec, bars, instrument, at_index=bar_index, video_runtime=strategy_fsm.get("video_runtime")
+        )
+        strategy_fsm["video_runtime"] = vrt
+
+    for order in new_orders:
+        placed = eng.submit_order(order, bars)
+        for ev in placed:
+            append_ledger_event(
+                session,
+                run_id=run.id,
+                event_type=ev["type"],
+                idempotency_key=f"{ev['type']}:{run.id}:{ev.get('setup_id')}:{bar.ts.isoformat()}",
+                payload=ev,
+                exchange_ts=bar.ts,
+                decision_ts=decision_ts,
+            )
+            run.last_signal_at = bar.ts
+
+    _apply_berg_amendments(eng, berg_amendments, bar_index, bars)
+
+    result = eng.on_bar(bars, bar_index)
+    for ev in result.events:
+        append_ledger_event(
+            session,
+            run_id=run.id,
+            event_type=ev["type"],
+            idempotency_key=f"{ev['type']}:{run.id}:{bar_index}:{ev.get('bar_index', bar_index)}",
+            payload=ev,
+            exchange_ts=bar.ts,
+            decision_ts=decision_ts,
+        )
+
+    if result.trade_closed:
+        t = result.trade_closed
+        key = f"{t['direction']}:{t['entry_ts'].isoformat()}:{t['exit_ts'].isoformat()}"
         append_ledger_event(
             session,
             run_id=run.id,
             event_type="trade_closed",
-            idempotency_key=f"video:{run.id}:{key}",
+            idempotency_key=f"incremental:{run.id}:{key}",
             payload={
-                "direction": t.get("direction"),
-                "net_pnl": str(pnl),
-                "experimental": run.experimental,
+                "direction": t["direction"],
+                "qty": t["quantity"],
+                "net_pnl": str(t["net_pnl"]),
+                "exit_reason": t["exit_reason"],
+                "uncertainties": (t.get("meta") or {}).get("uncertainties", []),
+                "incremental": True,
                 "entry_type": entry,
             },
-            exchange_ts=bar.ts,
+            exchange_ts=t["exit_ts"],
             decision_ts=decision_ts,
         )
+        pnl = Decimal(str(t["net_pnl"]))
         run.net_pnl = Decimal(run.net_pnl) + pnl
         run.equity = Decimal(run.equity) + pnl
         run.trade_count += 1
         if pnl > 0:
             run.win_count += 1
-        seen.add(key)
-        new_keys.append(key)
-        run.last_signal_at = bar.ts
-    state["committed_trade_keys"] = list(seen)
-    run.runner_state = state
+        hw = max(Decimal(run.high_water), Decimal(run.equity))
+        run.high_water = hw
+        dd = hw - Decimal(run.equity)
+        if dd > Decimal(run.max_drawdown):
+            run.max_drawdown = dd
+        run.last_signal_at = t["exit_ts"]
+
+    run.runner_state = save_runner_state(eng, strategy_fsm)
+    run.runner_state["strategy_phase"] = _current_phase(run.runner_state.get("strategy_fsm"), entry)
+    run.last_data_exchange_ts = bar.ts
+    run.last_decision_ts = decision_ts
     run.updated_at = datetime.now(UTC)

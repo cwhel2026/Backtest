@@ -35,13 +35,103 @@ def get_dashboard(db: Session = Depends(get_sync_db), _user: User = Depends(get_
 
 @router.get("/providers")
 def list_providers(db: Session = Depends(get_sync_db), _user: User = Depends(get_current_user)):
+    from app.services.live_lab.market_data.ibkr_stream import IbkrStreamAdapter
     from app.services.live_lab.market_data.stubs import CmeWebSocketAdapter, DatabentoLiveAdapter, IbkrTwsAdapter
 
     adapter = get_market_data_adapter(db)
     out = [{"id": adapter.provider_id, **adapter.describe()}]
+    ibkr = IbkrStreamAdapter()
+    out.append({"id": ibkr.provider_id, **ibkr.describe(), "connectivity_check": ibkr.verify_connectivity()})
     for stub in (DatabentoLiveAdapter(), IbkrTwsAdapter(), CmeWebSocketAdapter()):
         out.append({"id": stub.provider_id, **stub.describe()})
     return {"providers": out, "active": adapter.provider_id}
+
+
+@router.get("/candles")
+def live_candles(
+    symbol: str,
+    timeframe: str = "5m",
+    limit: int = 300,
+    db: Session = Depends(get_sync_db),
+    _user: User = Depends(get_current_user),
+):
+    from app.services.live_lab.candle_engine import load_closed_bars
+
+    bars = load_closed_bars(db, symbol.upper(), timeframe, limit=limit)
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "bars": [
+            {
+                "ts": b.ts.isoformat(),
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": b.volume,
+            }
+            for b in bars
+        ],
+    }
+
+
+@router.get("/forward-tests/{run_id}/chart")
+def forward_test_chart(run_id: UUID, db: Session = Depends(get_sync_db), _user: User = Depends(get_current_user)):
+    run = db.get(ForwardTestRun, run_id)
+    if not run:
+        raise HTTPException(404, detail="Run not found")
+    from app.services.live_lab.candle_engine import load_closed_bars
+
+    bars = load_closed_bars(db, run.symbol, run.timeframe, limit=400)
+    events = list_ledger_events(db, run_id, limit=300)
+    trades = [e for e in events if e.event_type == "trade_closed"]
+    markers = []
+    for e in events:
+        if e.event_type in ("order_placed", "order_filled", "signal_entry"):
+            markers.append(
+                {"ts": e.exchange_ts.isoformat() if e.exchange_ts else None, "type": e.event_type, "payload": e.payload}
+            )
+    equity = []
+    eq = float(run.starting_equity)
+    equity.append({"ts": run.started_at.isoformat() if run.started_at else None, "equity": eq})
+    for t in reversed(trades):
+        pnl = float((t.payload or {}).get("net_pnl") or 0)
+        eq += pnl
+        equity.append({"ts": t.exchange_ts.isoformat() if t.exchange_ts else None, "equity": eq})
+    from sqlalchemy import select
+
+    from app.models.live_lab import PaperBrokerOrder
+
+    orders = db.execute(select(PaperBrokerOrder).where(PaperBrokerOrder.run_id == run_id)).scalars().all()
+    return {
+        "bars": [
+            {"ts": b.ts.isoformat(), "open": float(b.open), "high": float(b.high), "low": float(b.low), "close": float(b.close)}
+            for b in bars
+        ],
+        "markers": markers,
+        "equity_curve": equity,
+        "open_position": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("open_position"),
+        "pending_orders": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("pending", []),
+        "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+        "runner_state_version": (run.runner_state or {}).get("version"),
+        "paper_orders": [
+            {
+                "client_order_id": o.client_order_id,
+                "state": o.state.value,
+                "side": o.side,
+                "order_type": o.order_type,
+                "limit_price": float(o.limit_price) if o.limit_price is not None else None,
+                "stop_price": float(o.stop_price) if o.stop_price is not None else None,
+                "uncertainty_tags": o.uncertainty_tags,
+            }
+            for o in orders
+        ],
+        "run": {
+            "net_pnl": float(run.net_pnl),
+            "equity": float(run.equity),
+            "trade_count": run.trade_count,
+        },
+    }
 
 
 @router.post("/forward-tests/start")
@@ -111,6 +201,8 @@ def get_forward_test(run_id: UUID, db: Session = Depends(get_sync_db), _user: Us
             "trade_count": run.trade_count,
             "max_drawdown": float(run.max_drawdown),
             "last_data_exchange_ts": run.last_data_exchange_ts.isoformat() if run.last_data_exchange_ts else None,
+            "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+            "runner_state_version": (run.runner_state or {}).get("version"),
         },
         "validation": {"passed": ok, "reasons": reasons, "gates": gates},
         "ledger": [
@@ -131,3 +223,61 @@ def manual_tick(db: Session = Depends(get_sync_db), _user: User = Depends(get_cu
     result = tick_live_strategy_lab(db)
     db.commit()
     return result
+
+
+@router.get("/certification/dashboard")
+def certification_dashboard(db: Session = Depends(get_sync_db), _user: User = Depends(get_current_user)):
+    from sqlalchemy import desc, select
+
+    from app.models.certification import AccuracyCertificationRun
+
+    rows = db.execute(select(AccuracyCertificationRun).order_by(desc(AccuracyCertificationRun.created_at)).limit(10)).scalars().all()
+    latest = rows[0] if rows else None
+    from app.services.live_lab.certification.strategy_readiness import strategy_readiness_matrix
+
+    return {
+        "strategy_readiness": strategy_readiness_matrix(),
+        "latest": (
+            {
+                "status": latest.status,
+                "symbol": latest.symbol,
+                "replay_fingerprint": latest.replay_fingerprint,
+                "detail": latest.detail,
+                "payload": latest.payload,
+                "created_at": latest.created_at.isoformat(),
+            }
+            if latest
+            else None
+        ),
+        "history": [
+            {
+                "id": str(r.id),
+                "status": r.status,
+                "symbol": r.symbol,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "disclaimer": "Certification confirms software tests passed, not profitability or live fill guarantees.",
+    }
+
+
+@router.post("/certification/run")
+def run_certification(
+    symbol: str = "MES",
+    db: Session = Depends(get_sync_db),
+    _user: User = Depends(get_current_user),
+):
+    from app.services.live_lab.certification.runner import run_accuracy_certification
+
+    if symbol.upper() not in {"MNQ", "MES", "MGC"}:
+        raise HTTPException(400, detail="Symbol must be MNQ, MES, or MGC")
+    row = run_accuracy_certification(db, symbol=symbol.upper())
+    db.commit()
+    return {
+        "id": str(row.id),
+        "status": row.status,
+        "detail": row.detail,
+        "payload": row.payload,
+        "replay_fingerprint": row.replay_fingerprint,
+    }
