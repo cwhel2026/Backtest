@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     paper_profit_target: float = Field(default=6_000, validation_alias="PAPER_PROFIT_TARGET")
     paper_max_slots: int = Field(default=8, validation_alias="PAPER_MAX_SLOTS")
     ohlcv_store_dir: str = Field(default="data/ohlcv", validation_alias="OHLCV_STORE_DIR")
+    research_data_budget_gbp: float = Field(default=50.0, validation_alias="RESEARCH_DATA_BUDGET_GBP")
+    gbp_usd_rate: float | None = Field(default=None, validation_alias="GBP_USD_RATE")
 
     api_v1_prefix: str = "/api/v1"
 

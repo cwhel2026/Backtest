@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.backtest import OhlcvBar
 from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 
-TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
+TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
 
 
 @dataclass(frozen=True)

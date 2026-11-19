@@ -243,6 +243,20 @@ def _as_date(value: datetime | pd.Timestamp | date) -> date:
     raise TypeError(f"Cannot date-cast {type(value)}")
 
 
+def checksum_sha256(dataset_id: UUID | str) -> str:
+    """Content hash over sorted parquet day files (metadata only — not mutating data)."""
+    import hashlib
+
+    folder = store_root() / str(dataset_id)
+    if not folder.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for path in sorted(folder.glob("*.parquet")):
+        h.update(path.name.encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
+
+
 def retention_cutoff(timeframe: str, now: datetime | None = None) -> datetime | None:
     now = now or datetime.now(UTC)
     tf = (timeframe or "5m").strip().lower()

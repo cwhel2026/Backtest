@@ -130,11 +130,10 @@ def estimate_download_cost_usd(
             "requires_approval": True,
         }
     if provider == "databento":
-        est = float(Decimal("0.25") * Decimal(days) * Decimal(symbols))
         return {
             "provider": provider,
-            "estimated_usd": est,
-            "note": "Estimate only; actual billing per Databento meter.",
+            "estimated_usd": float(Decimal("0.25") * Decimal(days) * Decimal(symbols)),
+            "note": "Use POST /market-data/ingest/estimate with start/end for official get_cost when API key is set.",
             "requires_approval": True,
         }
     return {"provider": provider, "estimated_usd": None, "note": "No estimator for this provider."}

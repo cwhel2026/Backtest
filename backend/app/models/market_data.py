@@ -48,6 +48,7 @@ class HistoricalDataset(Base):
     )
     quality_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
 
@@ -64,3 +65,23 @@ class DataQualityReport(Base):
     gap_seconds_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class ResearchDataBudgetMonth(Base):
+    """Tracks estimated / approved / actual spend for paid historical downloads."""
+
+    __tablename__ = "research_data_budget_months"
+
+    month_key: Mapped[str] = mapped_column(String(7), primary_key=True)
+    budget_gbp: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("50"))
+    estimated_usd: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal(0), nullable=False)
+    approved_usd: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal(0), nullable=False)
+    actual_usd: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal(0), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    def approved_usd_to_gbp_equiv(self, gbp_usd_rate: float | None) -> Decimal:
+        if not gbp_usd_rate or gbp_usd_rate <= 0:
+            return Decimal(0)
+        return Decimal(str(self.approved_usd)) / Decimal(str(gbp_usd_rate))

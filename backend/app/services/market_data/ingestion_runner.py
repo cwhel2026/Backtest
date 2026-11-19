@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.services.market_data.bar_storage import persist_bars_to_dataset
-from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m
+from app.services.market_data.budget import record_actual_spend
+from app.services.market_data.databento_client import quote_download_cost
+from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m_with_meta
+from app.services.market_data.dataset_catalog import create_versioned_dataset, ingest_fingerprint
+from app.services.market_data.validate_dataset import validate_and_persist
 from app.services.market_data.finzdata_ingest import fetch_finzdata_ohlcv
 from app.services.market_data.ibkr_ingest import bar_size_for_timeframe, fetch_ibkr_bars
 from app.services.market_data.yahoo_ingest import bars_to_storage, fetch_yahoo_ohlcv
@@ -38,7 +42,7 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
     if not inst:
         raise ValueError(f"Unknown instrument {symbol}")
 
-    bars_1m = fetch_databento_ohlcv_1m(instrument_symbol=symbol, start=start, end=end)
+    bars_1m, sym_meta = fetch_databento_ohlcv_1m_with_meta(instrument_symbol=symbol, start=start, end=end)
     if not bars_1m:
         raise ValueError(
             f"No OHLCV bars returned for {symbol} ({start.isoformat()} → {end.isoformat()}). "
@@ -47,21 +51,49 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
 
     stored = bars_for_timeframe(bars_1m, timeframe)
     db_symbol = f"{symbol.strip().upper()}.c.0"
+    fingerprint = ingest_fingerprint(
+        provider_slug="databento",
+        instrument_symbol=symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+    )
+    actual_usd = float(payload.get("approved_cost_usd") or 0)
+    try:
+        quote = quote_download_cost(symbol, start, end)
+        if not actual_usd:
+            actual_usd = quote.usd
+    except ValueError:
+        pass
+    if actual_usd > 0:
+        record_actual_spend(session, actual_usd)
 
-    return persist_bars_to_dataset(
+    dataset = create_versioned_dataset(
         session,
         provider_slug="databento",
         instrument_id=inst.id,
         timeframe=timeframe,
         bars=stored,
+        fingerprint=fingerprint,
         meta={
             "source": "databento_historical",
+            "provider": "databento",
             "databento_dataset": "GLBX.MDP3",
-            "databento_symbol": db_symbol,
+            "databento_continuous_symbol": db_symbol,
+            "original_symbol": symbol.upper(),
+            "actual_contract_note": sym_meta.get("symbology_note"),
+            "rollover_events": sym_meta.get("rollover_events", []),
             "requested_range": {"start": start.isoformat(), "end": end.isoformat()},
             "bars_1m_downloaded": len(bars_1m),
+            "approved_cost_usd": payload.get("approved_cost_usd"),
+            "cost_estimate_source": payload.get("cost_estimate_source"),
+            "engine_version": "3.0",
+            **{k: v for k, v in sym_meta.items() if k not in ("rollover_events", "symbology_note")},
         },
     )
+    validate_and_persist(session, dataset, symbol=symbol, tick_size=inst.tick_size)
+    session.flush()
+    return dataset
 
 
 def run_finzdata_ingestion(session: Session, payload: dict) -> HistoricalDataset:

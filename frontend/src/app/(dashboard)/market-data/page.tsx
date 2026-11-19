@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { apiFetch, getStoredToken } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  CandlestickSeries,
+  createChart,
+  type IChartApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { apiFetch } from "@/lib/api";
 
 type Provider = { slug: string; display_name: string; state: string; message: string };
 type Instrument = { id: string; symbol: string; name: string };
@@ -10,68 +16,76 @@ type Dataset = {
   timeframe: string;
   row_count: number;
   validation_status: string;
+  quality_class?: string | null;
   coverage_start: string | null;
   coverage_end: string | null;
+  version_tag: string;
+  content_checksum?: string | null;
+  meta?: Record<string, unknown>;
 };
 
-export default function MarketDataPage() {
+type Budget = {
+  month: string;
+  budget_gbp: number;
+  estimated_usd: number;
+  approved_usd: number;
+  actual_usd: number;
+  remaining_budget_gbp: number;
+  gbp_usd_rate: number | null;
+};
+
+type OhlcvBar = { ts: string; open: number; high: number; low: number; close: number; volume: number };
+
+type Readiness = {
+  dataset_id: string;
+  quality_class: string;
+  video_readiness: Record<string, { ready?: boolean; reason?: string }>;
+  backtest_allowed: boolean;
+};
+
+export default function HistoricalDataPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [budget, setBudget] = useState<Budget | null>(null);
   const [symbol, setSymbol] = useState("MES");
   const [ingestTf, setIngestTf] = useState("5m");
-  const [ingestProvider, setIngestProvider] = useState("yahoo");
+  const [ingestProvider, setIngestProvider] = useState("databento");
+  const [daysBack, setDaysBack] = useState(14);
+  const [estimate, setEstimate] = useState<Record<string, unknown> | null>(null);
+  const [confirmPaid, setConfirmPaid] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [csvLabel, setCsvLabel] = useState("user_csv");
+  const [selectedDataset, setSelectedDataset] = useState<string>("");
+  const [quality, setQuality] = useState<Record<string, unknown> | null>(null);
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const chartApi = useRef<IChartApi | null>(null);
 
-  useEffect(() => {
-    Promise.all([
+  const reload = useCallback(() => {
+    return Promise.all([
       apiFetch<Provider[]>("/api/v1/market-data/providers"),
       apiFetch<Instrument[]>("/api/v1/instruments"),
       apiFetch<Dataset[]>("/api/v1/market-data/datasets"),
-    ]).then(([p, i, d]) => {
+      apiFetch<Budget>("/api/v1/market-data/budget"),
+    ]).then(([p, i, d, b]) => {
       setProviders(p);
       setInstruments(i);
       setDatasets(d);
+      setBudget(b);
+      if (d.length && !selectedDataset) setSelectedDataset(d[0].id);
     });
-  }, []);
+  }, [selectedDataset]);
 
-  async function uploadCsv() {
-    if (!csvFile) return;
-    setMessage(null);
-    const form = new FormData();
-    form.append("instrument_symbol", symbol);
-    form.append("timeframe", "5m");
-    form.append("label", csvLabel);
-    form.append("file", csvFile);
-    const token = getStoredToken();
-    const res = await fetch("/api/v1/market-data/import-csv", {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: form,
-    });
-    if (!res.ok) {
-      setMessage(await res.text());
-      return;
-    }
-    setMessage("CSV imported — dataset ready for backtests.");
-    const d = await apiFetch<Dataset[]>("/api/v1/market-data/datasets");
-    setDatasets(d);
-  }
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
-  function ingestDays() {
-    if (ingestTf === "1m") return ingestProvider === "yahoo" ? 7 : 30;
-    if (ingestTf === "5m") return 50;
-    return 60;
-  }
-
-  async function queueIngestion() {
+  async function fetchEstimate() {
     setMessage(null);
     const end = new Date();
-    const start = new Date(end.getTime() - ingestDays() * 24 * 60 * 60 * 1000);
+    const start = new Date(end.getTime() - daysBack * 86400000);
     try {
-      const res = await apiFetch<{ job_id: string; status: string }>("/api/v1/market-data/ingest", {
+      const est = await apiFetch<Record<string, unknown>>("/api/v1/market-data/ingest/estimate-range", {
         method: "POST",
         body: JSON.stringify({
           provider_slug: ingestProvider,
@@ -81,76 +95,123 @@ export default function MarketDataPage() {
           end: end.toISOString(),
         }),
       });
-      setMessage(`Job ${res.job_id} queued (${res.status}). Check Live Research for outcomes.`);
+      setEstimate(est);
     } catch (e) {
       setMessage(String(e));
     }
   }
 
+  async function queueIngestion() {
+    setMessage(null);
+    const end = new Date();
+    const start = new Date(end.getTime() - daysBack * 86400000);
+    const estUsd = estimate?.estimated_usd;
+    try {
+      const res = await apiFetch<{ job_id?: string; status: string; dataset_id?: string; message?: string }>(
+        "/api/v1/market-data/ingest",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            provider_slug: ingestProvider,
+            instrument_symbol: symbol,
+            timeframe: ingestTf,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            confirm_paid: confirmPaid || ingestProvider === "yahoo",
+            approved_cost_usd: typeof estUsd === "number" ? estUsd : undefined,
+          }),
+        }
+      );
+      if (res.status === "cached" && res.dataset_id) {
+        setMessage(res.message || `Using cached dataset ${res.dataset_id.slice(0, 8)}`);
+      } else {
+        setMessage(`Job ${res.job_id?.slice(0, 8)} queued. Track progress under Live Research → Jobs.`);
+      }
+      await reload();
+    } catch (e) {
+      setMessage(String(e));
+    }
+  }
+
+  async function loadQuality(dsId: string) {
+    const [q, r] = await Promise.all([
+      apiFetch<Record<string, unknown>>(`/api/v1/market-data/datasets/${dsId}/quality`),
+      apiFetch<Readiness>(`/api/v1/market-data/datasets/${dsId}/readiness`),
+    ]);
+    setQuality(q);
+    setReadiness(r);
+  }
+
+  useEffect(() => {
+    if (!selectedDataset) return;
+    loadQuality(selectedDataset);
+  }, [selectedDataset]);
+
+  useEffect(() => {
+    const host = chartRef.current;
+    if (!host || !selectedDataset) return;
+    const chart = createChart(host, {
+      layout: { background: { color: "#181b22" }, textColor: "#a1a1aa" },
+      grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
+      width: host.clientWidth,
+      height: 320,
+      timeScale: { timeVisible: true },
+    });
+    chartApi.current = chart;
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: "#34d399",
+      downColor: "#f87171",
+      borderVisible: false,
+      wickUpColor: "#34d399",
+      wickDownColor: "#f87171",
+    });
+    let cancelled = false;
+    apiFetch<OhlcvBar[]>(`/api/v1/market-data/datasets/${selectedDataset}/bars?limit=1200`).then((bars) => {
+      if (cancelled) return;
+      series.setData(
+        bars.map((b) => ({
+          time: Math.floor(new Date(b.ts).getTime() / 1000) as UTCTimestamp,
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        }))
+      );
+      chart.timeScale().fitContent();
+    });
+    return () => {
+      cancelled = true;
+      chart.remove();
+    };
+  }, [selectedDataset]);
+
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="page-title">Market data</h2>
+      <header>
+        <h2 className="page-title">Historical Data</h2>
         <p className="page-sub">
-          One series per symbol and timeframe, stored as daily parquet files — not as millions of Postgres
-          rows. Search reuses the files and only appends new days; old days roll off.
+          Engine 3.0 — parquet library, Databento GLBX.MDP3 primary, quality gates for video strategies.
         </p>
-      </div>
+      </header>
+
+      {budget ? (
+        <section className="grid gap-3 sm:grid-cols-4">
+          <Stat label="Monthly budget (GBP)" value={`£${budget.budget_gbp.toFixed(2)}`} />
+          <Stat label="Approved USD" value={`$${budget.approved_usd.toFixed(2)}`} />
+          <Stat label="Actual USD" value={`$${budget.actual_usd.toFixed(2)}`} />
+          <Stat label="Remaining (GBP)" value={`£${budget.remaining_budget_gbp.toFixed(2)}`} />
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
-        <h3 className="text-sm font-medium text-zinc-300">Import OHLCV CSV</h3>
+        <h3 className="text-sm font-medium text-zinc-200">Download manager</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Columns: timestamp, open, high, low, close, volume (UTC ISO timestamps). Your file is stored as a dataset —
-          not mixed with provider feeds.
+          MNQ · MES · MGC via Databento continuous symbols (e.g. MES.c.0) — not back-adjusted stitched prices.
         </p>
-        <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-          <input
-            type="file"
-            accept=".csv"
-            className="w-full text-sm text-zinc-400 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-700 file:px-3 file:py-2 file:text-sm file:text-white"
-            onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
-          />
-          <input
-            className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm md:w-auto md:py-1"
-            value={csvLabel}
-            onChange={(e) => setCsvLabel(e.target.value)}
-            placeholder="label"
-          />
-          <button
-            type="button"
-            onClick={uploadCsv}
-            disabled={!csvFile}
-            className="w-full rounded-md bg-zinc-700 px-4 py-3 text-sm text-white hover:bg-zinc-600 disabled:opacity-40 md:w-auto md:py-2"
-          >
-            Upload CSV
-          </button>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4 md:p-6">
-        <h3 className="text-sm font-medium text-zinc-300">Queue historical ingestion</h3>
-        <p className="mt-1 text-xs text-zinc-500">
-          First download is stored. Later searches only append new bars. Yahoo 1m maxes at 7 days (probe-grade).
-          FinzData / IBKR / Databento can fill a longer 1m window when configured — that is the keeper path.
-        </p>
-        <div className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
-          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
-            Source
+        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <Field label="Instrument">
             <select
-              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
-              value={ingestProvider}
-              onChange={(e) => setIngestProvider(e.target.value)}
-            >
-              <option value="yahoo">Yahoo Finance (free, 1m max 7d)</option>
-              <option value="finzdata">FinzData (paid 1m/5m)</option>
-              <option value="ibkr">Interactive Brokers</option>
-              <option value="databento">Databento (licensed)</option>
-            </select>
-          </label>
-          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
-            Instrument
-            <select
-              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2"
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
             >
@@ -160,57 +221,163 @@ export default function MarketDataPage() {
                 </option>
               ))}
             </select>
-          </label>
-          <label className="flex w-full flex-col gap-1 text-sm text-zinc-400 md:w-auto">
-            Store as
+          </Field>
+          <Field label="Provider">
             <select
-              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 md:py-1"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2"
+              value={ingestProvider}
+              onChange={(e) => setIngestProvider(e.target.value)}
+            >
+              <option value="databento">Databento (primary)</option>
+              <option value="yahoo">Yahoo (free / fallback)</option>
+              <option value="finzdata">FinzData</option>
+              <option value="ibkr">IBKR</option>
+            </select>
+          </Field>
+          <Field label="Timeframe">
+            <select
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2"
               value={ingestTf}
               onChange={(e) => setIngestTf(e.target.value)}
             >
-              <option value="1m">1 minute</option>
-              <option value="5m">5 minutes</option>
-              <option value="15m">15 minutes</option>
-              <option value="1h">1 hour</option>
+              {["1m", "5m", "15m", "30m", "1h"].map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
             </select>
+          </Field>
+          <Field label="History (days)">
+            <input
+              type="number"
+              min={1}
+              max={120}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2"
+              value={daysBack}
+              onChange={(e) => setDaysBack(Number(e.target.value))}
+            />
+          </Field>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={fetchEstimate}
+            className="rounded-md border border-zinc-600 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+          >
+            Get cost estimate
+          </button>
+          <label className="flex items-center gap-2 text-sm text-zinc-400">
+            <input type="checkbox" checked={confirmPaid} onChange={(e) => setConfirmPaid(e.target.checked)} />
+            Approve paid download
           </label>
           <button
             type="button"
             onClick={queueIngestion}
-            className="w-full rounded-md bg-emerald-700 px-4 py-3 text-sm text-white hover:bg-emerald-600 md:w-auto md:py-2"
+            className="rounded-md bg-emerald-700 px-4 py-2 text-sm text-white hover:bg-emerald-600"
           >
-            Queue download (last {ingestDays()} days)
+            Queue download
           </button>
         </div>
+        {estimate ? (
+          <pre className="mt-3 overflow-auto rounded border border-zinc-800 bg-black/40 p-3 text-xs text-zinc-400">
+            {JSON.stringify(estimate, null, 2)}
+          </pre>
+        ) : null}
         {message ? <p className="mt-3 text-sm text-zinc-400">{message}</p> : null}
       </section>
 
+      <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+        <h3 className="text-sm font-medium text-zinc-200">Data library</h3>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-2 py-1">ID</th>
+                <th className="px-2 py-1">TF</th>
+                <th className="px-2 py-1">Bars</th>
+                <th className="px-2 py-1">Quality</th>
+                <th className="px-2 py-1">Range</th>
+                <th className="px-2 py-1">Version</th>
+              </tr>
+            </thead>
+            <tbody>
+              {datasets.map((d) => (
+                <tr
+                  key={d.id}
+                  className={`cursor-pointer border-t border-zinc-800/80 ${selectedDataset === d.id ? "bg-zinc-900/60" : ""}`}
+                  onClick={() => setSelectedDataset(d.id)}
+                >
+                  <td className="px-2 py-2 font-mono text-xs">{d.id.slice(0, 8)}</td>
+                  <td className="px-2 py-2">{d.timeframe}</td>
+                  <td className="px-2 py-2">{d.row_count}</td>
+                  <td className="px-2 py-2">{d.quality_class || d.validation_status}</td>
+                  <td className="px-2 py-2 text-xs text-zinc-500">
+                    {d.coverage_start?.slice(0, 10)} → {d.coverage_end?.slice(0, 10)}
+                  </td>
+                  <td className="px-2 py-2 text-xs">{d.version_tag}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+          <h3 className="text-sm font-medium text-zinc-200">Data quality</h3>
+          {quality ? (
+            <pre className="mt-2 max-h-64 overflow-auto text-xs text-zinc-400">{JSON.stringify(quality, null, 2)}</pre>
+          ) : (
+            <p className="mt-2 text-sm text-zinc-500">Select a dataset.</p>
+          )}
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+          <h3 className="text-sm font-medium text-zinc-200">Backtest readiness (video strategies)</h3>
+          {readiness ? (
+            <div className="mt-2 space-y-2 text-sm text-zinc-300">
+              <p>Class: {readiness.quality_class} · Backtest allowed: {readiness.backtest_allowed ? "yes" : "no"}</p>
+              <p>video_liquidity_sweep: {readiness.video_readiness.video_liquidity_sweep?.reason}</p>
+              <p>video_anchor_bos: {readiness.video_readiness.video_anchor_bos?.reason}</p>
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-zinc-500">Select a dataset.</p>
+          )}
+        </div>
+      </section>
+
       <section>
-        <h3 className="text-sm font-medium text-zinc-300">Providers</h3>
-        <ul className="mt-3 space-y-2">
+        <h3 className="text-sm font-medium text-zinc-200">Data preview</h3>
+        <div ref={chartRef} className="mt-2 w-full rounded-lg border border-zinc-800" />
+      </section>
+
+      <section>
+        <h3 className="text-sm font-medium text-zinc-200">Providers</h3>
+        <ul className="mt-2 space-y-2 text-sm text-zinc-400">
           {providers.map((p) => (
-            <li key={p.slug} className="rounded-md border border-zinc-800 px-4 py-3 text-sm">
-              <span className="font-medium text-zinc-100">{p.display_name}</span>
-              <span className="ml-2 text-zinc-500">— {p.message}</span>
+            <li key={p.slug}>
+              <span className="text-zinc-200">{p.display_name}</span> — {p.state}: {p.message}
             </li>
           ))}
         </ul>
       </section>
-
-      <section>
-        <h3 className="text-sm font-medium text-zinc-300">Datasets</h3>
-        {datasets.length === 0 ? (
-          <p className="mt-2 text-sm text-zinc-500">No imported datasets yet.</p>
-        ) : (
-          <ul className="mt-2 space-y-2 text-sm text-zinc-400">
-            {datasets.map((d) => (
-              <li key={d.id}>
-                {d.timeframe} · {d.row_count} rows · {d.validation_status}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-[#181b22] p-3">
+      <p className="text-xs uppercase text-zinc-500">{label}</p>
+      <p className="mt-1 text-lg text-white">{value}</p>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm text-zinc-400">
+      {label}
+      {children}
+    </label>
   );
 }

@@ -62,7 +62,7 @@ ENTRY_TYPES = frozenset(
     }
 )
 PRIMITIVE_ENTRY_TYPES = frozenset(t for t in ENTRY_TYPES if t != "confluence")
-SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h"})
+SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h"})
 
 
 def confluence_legs(entry: dict[str, Any]) -> list[dict[str, Any]]:

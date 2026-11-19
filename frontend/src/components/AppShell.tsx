@@ -10,7 +10,7 @@ const NAV = [
   { href: "/paper", label: "Forward test", short: "Paper" },
   { href: "/backtests", label: "Backtests", short: "Results" },
   { href: "/settings", label: "Settings", short: "Settings" },
-  { href: "/market-data", label: "Market Data (advanced)", short: "Data" },
+  { href: "/market-data", label: "Historical Data", short: "Data" },
   { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
   { href: "/research", label: "Jobs (advanced)", short: "Jobs" },
 ];

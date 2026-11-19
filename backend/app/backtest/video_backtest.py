@@ -80,4 +80,11 @@ def run_video_backtest(
         equity_curve.append({"ts": t["exit_ts"].isoformat(), "equity": float(equity)})
 
     metrics = compute_metrics(simulated, starting_equity)
+    if int(metrics.get("trade_count") or 0) == 0:
+        from app.services.market_data.validate_dataset import backtest_zero_trade_hint, video_strategy_readiness
+
+        readiness = video_strategy_readiness(bars, symbol=instrument.symbol, timeframe=dataset_timeframe)
+        hint = backtest_zero_trade_hint(0, readiness, "ready")
+        if hint:
+            warnings.append(f"Zero trades: {hint}")
     return BacktestResult(trades, metrics, equity_curve, warnings)

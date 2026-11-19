@@ -15,12 +15,23 @@ from app.models.backtest import OhlcvBar
 from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.models.user import User
-from app.schemas.market_data import HistoricalDatasetOut, OhlcvBarOut, ProviderHealthOut
+from app.schemas.market_data import (
+    DatasetReadinessOut,
+    HistoricalDatasetOut,
+    IngestEstimateRequest,
+    OhlcvBarOut,
+    ProviderHealthOut,
+)
+from app.services.market_data.budget import budget_status, reserve_approval
 from app.services.market_data.csv_import import import_csv_bars
 from app.backtest.bars import Bar
+from app.services.market_data.databento_client import quote_download_cost
+from app.services.market_data.dataset_catalog import find_validated_duplicate, ingest_fingerprint
 from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
+from app.services.market_data.provider_audit import PROVIDER_TIERS
 from app.services.market_data.providers import PROVIDER_REGISTRY, all_provider_health
 from app.services.market_data.quality import audit_bars, estimate_download_cost_usd
+from app.services.market_data.validate_dataset import validate_and_persist
 from app.worker.tasks import create_ingestion_job, run_data_ingestion
 
 settings = get_settings()
@@ -37,6 +48,9 @@ class IngestionRequest(BaseModel):
     start: datetime
     end: datetime
     confirm_paid: bool = False
+    budget_override: bool = False
+    force_refresh: bool = False
+    approved_cost_usd: float | None = None
 
 
 class IngestCostEstimate(BaseModel):
@@ -44,6 +58,37 @@ class IngestCostEstimate(BaseModel):
     instrument_symbol: str
     timeframe: str = "5m"
     days: int = 30
+
+
+def _dataset_out(d: HistoricalDataset) -> HistoricalDatasetOut:
+    meta = d.meta or {}
+    return HistoricalDatasetOut(
+        id=str(d.id),
+        instrument_id=str(d.instrument_id),
+        provider_id=str(d.provider_id),
+        timeframe=d.timeframe,
+        row_count=d.row_count,
+        validation_status=d.validation_status.value,
+        coverage_start=d.coverage_start.isoformat() if d.coverage_start else None,
+        coverage_end=d.coverage_end.isoformat() if d.coverage_end else None,
+        version_tag=d.version_tag,
+        content_checksum=d.content_checksum,
+        quality_class=meta.get("quality_class"),
+        meta=meta,
+    )
+
+
+@router.get("/budget")
+async def research_data_budget(
+    _: User = Depends(get_current_user),
+) -> dict:
+    with SyncSession() as session:
+        return budget_status(session)
+
+
+@router.get("/provider-tiers")
+async def provider_tiers(_: User = Depends(get_current_user)) -> dict:
+    return PROVIDER_TIERS
 
 
 @router.get("/providers", response_model=list[ProviderHealthOut])
@@ -68,21 +113,7 @@ async def list_datasets(
 ) -> list[HistoricalDatasetOut]:
     result = await db.execute(select(HistoricalDataset).order_by(HistoricalDataset.downloaded_at.desc()))
     rows = result.scalars().all()
-    return [
-        HistoricalDatasetOut(
-            id=str(d.id),
-            instrument_id=str(d.instrument_id),
-            provider_id=str(d.provider_id),
-            timeframe=d.timeframe,
-            row_count=d.row_count,
-            validation_status=d.validation_status.value,
-            coverage_start=d.coverage_start.isoformat() if d.coverage_start else None,
-            coverage_end=d.coverage_end.isoformat() if d.coverage_end else None,
-            version_tag=d.version_tag,
-            meta=d.meta,
-        )
-        for d in rows
-    ]
+    return [_dataset_out(d) for d in rows]
 
 
 @router.post("/import-csv", response_model=HistoricalDatasetOut)
@@ -112,23 +143,13 @@ async def import_csv_dataset(
                 label=label,
                 csv_text=content,
             )
+            validate_and_persist(session, ds, symbol=instrument_symbol, tick_size=inst.tick_size)
             session.commit()
             session.refresh(ds)
             return ds
 
     dataset = _import()
-    return HistoricalDatasetOut(
-        id=str(dataset.id),
-        instrument_id=str(dataset.instrument_id),
-        provider_id=str(dataset.provider_id),
-        timeframe=dataset.timeframe,
-        row_count=dataset.row_count,
-        validation_status=dataset.validation_status.value,
-        coverage_start=dataset.coverage_start.isoformat() if dataset.coverage_start else None,
-        coverage_end=dataset.coverage_end.isoformat() if dataset.coverage_end else None,
-        version_tag=dataset.version_tag,
-        meta=dataset.meta,
-    )
+    return _dataset_out(dataset)
 
 
 @router.get("/datasets/{dataset_id}/bars", response_model=list[OhlcvBarOut])
@@ -186,6 +207,25 @@ async def ingest_cost_estimate(
     )
 
 
+@router.post("/ingest/estimate-range", response_model=dict)
+async def ingest_cost_estimate_range(
+    body: IngestEstimateRequest,
+    _: User = Depends(get_current_user),
+) -> dict:
+    start = datetime.fromisoformat(body.start.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(body.end.replace("Z", "+00:00"))
+    if body.provider_slug == "databento":
+        try:
+            return quote_download_cost(body.instrument_symbol, start, end).to_dict()
+        except ValueError as exc:
+            days = max(1, int((end - start).total_seconds() // 86400))
+            fallback = estimate_download_cost_usd("databento", symbols=1, days=days, timeframe=body.timeframe)
+            fallback["error"] = str(exc)
+            return fallback
+    days = max(1, int((end - start).total_seconds() // 86400))
+    return estimate_download_cost_usd(body.provider_slug, symbols=1, days=days, timeframe=body.timeframe)
+
+
 @router.get("/datasets/{dataset_id}/quality")
 async def dataset_quality(
     dataset_id: str,
@@ -226,17 +266,47 @@ async def dataset_quality(
     return audit_bars(bars, timeframe=ds.timeframe, source=source).to_dict()
 
 
+@router.get("/datasets/{dataset_id}/readiness", response_model=DatasetReadinessOut)
+async def dataset_readiness(
+    dataset_id: str,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DatasetReadinessOut:
+    ds = await db.get(HistoricalDataset, uuid.UUID(dataset_id))
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    meta = ds.meta or {}
+    qclass = (meta.get("quality_class") or "unknown").lower()
+    return DatasetReadinessOut(
+        dataset_id=str(ds.id),
+        quality_class=qclass,
+        validation_status=ds.validation_status.value,
+        video_readiness=meta.get("video_readiness") or {},
+        backtest_allowed=qclass in ("ready", "warning"),
+    )
+
+
 @router.post("/ingest")
 async def request_ingestion(
     body: IngestionRequest,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     provider = PROVIDER_REGISTRY.get(body.provider_slug)
     if not provider:
         raise HTTPException(status_code=404, detail="Unknown provider")
     days = max(1, int((body.end - body.start).total_seconds() // 86400))
-    cost = estimate_download_cost_usd(body.provider_slug, symbols=1, days=days, timeframe=body.timeframe)
+    if body.provider_slug == "databento" and settings.databento_configured:
+        try:
+            cost = quote_download_cost(body.instrument_symbol, body.start, body.end).to_dict()
+        except ValueError as exc:
+            cost = estimate_download_cost_usd("databento", symbols=1, days=days, timeframe=body.timeframe)
+            cost["error"] = str(exc)
+    else:
+        cost = estimate_download_cost_usd(body.provider_slug, symbols=1, days=days, timeframe=body.timeframe)
+
+    estimated_usd = float(cost.get("estimated_usd") or 0)
     if cost.get("requires_approval") and not body.confirm_paid:
         raise HTTPException(
             status_code=402,
@@ -245,12 +315,56 @@ async def request_ingestion(
                 "estimate": cost,
             },
         )
+
+    inst = (
+        await db.execute(select(Instrument).where(Instrument.symbol == body.instrument_symbol))
+    ).scalar_one_or_none()
+    if not inst:
+        raise HTTPException(404, "Instrument not found")
+
+    fingerprint = ingest_fingerprint(
+        provider_slug=body.provider_slug,
+        instrument_symbol=body.instrument_symbol,
+        timeframe=body.timeframe,
+        start=body.start,
+        end=body.end,
+    )
+    if not body.force_refresh:
+        with SyncSession() as session:
+            cached = find_validated_duplicate(
+                session,
+                fingerprint=fingerprint,
+                instrument_id=inst.id,
+                timeframe=body.timeframe,
+            )
+            if cached:
+                return {
+                    "status": "cached",
+                    "dataset_id": str(cached.id),
+                    "message": "Equivalent validated data already in library — no duplicate paid download.",
+                    "meta": {"ingest_fingerprint": fingerprint},
+                }
+
+    if cost.get("requires_approval") and estimated_usd > 0:
+        with SyncSession() as session:
+            try:
+                reserve_approval(session, estimated_usd, allow_over_budget=body.budget_override)
+                session.commit()
+            except ValueError as exc:
+                raise HTTPException(status_code=402, detail=str(exc)) from exc
+
     try:
         meta = await provider.ingest_historical(
             body.instrument_symbol, body.timeframe, body.start, body.end
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    meta = {
+        **meta,
+        "ingest_fingerprint": fingerprint,
+        "approved_cost_usd": body.approved_cost_usd or estimated_usd,
+        "cost_estimate_source": cost.get("source", "heuristic"),
+    }
     job_id = create_ingestion_job(meta, actor=user.email)
     try:
         run_data_ingestion.delay(job_id)
