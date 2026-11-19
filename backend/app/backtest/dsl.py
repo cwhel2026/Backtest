@@ -55,6 +55,7 @@ ENTRY_TYPES = frozenset(
         "sweep_bos_combined",
         "video_liquidity_sweep",
         "video_anchor_bos",
+        "berg_tnb_model_v1",
         "order_block_retest",
         "premium_discount",
         "mtf_ema_pullback",
@@ -95,6 +96,20 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     exit_spec = spec.get("exit") or {}
     if "stop_ticks" not in exit_spec or "target_ticks" not in exit_spec:
         errors.append("exit.stop_ticks and exit.target_ticks required")
+    entry_type = entry.get("type")
+    if entry_type == "berg_tnb_model_v1":
+        profile = entry.get("session_profile", "pdf_indices")
+        if profile not in ("pdf_indices", "pdf_forex", "cme_futures_research"):
+            errors.append("entry.session_profile must be pdf_indices, pdf_forex, or cme_futures_research")
+        setup = entry.get("setup_preset", "new_york_setup")
+        if setup not in ("london_setup", "new_york_setup"):
+            errors.append("entry.setup_preset must be london_setup or new_york_setup")
+        ef = Decimal(str(entry.get("fib_fakeout_ratio", "0.079")))
+        eg = Decimal(str(entry.get("entry_fib_ratio", "0.618")))
+        if not (Decimal("0") < ef < Decimal("1")):
+            errors.append("entry.fib_fakeout_ratio must be between 0 and 1")
+        if not (Decimal("0") < eg < Decimal("1")):
+            errors.append("entry.entry_fib_ratio must be between 0 and 1")
     return errors
 
 

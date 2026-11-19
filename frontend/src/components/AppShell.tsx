@@ -11,6 +11,8 @@ const NAV = [
   { href: "/backtests", label: "Backtests", short: "Results" },
   { href: "/settings", label: "Settings", short: "Settings" },
   { href: "/market-data", label: "Historical Data", short: "Data" },
+  { href: "/berg-tnb", label: "Berg TNB Model", short: "TNB" },
+  { href: "/strategy-compare", label: "Strategy Compare", short: "Compare" },
   { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
   { href: "/research", label: "Jobs (advanced)", short: "Jobs" },
 ];

@@ -18,6 +18,7 @@ from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
 
 VIDEO_ENTRY_TYPES = frozenset({"video_liquidity_sweep", "video_anchor_bos"})
+BERG_ENTRY_TYPES = frozenset({"berg_tnb_model_v1"})
 
 
 @dataclass
@@ -51,6 +52,16 @@ def run_backtest(
         from app.backtest.video_backtest import run_video_backtest
 
         return run_video_backtest(spec, bars, instrument, dataset_timeframe, assumptions, starting_equity)
+
+    if entry_type in BERG_ENTRY_TYPES:
+        from app.backtest.berg_tnb.backtest import run_berg_tnb_backtest
+
+        spec = dict(spec)
+        entry = dict(spec.get("entry") or {})
+        if "data_context" not in spec and spec.get("data_context") is None:
+            spec["data_context"] = spec.get("data_context") or {}
+        spec["entry"] = entry
+        return run_berg_tnb_backtest(spec, bars, instrument, dataset_timeframe, assumptions, starting_equity)
 
     warnings: list[str] = []
     warnings.append(

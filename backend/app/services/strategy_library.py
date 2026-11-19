@@ -191,6 +191,47 @@ _VIDEO_ANCHOR_TEMPLATE = {
     "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
 }
 
+_BERG_TNB_BASE = {
+    "category": "berg_tnb_model_v1",
+    "timeframe": "5m",
+    "hypothesis": "Berg TNB: 4H bias → session level → sweep → reversal → 0.079 fakeout → 5m BOS → entry fib (research).",
+    "entry": {
+        "type": "berg_tnb_model_v1",
+        "session_profile": "pdf_indices",
+        "setup_preset": "new_york_setup",
+        "fib_fakeout_ratio": "0.079",
+        "entry_fib_ratio": "0.618",
+        "fractal_4h_left": 2,
+        "fractal_4h_right": 2,
+        "fractal_5m_left": 2,
+        "fractal_5m_right": 2,
+        "doji_mode": "skip",
+        "allow_exact_sweep_touch": True,
+        "order_expire_bars": 48,
+        "execution_scenario": "ohlc_conservative",
+    },
+    "exit_meta": {"profile": "structural_rr", "reward_risk": "2"},
+    "exit": {"stop_ticks": 20, "target_ticks": 40, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+for _sym in ("MNQ", "MES", "MGC"):
+    _berg = {**_BERG_TNB_BASE}
+    _berg["name"] = f"{_sym} 5m Berg TNB Model v1"
+    _berg["symbol"] = _sym
+    _berg["spec"] = {
+        "name": _berg["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": "berg_tnb_model_v1",
+        "session": {"allowed": ["ALL"], "timezone": "UTC", "profile_note": "PDF GMT markers via entry.session_profile"},
+        "entry": dict(_BERG_TNB_BASE["entry"]),
+        "exit_meta": dict(_BERG_TNB_BASE["exit_meta"]),
+        "exit": dict(_BERG_TNB_BASE["exit"]),
+        "risk": dict(_BERG_TNB_BASE["risk"]),
+    }
+    LIBRARY.append(_berg)
+
 for _sym in ("MNQ", "MES", "MGC"):
     _sweep = {**_VIDEO_SWEEP_TEMPLATE}
     _sweep["name"] = f"{_sym} 5m Video Liquidity Sweep"
