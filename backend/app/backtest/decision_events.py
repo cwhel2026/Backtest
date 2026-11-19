@@ -108,6 +108,7 @@ def merge_execution_events(
             "filled": DecisionEventType.ORDER_FILLED,
             "expired": DecisionEventType.ORDER_EXPIRED,
             "cancelled": DecisionEventType.ORDER_CANCELLED,
+            "amended": DecisionEventType.ORDER_AMENDED,
         }.get(ev)
         if not et or (ev == "placed" and not include_placed):
             continue
