@@ -40,6 +40,46 @@ class IngestEstimateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class IngestBundleEstimateRequest(BaseModel):
+    provider_slug: str = "databento"
+    symbols: list[str] = ["MNQ", "MES", "MGC"]
+    start: str
+    end: str
+
+    model_config = {"extra": "forbid"}
+
+
+class DatabentoBatchImportRequest(BaseModel):
+    databento_batch_job_id: str
+    model_config = {"extra": "forbid"}
+
+
+class UploadInitRequest(BaseModel):
+    files: list[dict]
+
+    model_config = {"extra": "forbid"}
+
+
+class UploadCompleteRequest(BaseModel):
+    upload_id: str
+
+    model_config = {"extra": "forbid"}
+
+
+class IngestBundleRequest(BaseModel):
+    provider_slug: str = "databento"
+    symbols: list[str] = ["MNQ", "MES", "MGC"]
+    start: str
+    end: str
+    confirm_paid: bool = False
+    budget_override: bool = False
+    force_refresh: bool = False
+    approved_cost_usd: float | None = None
+    derive_timeframes: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
 class DatasetReadinessOut(BaseModel):
     dataset_id: str
     quality_class: str

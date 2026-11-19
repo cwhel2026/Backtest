@@ -16,5 +16,6 @@ class InstrumentOut(BaseModel):
     multiplier: Decimal
     is_micro: bool
     micro_of: str | None
+    primary_research: bool = False
 
     model_config = {"from_attributes": True}

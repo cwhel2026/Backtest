@@ -18,6 +18,7 @@ from app.services.autonomous_cycle import (
     find_active_prop_search_job,
     run_autonomous_prop_cycle,
 )
+from app.services.market_data.databento_batch import run_batch_job_import, run_upload_import
 from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
     run_finzdata_ingestion,
@@ -89,6 +90,41 @@ def run_data_ingestion(job_id: str) -> None:
             _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
             return
 
+        if provider in ("databento_batch", "databento_upload"):
+            if not settings_ref.databento_configured and provider == "databento_batch":
+                _fail_ingestion(db, job, "Databento API key not configured", "Batch import failed")
+                return
+            job.message = "Processing Databento files"
+            job.progress_pct = 5
+            db.commit()
+            try:
+                payload = {**job.payload, "research_job_id": str(job.id)}
+                if provider == "databento_batch":
+                    out = run_batch_job_import(db, payload)
+                else:
+                    out = run_upload_import(db, payload)
+                db.commit()
+                job.status = ResearchJobStatus.COMPLETED
+                job.progress_pct = 100
+                job.message = "Import complete — ready for backtesting"
+                job.completed_at = datetime.now(UTC)
+                job.payload = {**job.payload, **out}
+                db.add(
+                    ResearchActivity(
+                        headline="Databento batch import complete",
+                        detail=f"Datasets: {', '.join(out.get('datasets', []))}",
+                        job_id=job.id,
+                        meta=out,
+                    )
+                )
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                job = db.get(ResearchJob, uuid.UUID(job_id))
+                if job:
+                    _fail_ingestion(db, job, str(exc), "Databento import failed")
+            return
+
         if provider == "finzdata" and not settings_ref.finzdata_configured:
             _fail_ingestion(db, job, "FINZDATA_API_KEY not configured", "Ingestion failed: FinzData not configured")
             return
@@ -124,7 +160,8 @@ def run_data_ingestion(job_id: str) -> None:
             elif provider == "finzdata":
                 dataset = run_finzdata_ingestion(db, job.payload)
             else:
-                dataset = run_databento_ingestion(db, job.payload)
+                payload = {**job.payload, "research_job_id": str(job.id)}
+                dataset = run_databento_ingestion(db, payload)
             db.commit()
             job.status = ResearchJobStatus.COMPLETED
             job.progress_pct = 100
@@ -339,3 +376,35 @@ def paper_forward_tick() -> None:
 
     with SyncSession() as db:
         tick_paper_book(db)
+
+
+@celery_app.task(name="app.worker.tasks.live_lab_stream_ingest")
+def live_lab_stream_ingest() -> None:
+    from app.services.live_lab.stream_ingest import ingest_stream_once
+
+    settings_ref = get_settings()
+    if not settings_ref.live_lab_tick_enabled:
+        return
+    with SyncSession() as db:
+        try:
+            ingest_stream_once(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
+@celery_app.task(name="app.worker.tasks.live_lab_forward_tick")
+def live_lab_forward_tick() -> None:
+    from app.services.live_lab.service import tick_live_strategy_lab
+
+    settings_ref = get_settings()
+    if not settings_ref.live_lab_tick_enabled:
+        return
+    with SyncSession() as db:
+        try:
+            tick_live_strategy_lab(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
