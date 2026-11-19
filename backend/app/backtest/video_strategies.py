@@ -6,7 +6,7 @@ OHLC-only fills; stop wins ambiguous collisions; slippage in execution prices on
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Literal
@@ -37,6 +37,8 @@ class VideoConfig:
     expiry_bars: int = 12
     bos_window: int = 20
     require_bos_after_sweep: bool = True
+    entry_bar_exit_policy: str = "conservative_ohlc"
+    pending_fill_policy: str = "no_fill_if_stop_touched"
 
     @classmethod
     def from_instrument(cls, instrument: Instrument, spec: dict, *, slippage_ticks: int = 1) -> VideoConfig:
@@ -58,7 +60,20 @@ class VideoConfig:
             expiry_bars=int(entry.get("order_expire_bars", 12)),
             bos_window=int(entry.get("bos_window", 20)),
             require_bos_after_sweep=bool(entry.get("require_bos_after_sweep", True)),
+            entry_bar_exit_policy=str(entry.get("entry_bar_exit_policy", "conservative_ohlc")),
+            pending_fill_policy=str(entry.get("pending_fill_policy", "no_fill_if_stop_touched")),
         )
+
+
+@dataclass(frozen=True)
+class OrderAmendment:
+    """New prices effective at the open of bar_index (before intrabar simulation on that bar)."""
+
+    bar_index: int
+    limit: Decimal
+    stop: Decimal
+    target: Decimal
+    ts: datetime | None = None
 
 
 @dataclass
@@ -71,6 +86,18 @@ class Order:
     target: Decimal
     expiry_index: int
     reason: str
+    amendments: list[OrderAmendment] = field(default_factory=list)
+    setup_id: str | None = None
+
+
+def effective_order_prices(order: Order, bar_index: int) -> tuple[Decimal, Decimal, Decimal]:
+    """Chronological quote: initial submission then amendments with bar_index <= bar_index."""
+    limit, stop, target = order.limit, order.stop, order.target
+    for amend in sorted(order.amendments, key=lambda a: a.bar_index):
+        if amend.bar_index > bar_index:
+            break
+        limit, stop, target = amend.limit, amend.stop, amend.target
+    return limit, stop, target
 
 
 def round_tick(px: Decimal, tick: Decimal, mode: str = "nearest") -> Decimal:
@@ -116,7 +143,14 @@ def order_from_impulse(strategy: str, direction: str, i: int, low: Decimal, high
     return Order(strategy, direction, i, limit, stop, target, i + cfg.expiry_bars, reason)
 
 
-def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[str]) -> list[Order]:
+def session_sweep_orders(
+    bars: list[Bar],
+    cfg: VideoConfig,
+    session_keys: list[str],
+    *,
+    decision_events: list | None = None,
+    rejected_setups: list | None = None,
+) -> list[Order]:
     if len(bars) != len(session_keys):
         raise ValueError("session key mismatch")
     completed: dict[str, tuple[Decimal, Decimal]] = {}
@@ -147,11 +181,48 @@ def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[s
         sweep_lo = b.low <= pl - cfg.tick * cfg.sweep_ticks and b.close > pl
         if sweep_hi:
             candidates.append(("short", i, b.high, b.low))
+            if decision_events is not None:
+                from app.backtest.video_events import sweep_detected
+
+                sweep_detected(
+                    decision_events,
+                    strategy="video_liquidity_sweep",
+                    ts=b.ts,
+                    bar_index=i,
+                    direction="short",
+                    level=ph,
+                    setup_id=f"sweep-short-{i}",
+                )
         if sweep_lo:
             candidates.append(("long", i, b.high, b.low))
+            if decision_events is not None:
+                from app.backtest.video_events import sweep_detected
+
+                sweep_detected(
+                    decision_events,
+                    strategy="video_liquidity_sweep",
+                    ts=b.ts,
+                    bar_index=i,
+                    direction="long",
+                    level=pl,
+                    setup_id=f"sweep-long-{i}",
+                )
         for c in candidates[:]:
             direction, at, extreme, _base = c
             if i - at > cfg.bos_window:
+                if rejected_setups is not None:
+                    from app.backtest.video_events import reject
+
+                    reject(
+                        rejected_setups,
+                        ts=b.ts,
+                        bar_index=i,
+                        strategy="video_liquidity_sweep",
+                        setup_id=f"sweep-{direction}-{at}",
+                        reason_code="BOS_WINDOW_EXPIRED",
+                        explanation="No BOS within configured window after sweep",
+                        rule_id="video.bos_window",
+                    )
                 candidates.remove(c)
                 continue
             prior = [p for p in pv if p[0] < i and p[1] < at and p[2] == ("low" if direction == "short" else "high")]
@@ -176,12 +247,45 @@ def session_sweep_orders(bars: list[Bar], cfg: VideoConfig, session_keys: list[s
                 "previous-session sweep and " + ("BOS" if cfg.require_bos_after_sweep else "rejection"),
             )
             if order:
+                if decision_events is not None:
+                    from app.backtest.video_events import bos_confirmed, order_submitted
+
+                    sid = f"sweep-{direction}-{at}"
+                    if cfg.require_bos_after_sweep and prior:
+                        bos_confirmed(
+                            decision_events,
+                            strategy="video_liquidity_sweep",
+                            ts=b.ts,
+                            bar_index=i,
+                            direction=direction,
+                            level=prior[-1][3],
+                            setup_id=sid,
+                        )
+                    order.setup_id = sid
+                    order_submitted(
+                        decision_events,
+                        strategy="video_liquidity_sweep",
+                        ts=bars[i].ts,
+                        bar_index=i,
+                        direction=direction,
+                        limit=order.limit,
+                        stop=order.stop,
+                        target=order.target,
+                        setup_id=sid,
+                        reason=order.reason,
+                    )
                 out.append(order)
             candidates.remove(c)
     return out
 
 
-def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig) -> list[Order]:
+def anchor_bos_orders(
+    bars: list[Bar],
+    cfg: VideoConfig,
+    *,
+    decision_events: list | None = None,
+    rejected_setups: list | None = None,
+) -> list[Order]:
     pv = pivots(bars, cfg)
     by_confirmation: dict[int, list] = {}
     for p in pv:
@@ -207,6 +311,19 @@ def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig) -> list[Order]:
             )
             if not broke:
                 continue
+            if decision_events is not None:
+                from app.backtest.video_events import bos_confirmed
+
+                sid = f"anchor-{kind}-{anchor_j}-bos-{i}"
+                bos_confirmed(
+                    decision_events,
+                    strategy="video_anchor_bos",
+                    ts=b.ts,
+                    bar_index=i,
+                    direction=direction,
+                    level=level,
+                    setup_id=sid,
+                )
             _, opp_j, _, opp_level = opposite
             if opp_j >= i:
                 continue
@@ -226,7 +343,37 @@ def anchor_bos_orders(bars: list[Bar], cfg: VideoConfig) -> list[Order]:
                 f"confirmed pivot {anchor_j} BOS; fib retracement",
             )
             if order:
+                if decision_events is not None:
+                    from app.backtest.video_events import order_submitted
+
+                    sid = f"anchor-{kind}-{anchor_j}-bos-{i}"
+                    order.setup_id = sid
+                    order_submitted(
+                        decision_events,
+                        strategy="video_anchor_bos",
+                        ts=b.ts,
+                        bar_index=i,
+                        direction=direction,
+                        limit=order.limit,
+                        stop=order.stop,
+                        target=order.target,
+                        setup_id=sid,
+                        reason=order.reason,
+                    )
                 out.append(order)
+            elif rejected_setups is not None:
+                from app.backtest.video_events import reject
+
+                reject(
+                    rejected_setups,
+                    ts=b.ts,
+                    bar_index=i,
+                    strategy="video_anchor_bos",
+                    setup_id=f"anchor-{kind}-{anchor_j}",
+                    reason_code="INVALID_FIB_BRACKET",
+                    explanation="BOS confirmed but fib bracket could not be built",
+                    rule_id="video.fib_bracket",
+                )
             used.add((kind, anchor_j))
         for p in by_confirmation.get(i, []):
             last[p[2]] = p

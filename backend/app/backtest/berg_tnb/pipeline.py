@@ -37,7 +37,11 @@ from app.backtest.berg_tnb.types import (
 from app.backtest.berg_tnb.events import emit
 from app.backtest.berg_tnb.fractals import ConfirmedFractal
 from app.backtest.decision_events import DecisionEvent, DecisionEventType, RejectedSetup
-from app.backtest.video_strategies import Order, round_tick
+from app.backtest.video_strategies import Order, OrderAmendment, effective_order_prices, round_tick
+
+
+def effective_order_prices_for_bar(order: Order, bar_index: int):
+    return effective_order_prices(order, bar_index)
 
 
 def _rollover_suppress(bars: list[Bar], tick: Decimal, events: list[dict] | None = None) -> set[int]:
@@ -308,6 +312,7 @@ class BergTnbEngine:
                     round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down"),
                     i + self.cfg["order_expire_bars"],
                     f"Berg TNB entry fib {ratio}; exit={exit_label}",
+                    setup_id=setup.setup_id,
                 )
                 orders.append(pending_order)
                 setup.order_index = i
@@ -367,11 +372,14 @@ class BergTnbEngine:
                     _complete_setup("Setup sequenced; execution delegated")
                 return
 
-            if limit != pending_order.limit and mode == "dynamic_pdf_experimental":
-                before = {"limit": str(pending_order.limit)}
-                pending_order.limit = limit
-                pending_order.stop = round_tick(stop, self.tick, "down" if bias_dir == "bullish" else "up")
-                pending_order.target = round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down")
+            eff_lim, _, _ = effective_order_prices_for_bar(pending_order, i)
+            if limit != eff_lim and mode == "dynamic_pdf_experimental":
+                before = {"limit": str(eff_lim)}
+                stp = round_tick(stop, self.tick, "down" if bias_dir == "bullish" else "up")
+                tgt = round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down")
+                pending_order.amendments.append(
+                    OrderAmendment(i, limit, stp, tgt, b.ts)
+                )
                 if setup.entry_fib:
                     setup.entry_fib.limit_price = limit
                     setup.entry_fib.anchor_low = low_a

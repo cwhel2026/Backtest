@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
+  LineSeries,
   createChart,
   createSeriesMarkers,
   type IChartApi,
@@ -34,6 +35,8 @@ type DebuggerBar = {
   volume: number;
 };
 
+type OhlcBar = { ts: string; open: number; high: number; low: number; close: number; volume: number };
+
 type SimLog = {
   decision_events: DecisionEvent[];
   rejected_setups: { reason_code: string; explanation: string; ts: string }[];
@@ -48,6 +51,7 @@ export default function StrategyDebuggerPage() {
   const runId = params.get("run_id") || "";
   const [sim, setSim] = useState<SimLog | null>(null);
   const [bars, setBars] = useState<DebuggerBar[]>([]);
+  const [bars4h, setBars4h] = useState<OhlcBar[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tradeNum, setTradeNum] = useState<number | null>(null);
@@ -56,6 +60,7 @@ export default function StrategyDebuggerPage() {
   const [speed, setSpeed] = useState(1);
   const [selectedEvent, setSelectedEvent] = useState<number | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
+  const chart4hRef = useRef<HTMLDivElement>(null);
   const chartApi = useRef<IChartApi | null>(null);
 
   useEffect(() => {
@@ -89,6 +94,15 @@ export default function StrategyDebuggerPage() {
     loadBars(tradeNum);
   }, [tradeNum, loadBars]);
 
+  useEffect(() => {
+    if (!runId) return;
+    const berg = (sim?.simulation_provenance?.entry_type as string) === "berg_tnb_model_v1";
+    if (!berg && sim?.decision_events?.every((e) => !e.rule_id?.startsWith("berg"))) return;
+    apiFetch<OhlcBar[]>(`/api/v1/backtests/${runId}/debugger/bars-4h?limit=300`)
+      .then(setBars4h)
+      .catch(() => setBars4h([]));
+  }, [runId, sim]);
+
   const visibleEvents = useMemo(() => {
     if (!sim?.decision_events) return [];
     const lastBar = bars[Math.min(replayIdx, Math.max(0, bars.length - 1))];
@@ -98,6 +112,26 @@ export default function StrategyDebuggerPage() {
   }, [sim, bars, replayIdx]);
 
   const chartBars = useMemo(() => bars.slice(0, replayIdx + 1), [bars, replayIdx]);
+
+  const levelOverlays = useMemo(() => {
+    const out: { key: string; value: number; color: string }[] = [];
+    const pick = (field: string) => {
+      for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
+        const raw = visibleEvents[i].levels?.[field];
+        if (raw != null && raw !== "") return Number(raw);
+      }
+      return null;
+    };
+    const limit = pick("limit");
+    const stop = pick("stop");
+    const target = pick("target");
+    const liq = pick("liquidity_level");
+    if (limit != null) out.push({ key: "limit", value: limit, color: "#fbbf24" });
+    if (stop != null) out.push({ key: "stop", value: stop, color: "#f87171" });
+    if (target != null) out.push({ key: "target", value: target, color: "#34d399" });
+    if (liq != null) out.push({ key: "session", value: liq, color: "#818cf8" });
+    return out;
+  }, [visibleEvents]);
 
   useEffect(() => {
     if (!playing || !bars.length) return;
@@ -134,8 +168,29 @@ export default function StrategyDebuggerPage() {
       close: b.close,
     }));
     series.setData(data);
-  const markers = visibleEvents
-      .filter((e) => e.event_type.includes("SWEEP") || e.event_type.includes("BOS") || e.event_type.includes("FIB"))
+    for (const layer of levelOverlays) {
+      const ls = chart.addSeries(LineSeries, {
+        color: layer.color,
+        lineWidth: 1,
+        lineStyle: layer.key === "limit" ? 2 : 0,
+        title: layer.key,
+      });
+      ls.setData(
+        data.map((row) => ({
+          time: row.time,
+          value: layer.value,
+        })),
+      );
+    }
+    const markers = visibleEvents
+      .filter(
+        (e) =>
+          e.event_type.includes("SWEEP") ||
+          e.event_type.includes("BOS") ||
+          e.event_type.includes("FIB") ||
+          e.event_type.includes("ORDER") ||
+          e.event_type.includes("SESSION"),
+      )
       .map((e) => ({
         time: Math.floor(new Date(e.ts).getTime() / 1000) as UTCTimestamp,
         position: "belowBar" as const,
@@ -151,7 +206,52 @@ export default function StrategyDebuggerPage() {
       window.removeEventListener("resize", onResize);
       chart.remove();
     };
-  }, [chartBars, visibleEvents]);
+  }, [chartBars, visibleEvents, levelOverlays]);
+
+  useEffect(() => {
+    const host = chart4hRef.current;
+    if (!host || !bars4h.length) return;
+    const chart = createChart(host, {
+      layout: { background: { color: "#0e1015" }, textColor: "#a1a1aa" },
+      grid: { vertLines: { color: "#1f2128" }, horzLines: { color: "#1f2128" } },
+      width: host.clientWidth,
+      height: 180,
+      timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: "#64748b",
+      downColor: "#475569",
+      borderVisible: false,
+      wickUpColor: "#64748b",
+      wickDownColor: "#475569",
+    });
+    const biasMarkers = (sim?.decision_events ?? [])
+      .filter((e) => e.event_type === "BIAS_CONFIRMED" && e.bar_index <= (bars[replayIdx]?.bar_index ?? 1e9))
+      .map((e) => ({
+        time: Math.floor(new Date(e.ts).getTime() / 1000) as UTCTimestamp,
+        position: "aboveBar" as const,
+        color: "#a78bfa",
+        shape: "square" as const,
+        text: "4H bias",
+      }));
+    series.setData(
+      bars4h.map((b) => ({
+        time: Math.floor(new Date(b.ts).getTime() / 1000) as UTCTimestamp,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+      })),
+    );
+    if (biasMarkers.length) createSeriesMarkers(series, biasMarkers);
+    chart.timeScale().fitContent();
+    const onResize = () => chart.applyOptions({ width: host.clientWidth });
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.remove();
+    };
+  }, [bars4h, sim, bars, replayIdx]);
 
   function jumpToEvent(idx: number) {
     const ev = sim?.decision_events[idx];
@@ -207,6 +307,13 @@ export default function StrategyDebuggerPage() {
         <div className="rounded-lg border border-amber-900/50 bg-amber-950/30 p-4 text-amber-200">{error}</div>
       )}
 
+      {bars4h.length > 0 && (
+        <div>
+          <p className="mb-1 text-xs text-zinc-500">4H bias context (markers only after confirmation in replay)</p>
+          <div ref={chart4hRef} className="w-full rounded-lg border border-zinc-800 bg-[#0e1015]" />
+        </div>
+      )}
+      <p className="text-xs text-zinc-500">5m execution · fib/limit/stop/target lines from visible events only</p>
       <div ref={chartRef} className="w-full rounded-lg border border-zinc-800 bg-[#0e1015]" />
 
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">

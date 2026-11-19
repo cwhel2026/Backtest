@@ -89,7 +89,14 @@ def test_stop_first_on_ambiguous_bar():
         trading_hours={},
         default_commission_per_side=D("0"),
     )
-    cfg = VideoConfig(tick=D("1"), multiplier=D("1"), slippage_ticks=0, commission_side=D("0"))
+    cfg = VideoConfig(
+        tick=D("1"),
+        multiplier=D("1"),
+        slippage_ticks=0,
+        commission_side=D("0"),
+        pending_fill_policy="allow_fill_then_exit",
+        entry_bar_exit_policy="conservative_ohlc",
+    )
     t = simulate(bars, [o], cfg, inst)
     assert t[0]["exit_reason"] == "stop"
 

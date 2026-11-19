@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.backtest.bars import TIMEFRAME_MINUTES, load_bars
+from app.backtest.bars import TIMEFRAME_MINUTES, aggregate_bars, load_bars
 from app.db.session import SyncSessionLocal, get_db
 from app.models.backtest import BacktestRun, BacktestTrade, OhlcvBar
 from app.models.market_data import HistoricalDataset
@@ -210,6 +210,40 @@ async def debugger_bars(
             volume=int(b.volume),
         )
         for i, b in enumerate(slice_bars)
+    ]
+
+
+@router.get("/{run_id}/debugger/bars-4h", response_model=list[OhlcvBarOut])
+async def debugger_bars_4h(
+    run_id: str,
+    offset: int = 0,
+    limit: int = 200,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[OhlcvBarOut]:
+    """4H bars aggregated from the run dataset (for Berg bias chart)."""
+    run = await db.get(BacktestRun, uuid.UUID(run_id))
+    if not run:
+        raise HTTPException(404, "Backtest not found")
+    dataset = await db.get(HistoricalDataset, run.dataset_id)
+    if not dataset:
+        raise HTTPException(404, "Dataset not found")
+    with SyncSessionLocal() as session:
+        bars = load_bars(session, dataset.id)
+    agg = aggregate_bars(bars, "4h")
+    off = max(0, offset)
+    lim = max(20, min(limit, 500))
+    slice_bars = agg[off : off + lim]
+    return [
+        OhlcvBarOut(
+            ts=b.ts.isoformat(),
+            open=float(b.open),
+            high=float(b.high),
+            low=float(b.low),
+            close=float(b.close),
+            volume=int(b.volume),
+        )
+        for b in slice_bars
     ]
 
 
