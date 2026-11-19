@@ -75,6 +75,9 @@ def _dataset_out(d: HistoricalDataset) -> HistoricalDatasetOut:
         content_checksum=d.content_checksum,
         storage_uri=d.storage_uri or meta.get("storage_uri"),
         quality_class=meta.get("quality_class"),
+        data_lineage=meta.get("data_lineage"),
+        genuine_for_research=meta.get("genuine_for_research"),
+        data_lineage_label=meta.get("data_lineage_label"),
         meta=meta,
     )
 
@@ -90,6 +93,19 @@ async def research_data_budget(
 @router.get("/provider-tiers")
 async def provider_tiers(_: User = Depends(get_current_user)) -> dict:
     return PROVIDER_TIERS
+
+
+@router.get("/provider-comparison")
+async def provider_comparison(
+    days: int = 14,
+    _: User = Depends(get_current_user),
+) -> dict:
+    """MNQ/MES/MGC provider matrix + optional live Databento get_cost when API key is set."""
+    from app.services.market_data.provider_comparison import comparison_catalog, quote_micro_bundle_days
+
+    payload = comparison_catalog()
+    payload["estimates"] = quote_micro_bundle_days(max(1, min(days, 90)))
+    return payload
 
 
 @router.get("/providers", response_model=list[ProviderHealthOut])

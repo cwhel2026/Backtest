@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from app.backtest.bars import Bar
@@ -63,16 +63,24 @@ def build_4h_bias_series(
     return series
 
 
+_4H = timedelta(hours=4)
+
+
+def _four_hour_close(bar: Bar) -> datetime:
+    """Bucket open + 4h — bias from this bar is unknown until this instant."""
+    return bar.ts + _4H
+
+
 def bias_for_5m_bar(
     bars_4h: list[Bar],
     bias_series: list[Bias4hSnapshot],
     ts: datetime,
 ) -> Bias4hSnapshot:
-    """Map a 5m timestamp to the last completed 4H bar (no future 4H leak)."""
+    """Map a 5m timestamp to the last *completed* 4H bar (no in-progress 4H leak)."""
     idx = -1
     u = ts.astimezone(bars_4h[0].ts.tzinfo) if ts.tzinfo and bars_4h else ts
     for i, b in enumerate(bars_4h):
-        if b.ts <= u:
+        if _four_hour_close(b) <= u:
             idx = i
         else:
             break
