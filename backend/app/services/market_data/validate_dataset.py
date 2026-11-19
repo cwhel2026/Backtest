@@ -139,18 +139,35 @@ def validate_and_persist(
     symbol: str,
     tick_size: Decimal | None,
     instrument_trading_hours: dict | None = None,
+    sample_large: bool = True,
 ) -> dict:
-    bars = load_bars(session, dataset.id)
+    from app.services.market_data.ohlcv_parquet import bar_count as parquet_bar_count
+
+    row_count = dataset.row_count or parquet_bar_count(dataset.id)
+    if sample_large and row_count > 100_000:
+        from app.services.market_data.parquet_audit import audit_dataset_sampled, sample_bars_for_audit
+
+        report = audit_dataset_sampled(
+            dataset.id,
+            timeframe=dataset.timeframe,
+            symbol=symbol,
+            max_bars=60_000,
+        )
+        bars = sample_bars_for_audit(dataset.id, max_bars=15_000, timeframe=dataset.timeframe)
+    else:
+        bars = load_bars(session, dataset.id)
+        report = None
     rollover_events = (dataset.meta or {}).get("rollover_events") if isinstance(dataset.meta, dict) else []
     th = instrument_trading_hours if instrument_trading_hours is not None else {}
-    report = extended_audit(
-        bars,
-        timeframe=dataset.timeframe,
-        symbol=symbol,
-        tick_size=tick_size,
-        rollover_events=rollover_events,
-        instrument_trading_hours=th,
-    )
+    if report is None:
+        report = extended_audit(
+            bars,
+            timeframe=dataset.timeframe,
+            symbol=symbol,
+            tick_size=tick_size,
+            rollover_events=rollover_events,
+            instrument_trading_hours=th,
+        )
     qclass, notes = classify_quality(report, symbol=symbol, timeframe=dataset.timeframe)
     readiness = video_strategy_readiness(
         bars, symbol=symbol, timeframe=dataset.timeframe, instrument_trading_hours=th

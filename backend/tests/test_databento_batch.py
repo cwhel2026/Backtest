@@ -1,25 +1,22 @@
-from datetime import UTC, datetime
-from decimal import Decimal
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from app.services.market_data.databento_batch import (
     _allowed_upload_name,
-    _root_from_symbol_label,
-    bars_by_root_from_dbn,
     complete_upload_session,
     init_upload_session,
     list_purchased_batch_jobs,
     save_upload_chunk,
+    stream_dbn_file,
 )
+from app.services.market_data.dbn_symbology import SymbologyResolver
 
 
 def test_symbol_roots():
-    assert _root_from_symbol_label("MNQ.c.0") == "MNQ"
-    assert _root_from_symbol_label("MES.c.0") == "MES"
-    assert _root_from_symbol_label("GC.c.0") is None
+    assert SymbologyResolver._root_from_label("MNQ.c.0") == "MNQ"
+    assert SymbologyResolver._root_from_label("MES.c.0") == "MES"
+    assert SymbologyResolver._root_from_label("GC.c.0") is None
 
 
 def test_upload_suffix_validation():
@@ -39,32 +36,43 @@ def test_list_jobs_no_submit(mock_client):
 
 
 @patch("app.services.market_data.databento_batch.DBNStore")
-def test_bars_by_root_from_dbn(mock_store_cls, tmp_path):
+@patch("app.services.market_data.databento_batch.write_bars")
+def test_stream_dbn_file_chunked(mock_write, mock_store_cls, tmp_path):
     path = tmp_path / "t.dbn.zst"
     path.write_bytes(b"x")
     store = MagicMock()
     store.schema = "ohlcv-1m"
     store.dataset = "GLBX.MDP3"
     store.symbols = ["MNQ.c.0"]
-    store.stype_in = "continuous"
-    store.compression = "zstd"
-    idx = pd.date_range("2024-01-01", periods=2, freq="min", tz=UTC)
-    frame = pd.DataFrame(
-        {
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [10, 12],
-            "symbol": ["MNQ.c.0", "MNQ.c.0"],
-        },
-        index=idx,
+    store.symbology = None
+    store.to_df.return_value = iter(
+        [
+            pd.DataFrame(
+                {
+                    "open": [1.0],
+                    "high": [1.1],
+                    "low": [0.9],
+                    "close": [1.05],
+                    "volume": [10],
+                    "symbol": ["MNQ.c.0"],
+                },
+                index=pd.date_range("2024-01-01", periods=1, freq="min", tz="UTC"),
+            )
+        ]
     )
-    store.to_df.return_value = frame
     mock_store_cls.from_file.return_value = store
-    by_root, meta = bars_by_root_from_dbn(path)
-    assert "MNQ" in by_root
-    assert len(by_root["MNQ"]) == 2
+    from uuid import uuid4
+
+    sinks = {
+        "MNQ": {
+            "dataset_id": uuid4(),
+            "buffer": [],
+            "rows_written": 0,
+        }
+    }
+    meta = stream_dbn_file(path, sinks)
+    assert meta["mapped_rows"] == 1
+    assert mock_write.called or sinks["MNQ"]["buffer"]
 
 
 def test_upload_chunk_roundtrip(tmp_path, monkeypatch):
@@ -81,7 +89,13 @@ def test_upload_chunk_roundtrip(tmp_path, monkeypatch):
 
 
 def test_prevent_paid_request_no_submit_endpoint():
-    """Bundle import must not expose submit_job in our service module."""
+    import ast
     import app.services.market_data.databento_batch as mod
 
     assert not hasattr(mod, "submit_databento_batch_job")
+    tree = ast.parse(open(mod.__file__).read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "submit_job":
+                raise AssertionError("databento_batch must not call batch.submit_job")

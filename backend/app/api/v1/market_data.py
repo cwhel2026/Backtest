@@ -566,6 +566,15 @@ async def databento_batch_import(
     req = DatabentoBatchImportRequest(**body)
     if not settings.databento_configured:
         raise HTTPException(400, detail="DATABENTO_API_KEY not configured")
+    from app.services.market_data.databento_batch import list_purchased_batch_jobs
+
+    jobs = {j["id"]: j for j in list_purchased_batch_jobs()}
+    meta_job = jobs.get(req.databento_batch_job_id)
+    if meta_job and meta_job.get("state") not in ("done", None):
+        raise HTTPException(
+            400,
+            detail=f"Batch job is not complete (state={meta_job.get('state')}). Wait until Databento marks it done.",
+        )
     job_id = create_ingestion_job(
         {
             "provider": "databento_batch",

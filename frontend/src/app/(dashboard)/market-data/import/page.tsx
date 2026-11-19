@@ -146,7 +146,7 @@ export default function ImportHistoricalDataPage() {
                   >
                     <span className="font-medium text-zinc-100">{j.id.slice(0, 12)}…</span>
                     <span className="ml-2 text-xs text-zinc-500">
-                      {j.state} · {j.schema} · {j.symbols}
+                      {j.state === "done" ? "Ready to import" : j.state} · {j.schema} · {String(j.symbols)}
                     </span>
                   </button>
                 </li>
@@ -157,7 +157,11 @@ export default function ImportHistoricalDataPage() {
             <Button variant="secondary" className="flex-1" onClick={loadJobs}>
               Refresh list
             </Button>
-            <Button className="flex-1" disabled={!selectedJob || busy} onClick={importBatch}>
+            <Button
+              className="flex-1"
+              disabled={!selectedJob || busy || jobs.find((j) => j.id === selectedJob)?.state !== "done"}
+              onClick={importBatch}
+            >
               Import selected batch
             </Button>
           </div>
