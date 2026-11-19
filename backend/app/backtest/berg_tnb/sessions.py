@@ -115,6 +115,16 @@ def completed_measurement_for_bar(
     return None
 
 
+def entry_fib_trading_active(bar_ts: datetime, profile: SessionProfile) -> bool:
+    """Interpretation: NY index setup may place/amend entry fib until 21:00 UTC same day."""
+    u = bar_ts.astimezone(UTC) if bar_ts.tzinfo else bar_ts.replace(tzinfo=UTC)
+    t = u.timetz().replace(tzinfo=None)
+    if t < profile.new_york_open_gmt:
+        return False
+    # After NY open through end of US cash (interpretation — PDF silent on amendment cutoff).
+    return t < time(21, 0)
+
+
 def aggregate_session_extremes(
     bars: list[Bar],
     start: datetime,

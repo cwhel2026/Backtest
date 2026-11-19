@@ -216,6 +216,14 @@ export default function BacktestDetailPage() {
         <p className="mt-1 break-all font-mono text-[10px] text-zinc-500 md:text-xs">
           Repro {run.reproducibility_id}
         </p>
+        {run.status === "completed" && (
+          <a
+            href={`/strategy-debugger?run_id=${id}`}
+            className="mt-3 inline-block rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-900/40"
+          >
+            Open Strategy Debugger
+          </a>
+        )}
       </header>
 
       <div ref={chartRef} className="w-full rounded-lg border border-zinc-800" />

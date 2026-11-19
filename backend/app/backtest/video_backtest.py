@@ -7,8 +7,10 @@ from decimal import Decimal
 from app.backtest.bars import Bar
 from app.backtest.dsl import validate_spec
 from app.services.market_data.sessions import session_keys_for_bars
+from app.backtest.decision_events import DecisionEvent, DecisionEventType, merge_execution_events
 from app.backtest.engine import BacktestAssumptions, BacktestResult
 from app.backtest.metrics import SimulatedTrade, compute_metrics
+from app.backtest.simulation_provenance import build_simulation_provenance
 from app.backtest.video_strategies import (
     VideoConfig,
     anchor_bos_orders,
@@ -96,4 +98,51 @@ def run_video_backtest(
         hint = backtest_zero_trade_hint(0, readiness, "ready")
         if hint:
             warnings.append(f"Zero trades: {hint}")
-    return BacktestResult(trades, metrics, equity_curve, warnings)
+    events: list[DecisionEvent] = []
+    ts_to_index = {b.ts.isoformat(): idx for idx, b in enumerate(bars)}
+    for o in orders:
+        events.append(
+            DecisionEvent(
+                ts=bars[o.signal_index].ts,
+                bar_index=o.signal_index,
+                event_type=DecisionEventType.ORDER_SUBMITTED,
+                strategy=entry_type,
+                strategy_version="v1",
+                setup_id=f"video-{o.signal_index}",
+                direction=o.direction,
+                explanation=o.reason,
+                rule_id=f"video.{entry_type}.signal",
+                source="pdf_confirmed",
+                levels={"limit": str(o.limit), "stop": str(o.stop), "target": str(o.target)},
+                data_available_ts=bars[o.signal_index].ts,
+            )
+        )
+    for i, t in enumerate(trades):
+        order_ev = (t.get("meta") or {}).get("order_events") or []
+        events = merge_execution_events(
+            events,
+            order_ev,
+            strategy=entry_type,
+            setup_id=f"video-trade-{i + 1}",
+            bar_index_lookup=ts_to_index,
+            include_placed=False,
+        )
+    dc = spec.get("data_context") or {}
+    provenance = build_simulation_provenance(
+        spec=spec,
+        instrument_symbol=instrument.symbol,
+        dataset_version=dc.get("dataset_version"),
+        dataset_checksum=dc.get("dataset_checksum"),
+        timeframe=dataset_timeframe,
+        bar_count=len(bars),
+    )
+    metrics["decision_event_count"] = len(events)
+    return BacktestResult(
+        trades,
+        metrics,
+        equity_curve,
+        warnings,
+        decision_events=[e.to_dict() for e in events],
+        rejected_setups=[],
+        simulation_provenance=provenance,
+    )

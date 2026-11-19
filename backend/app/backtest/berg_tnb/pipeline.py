@@ -17,7 +17,12 @@ from app.backtest.berg_tnb.fib import (
     fib_fakeout_level,
 )
 from app.backtest.berg_tnb.fractals import FractalConfig, confirmed_fractals, fractals_visible_at
-from app.backtest.berg_tnb.sessions import aggregate_session_extremes, completed_measurement_for_bar, get_profile
+from app.backtest.berg_tnb.sessions import (
+    aggregate_session_extremes,
+    completed_measurement_for_bar,
+    entry_fib_trading_active,
+    get_profile,
+)
 from app.backtest.berg_tnb.types import (
     BergTnbSetup,
     BergTnbState,
@@ -29,7 +34,9 @@ from app.backtest.berg_tnb.types import (
     StateTransition,
     SweepRecord,
 )
+from app.backtest.berg_tnb.events import emit
 from app.backtest.berg_tnb.fractals import ConfirmedFractal
+from app.backtest.decision_events import DecisionEvent, DecisionEventType, RejectedSetup
 from app.backtest.video_strategies import Order, round_tick
 
 
@@ -141,14 +148,17 @@ class BergTnbEngine:
             "allow_exact_sweep_touch": bool(entry.get("allow_exact_sweep_touch", True)),
             "sweep_ticks_experimental": int(entry.get("sweep_ticks_experimental", 0)),
             "order_expire_bars": int(entry.get("order_expire_bars", 36)),
+            "entry_fib_mode": entry.get("entry_fib_mode", "single_snapshot"),
             "exit_profile": (spec.get("exit_meta") or {}).get("profile", "structural_rr"),
             "reward_risk": str((spec.get("exit_meta") or {}).get("reward_risk", "2")),
             "dataset_version": (spec.get("data_context") or {}).get("dataset_version"),
         }
 
-    def run(self) -> tuple[list[BergTnbSetup], list[Order]]:
+    def run(self) -> tuple[list[BergTnbSetup], list[Order], list[DecisionEvent], list[RejectedSetup]]:
+        events: list[DecisionEvent] = []
+        rejections: list[RejectedSetup] = []
         if not self.bars:
-            return [], []
+            return [], [], events, rejections
         suppress = set()
         rollover_events = (self.spec.get("data_context") or {}).get("rollover_events")
         suppress = _rollover_suppress(self.bars, self.tick, rollover_events)
@@ -181,6 +191,221 @@ class BergTnbEngine:
         current_session_lo: Decimal | None = None
         current_session_hi: Decimal | None = None
         post_bos_extreme_start: int | None = None
+        order_tracking_start: int | None = None
+
+        def _reset_active_setup() -> None:
+            nonlocal setup, state, liquidity_level, session_rec, fakeout, fakeout_done, bos_done
+            nonlocal reversal_idx, pending_order, sweep_idx, post_bos_high, post_bos_low
+            nonlocal session_low_track, session_high_track, post_bos_extreme_start, order_tracking_start
+            setup_holder = BergTnbSetup(str(uuid.uuid4()), [])
+            setup = setup_holder
+            state = BergTnbState.WAITING_FOR_SESSION_LEVEL if bias_dir else BergTnbState.WAITING_FOR_4H_BIAS
+            liquidity_level = None
+            session_rec = None
+            fakeout = None
+            fakeout_done = bos_done = False
+            reversal_idx = None
+            pending_order = None
+            sweep_idx = None
+            post_bos_high = post_bos_low = None
+            session_low_track = session_high_track = None
+            post_bos_extreme_start = None
+            order_tracking_start = None
+
+        def _complete_setup(reason: str) -> None:
+            nonlocal setup, state
+            _log(
+                setup,
+                ts=b.ts,
+                frm=state,
+                to=BergTnbState.COMPLETED,
+                bar_index=i,
+                reason=reason,
+                cfg=self.cfg,
+            )
+            setups.append(setup)
+            _reset_active_setup()
+
+        def _process_entry_fib() -> None:
+            nonlocal pending_order, state, post_bos_high, post_bos_low, session_low_track, session_high_track
+            nonlocal order_tracking_start
+            if not bos_done or bias_dir is None:
+                return
+            if post_bos_extreme_start is not None:
+                post_bos_high = max(post_bos_high or b.high, b.high)
+                post_bos_low = min(post_bos_low or b.low, b.low)
+            if current_session_lo is not None:
+                session_low_track = current_session_lo
+            if current_session_hi is not None:
+                session_high_track = current_session_hi
+            for j in range((post_bos_extreme_start or i), i + 1):
+                post_bos_high = max(post_bos_high or self.bars[j].high, self.bars[j].high)
+                post_bos_low = min(post_bos_low or self.bars[j].low, self.bars[j].low)
+            ratio = Decimal(self.cfg["entry_fib_ratio"])
+            if bias_dir == "bullish":
+                low_a = session_low_track or b.low
+                high_a = post_bos_high or b.high
+            else:
+                low_a = post_bos_low or b.low
+                high_a = session_high_track or b.high
+            limit = fib_entry_limit(low_a, high_a, bias_dir, ratio, self.tick)
+            structural = (
+                (session_low_track - self.tick * 2)
+                if bias_dir == "bullish" and session_low_track is not None
+                else (session_high_track + self.tick * 2)
+                if bias_dir == "bearish" and session_high_track is not None
+                else None
+            )
+            if structural is None:
+                return
+            stop, target, exit_label = resolve_exit_prices(
+                self.cfg["exit_profile"],
+                direction=bias_dir,
+                entry=limit,
+                structural_stop=structural,
+                tick=self.tick,
+            )
+            mode = self.cfg.get("entry_fib_mode", "single_snapshot")
+            trading_ok = entry_fib_trading_active(b.ts, profile)
+            expired = order_tracking_start is not None and i >= order_tracking_start + self.cfg["order_expire_bars"]
+            if not trading_ok or expired:
+                if pending_order is not None and mode == "dynamic_pdf_experimental":
+                    emit(
+                        events,
+                        ts=b.ts,
+                        bar_index=i,
+                        event_type=DecisionEventType.ORDER_EXPIRED,
+                        setup_id=setup.setup_id,
+                        direction=bias_dir,
+                        explanation="Entry fib tracking cutoff (session or bar expiry)",
+                        rule_id="berg.entry_fib.cutoff",
+                        source="interpretation",
+                        levels={"limit": str(pending_order.limit)},
+                    )
+                elif pending_order is None:
+                    rejections.append(
+                        RejectedSetup(
+                            ts=b.ts,
+                            bar_index=i,
+                            strategy=self.cfg["strategy_id"],
+                            setup_id=setup.setup_id,
+                            reason_code="ENTRY_FIB_CUTOFF_NO_ORDER",
+                            explanation="Entry fib window ended before a limit could be placed",
+                            rule_id="berg.entry_fib.cutoff",
+                            source="interpretation",
+                        )
+                    )
+                _complete_setup("Entry fib tracking complete")
+                return
+
+            if pending_order is None:
+                pending_order = Order(
+                    self.cfg["strategy_id"],
+                    "long" if bias_dir == "bullish" else "short",
+                    i,
+                    limit,
+                    round_tick(stop, self.tick, "down" if bias_dir == "bullish" else "up"),
+                    round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down"),
+                    i + self.cfg["order_expire_bars"],
+                    f"Berg TNB entry fib {ratio}; exit={exit_label}",
+                )
+                orders.append(pending_order)
+                setup.order_index = i
+                order_tracking_start = i
+                setup.entry_fib = EntryFibRecord(
+                    low_a,
+                    high_a,
+                    b.ts,
+                    b.ts,
+                    ratio,
+                    limit,
+                    [],
+                )
+                fib_source = (
+                    "experimental" if mode == "dynamic_pdf_experimental" else "pdf_confirmed"
+                )
+                emit(
+                    events,
+                    ts=b.ts,
+                    bar_index=i,
+                    event_type=DecisionEventType.FIB_ANCHOR_CREATED,
+                    setup_id=setup.setup_id,
+                    direction=bias_dir,
+                    explanation="Entry Fibonacci anchors locked for limit",
+                    rule_id="berg.entry_fib.anchor",
+                    source=fib_source,
+                    levels={"low": str(low_a), "high": str(high_a), "limit": str(limit)},
+                )
+                emit(
+                    events,
+                    ts=b.ts,
+                    bar_index=i,
+                    event_type=DecisionEventType.ORDER_SUBMITTED,
+                    setup_id=setup.setup_id,
+                    direction=bias_dir,
+                    explanation="Limit order submitted at entry fib",
+                    rule_id="berg.entry_fib.order",
+                    source=fib_source,
+                    levels={"limit": str(limit), "stop": str(stop), "target": str(target)},
+                )
+                _log(
+                    setup,
+                    ts=b.ts,
+                    frm=BergTnbState.TRACKING_ENTRY_FIB,
+                    to=BergTnbState.LIMIT_ORDER_PENDING,
+                    bar_index=i,
+                    reason="Entry limit placed",
+                    evidence={"limit": str(limit), "exit_profile": exit_label, "mode": mode},
+                    cfg=self.cfg,
+                )
+                state = (
+                    BergTnbState.LIMIT_ORDER_PENDING
+                    if mode == "dynamic_pdf_experimental"
+                    else BergTnbState.TRACKING_ENTRY_FIB
+                )
+                if mode == "single_snapshot":
+                    _complete_setup("Setup sequenced; execution delegated")
+                return
+
+            if limit != pending_order.limit and mode == "dynamic_pdf_experimental":
+                before = {"limit": str(pending_order.limit)}
+                pending_order.limit = limit
+                pending_order.stop = round_tick(stop, self.tick, "down" if bias_dir == "bullish" else "up")
+                pending_order.target = round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down")
+                if setup.entry_fib:
+                    setup.entry_fib.limit_price = limit
+                    setup.entry_fib.anchor_low = low_a
+                    setup.entry_fib.anchor_high = high_a
+                    setup.entry_fib.updates.append(
+                        {"ts": b.ts.isoformat(), "bar_index": i, "limit": str(limit), "low": str(low_a), "high": str(high_a)}
+                    )
+                emit(
+                    events,
+                    ts=b.ts,
+                    bar_index=i,
+                    event_type=DecisionEventType.FIB_ANCHOR_UPDATED,
+                    setup_id=setup.setup_id,
+                    direction=bias_dir,
+                    explanation="Post-BOS extreme advanced; Fibonacci entry repriced",
+                    rule_id="berg.entry_fib.dynamic",
+                    source="experimental",
+                    levels={"limit": str(limit), "low": str(low_a), "high": str(high_a)},
+                    before_state=before,
+                    after_state={"limit": str(limit)},
+                )
+                emit(
+                    events,
+                    ts=b.ts,
+                    bar_index=i,
+                    event_type=DecisionEventType.ORDER_AMENDED,
+                    setup_id=setup.setup_id,
+                    direction=bias_dir,
+                    explanation="Pending limit amended (experimental dynamic entry fib)",
+                    rule_id="berg.entry_fib.amend",
+                    source="experimental",
+                    levels=before,
+                    after_state={"limit": str(limit)},
+                )
 
         for i, b in enumerate(self.bars):
             if i in suppress:
@@ -398,78 +623,35 @@ class BergTnbEngine:
                     state = BergTnbState.TRACKING_ENTRY_FIB
                 continue
 
-            if state == BergTnbState.TRACKING_ENTRY_FIB and bos_done and pending_order is None:
-                if post_bos_extreme_start is not None:
-                    post_bos_high = max(post_bos_high or b.high, b.high)
-                    post_bos_low = min(post_bos_low or b.low, b.low)
-                if current_session_lo is not None:
-                    session_low_track = current_session_lo
-                if current_session_hi is not None:
-                    session_high_track = current_session_hi
-                for j in range((post_bos_extreme_start or i), i + 1):
-                    post_bos_high = max(post_bos_high or self.bars[j].high, self.bars[j].high)
-                    post_bos_low = min(post_bos_low or self.bars[j].low, self.bars[j].low)
-                ratio = Decimal(self.cfg["entry_fib_ratio"])
-                if bias_dir == "bullish":
-                    low_a = session_low_track or b.low
-                    high_a = post_bos_high or b.high
-                else:
-                    low_a = post_bos_low or b.low
-                    high_a = session_high_track or b.high
-                limit = fib_entry_limit(low_a, high_a, bias_dir, ratio, self.tick)
-                setup.entry_fib = EntryFibRecord(low_a, high_a, b.ts, b.ts, ratio, limit, [])
-                structural = (
-                    (session_low_track - self.tick * 2)
-                    if bias_dir == "bullish"
-                    else (session_high_track + self.tick * 2)
-                )
-                stop, target, exit_label = resolve_exit_prices(
-                    self.cfg["exit_profile"],
-                    direction=bias_dir,
-                    entry=limit,
-                    structural_stop=structural,
-                    tick=self.tick,
-                )
-                pending_order = Order(
-                    "berg_tnb_model_v1",
-                    "long" if bias_dir == "bullish" else "short",
-                    i,
-                    limit,
-                    round_tick(stop, self.tick, "down" if bias_dir == "bullish" else "up"),
-                    round_tick(target, self.tick, "up" if bias_dir == "bullish" else "down"),
-                    i + self.cfg["order_expire_bars"],
-                    f"Berg TNB entry fib {ratio}; exit={exit_label}",
-                )
-                orders.append(pending_order)
-                setup.order_index = i
-                _log(
-                    setup,
-                    ts=b.ts,
-                    frm=BergTnbState.TRACKING_ENTRY_FIB,
-                    to=BergTnbState.LIMIT_ORDER_PENDING,
-                    bar_index=i,
-                    reason="Entry limit placed",
-                    evidence={"limit": str(limit), "exit_profile": exit_label},
-                    cfg=self.cfg,
-                )
-                _log(
-                    setup,
-                    ts=b.ts,
-                    frm=BergTnbState.LIMIT_ORDER_PENDING,
-                    to=BergTnbState.COMPLETED,
-                    bar_index=i,
-                    reason="Setup sequenced; execution delegated",
-                    cfg=self.cfg,
-                )
-                setups.append(setup)
-                setup = BergTnbSetup(str(uuid.uuid4()), [])
-                state = BergTnbState.WAITING_FOR_SESSION_LEVEL if bias_dir else BergTnbState.WAITING_FOR_4H_BIAS
-                liquidity_level = None
-                session_rec = None
-                fakeout_done = bos_done = False
-                reversal_idx = None
-                pending_order = None
+            if state in (BergTnbState.TRACKING_ENTRY_FIB, BergTnbState.LIMIT_ORDER_PENDING) and bos_done:
+                _process_entry_fib()
+                continue
 
         if setup.transitions and setup not in setups:
             setups.append(setup)
-        return setups, orders
+        transition_events = {
+            (BergTnbState.WAITING_FOR_4H_BIAS, BergTnbState.WAITING_FOR_SESSION_LEVEL): DecisionEventType.BIAS_CONFIRMED,
+            (BergTnbState.WAITING_FOR_SESSION_LEVEL, BergTnbState.WAITING_FOR_SWEEP): DecisionEventType.SESSION_LEVEL_FINALIZED,
+            (BergTnbState.WAITING_FOR_SWEEP, BergTnbState.WAITING_FOR_REVERSAL_CANDLE): DecisionEventType.LIQUIDITY_SWEEP_DETECTED,
+            (BergTnbState.WAITING_FOR_REVERSAL_CANDLE, BergTnbState.WAITING_FOR_FAKEOUT_0079): DecisionEventType.REVERSAL_CONFIRMED,
+            (BergTnbState.WAITING_FOR_FAKEOUT_0079, BergTnbState.WAITING_FOR_5M_BOS): DecisionEventType.FAKEOUT_CONFIRMED,
+            (BergTnbState.WAITING_FOR_5M_BOS, BergTnbState.TRACKING_ENTRY_FIB): DecisionEventType.BOS_CONFIRMED,
+        }
+        for s in setups:
+            for tr in s.transitions:
+                et = transition_events.get((tr.from_state, tr.to_state))
+                if not et:
+                    continue
+                emit(
+                    events,
+                    ts=tr.ts,
+                    bar_index=tr.bar_index,
+                    event_type=et,
+                    setup_id=s.setup_id,
+                    direction=(s.bias.direction if s.bias else None),
+                    explanation=tr.reason,
+                    rule_id=f"berg.{tr.to_state.value.lower()}",
+                    source="pdf_confirmed",
+                    levels=tr.evidence,
+                )
+        return setups, orders, events, rejections

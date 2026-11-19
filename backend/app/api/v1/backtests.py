@@ -11,7 +11,13 @@ from app.db.session import SyncSessionLocal, get_db
 from app.models.backtest import BacktestRun, BacktestTrade, OhlcvBar
 from app.models.market_data import HistoricalDataset
 from app.models.user import User
-from app.schemas.backtest import BacktestCreateRequest, BacktestRunSummary, BacktestTradeOut
+from app.schemas.backtest import (
+    BacktestCreateRequest,
+    BacktestRunSummary,
+    BacktestTradeOut,
+    DebuggerBarOut,
+    SimulationLogOut,
+)
 from app.schemas.market_data import OhlcvBarOut
 from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 from app.util.serde import enum_value, provisional_reproducibility_id
@@ -123,6 +129,90 @@ async def get_backtest_trades(
     ]
 
 
+@router.get("/{run_id}/simulation-log", response_model=SimulationLogOut)
+async def get_simulation_log(
+    run_id: str,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SimulationLogOut:
+    run = await db.get(BacktestRun, uuid.UUID(run_id))
+    if not run:
+        raise HTTPException(404, "Backtest not found")
+    if not run.simulation_log:
+        raise HTTPException(
+            404,
+            "This run has no simulation log. Re-run the backtest with engine 2.1+ to persist decision events.",
+        )
+    log = run.simulation_log
+    return SimulationLogOut(
+        decision_events=log.get("decision_events") or [],
+        rejected_setups=log.get("rejected_setups") or [],
+        simulation_provenance=log.get("simulation_provenance") or {},
+        engine_version=log.get("engine_version"),
+    )
+
+
+@router.get("/{run_id}/debugger/bars", response_model=list[DebuggerBarOut])
+async def debugger_bars(
+    run_id: str,
+    offset: int = 0,
+    limit: int = 500,
+    trade_number: int | None = None,
+    padding: int = 120,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DebuggerBarOut]:
+    """Windowed OHLCV bars for strategy debugger replay (no lookahead in client)."""
+    run = await db.get(BacktestRun, uuid.UUID(run_id))
+    if not run:
+        raise HTTPException(404, "Backtest not found")
+    provenance = (run.simulation_log or {}).get("simulation_provenance") or {}
+    if provenance.get("dataset_checksum") and run.parameters:
+        stored = run.parameters.get("dataset_checksum")
+        if stored and provenance.get("dataset_checksum") not in (stored, None):
+            raise HTTPException(409, "Dataset checksum mismatch — cannot replay with substituted data.")
+
+    dataset = await db.get(HistoricalDataset, run.dataset_id)
+    if not dataset:
+        raise HTTPException(404, "Dataset not found")
+
+    off = max(0, offset)
+    lim = max(50, min(limit, 2000))
+    pad = max(20, min(padding, 600))
+
+    with SyncSessionLocal() as session:
+        all_bars = load_bars(session, dataset.id)
+
+    if trade_number is not None:
+        result = await db.execute(
+            select(BacktestTrade)
+            .where(BacktestTrade.backtest_run_id == run.id)
+            .where(BacktestTrade.trade_number == trade_number)
+        )
+        trade = result.scalar_one_or_none()
+        if trade and all_bars:
+            minutes = TIMEFRAME_MINUTES.get(dataset.timeframe, 5)
+            # Find approximate bar index from signal timestamp
+            sig = trade.signal_ts
+            idx = next((i for i, b in enumerate(all_bars) if b.ts >= sig), 0)
+            off = max(0, idx - pad)
+            lim = min(len(all_bars) - off, pad * 2 + 200)
+
+    slice_bars = all_bars[off : off + lim]
+    return [
+        DebuggerBarOut(
+            bar_index=off + i,
+            ts=b.ts.isoformat(),
+            open=float(b.open),
+            high=float(b.high),
+            low=float(b.low),
+            close=float(b.close),
+            volume=int(b.volume),
+        )
+        for i, b in enumerate(slice_bars)
+    ]
+
+
 @router.get("/{run_id}/chart-bars", response_model=list[OhlcvBarOut])
 async def backtest_chart_bars(
     run_id: str,
@@ -217,4 +307,5 @@ def _serialize_run(run: BacktestRun) -> BacktestRunSummary:
         error=run.error,
         created_at=run.created_at.isoformat(),
         completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        has_simulation_log=bool(run.simulation_log),
     )

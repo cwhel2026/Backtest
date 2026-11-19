@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.market_data import OhlcvBarOut
+
 
 class BacktestCreateRequest(BaseModel):
     strategy_id: str
@@ -24,6 +26,18 @@ class BacktestRunSummary(BaseModel):
     error: str | None = None
     created_at: str
     completed_at: str | None
+    has_simulation_log: bool = False
+
+
+class SimulationLogOut(BaseModel):
+    decision_events: list[dict] = []
+    rejected_setups: list[dict] = []
+    simulation_provenance: dict = {}
+    engine_version: str | None = None
+
+
+class DebuggerBarOut(OhlcvBarOut):
+    bar_index: int
 
 
 class BacktestTradeOut(BaseModel):

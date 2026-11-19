@@ -96,6 +96,13 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         run.performance_category = PerformanceCategory.BACKTEST
         run.completed_at = datetime.now(UTC)
         run.status = "completed"
+        if result.decision_events is not None or result.rejected_setups is not None:
+            run.simulation_log = {
+                "decision_events": result.decision_events or [],
+                "rejected_setups": result.rejected_setups or [],
+                "simulation_provenance": result.simulation_provenance or {},
+                "engine_version": ENGINE_VERSION,
+            }
 
         session.execute(delete(BacktestTrade).where(BacktestTrade.backtest_run_id == run.id))
         for t in result.trades:

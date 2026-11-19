@@ -33,6 +33,9 @@ class BacktestResult:
     metrics: dict
     equity_curve: list[dict]
     warnings: list[str]
+    decision_events: list[dict] | None = None
+    rejected_setups: list[dict] | None = None
+    simulation_provenance: dict | None = None
 
 
 def run_backtest(

@@ -66,7 +66,7 @@ async def preview_timeline(
     with SyncSessionLocal() as sync:
         bars = load_bars(sync, ds.id)
         engine = BergTnbEngine(body.specification, bars, inst.tick_size)
-        setups, orders = engine.run()
+        setups, orders, _events, _rejected = engine.run()
     return {
         "setups": [_setup_payload(s) for s in setups],
         "order_count": len(orders),

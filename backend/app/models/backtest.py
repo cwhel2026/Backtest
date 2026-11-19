@@ -53,6 +53,7 @@ class BacktestRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    simulation_log: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class BacktestTrade(Base):

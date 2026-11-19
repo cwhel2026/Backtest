@@ -7,9 +7,11 @@ from decimal import Decimal
 
 from app.backtest.bars import Bar
 from app.backtest.berg_tnb.pipeline import BergTnbEngine
+from app.backtest.decision_events import merge_execution_events
 from app.backtest.dsl import validate_spec
 from app.backtest.engine import BacktestAssumptions, BacktestResult
 from app.backtest.metrics import SimulatedTrade, compute_metrics
+from app.backtest.simulation_provenance import build_simulation_provenance
 from app.backtest.video_execution import run_video_orders
 from app.backtest.video_strategies import VideoConfig, validate_bars
 from app.models.instrument import Instrument
@@ -39,7 +41,7 @@ def run_berg_tnb_backtest(
         )
 
     engine = BergTnbEngine(spec, bars, instrument.tick_size)
-    setups, orders = engine.run()
+    setups, orders, decision_events, rejected = engine.run()
     cfg = VideoConfig.from_instrument(
         instrument,
         spec,
@@ -103,7 +105,44 @@ def run_berg_tnb_backtest(
         "filled": order_stats.orders_filled,
         "expired": order_stats.orders_expired,
     }
-    return BacktestResult(trades, metrics, curve, warnings)
+    metrics["rejected_setups"] = len(rejected)
+    metrics["decision_event_count"] = len(decision_events)
+
+    events_out: list = list(decision_events)
+    ts_to_index = {b.ts.isoformat(): idx for idx, b in enumerate(bars)}
+    for i, t in enumerate(trades):
+        sid = setups[i].setup_id if i < len(setups) else (setups[0].setup_id if setups else "unknown")
+        order_ev = (t.get("meta") or {}).get("order_events") or []
+        events_out = merge_execution_events(
+            events_out,
+            order_ev,
+            strategy="berg_tnb_model_v1",
+            setup_id=sid,
+            bar_index_lookup={k: v for k, v in ts_to_index.items()},
+            include_placed=False,
+        )
+    events_payload = [e.to_dict() if hasattr(e, "to_dict") else e for e in events_out]
+
+    dc = spec.get("data_context") or {}
+    provenance = build_simulation_provenance(
+        spec=spec,
+        instrument_symbol=instrument.symbol,
+        dataset_version=dc.get("dataset_version"),
+        dataset_checksum=dc.get("dataset_checksum"),
+        timeframe="5m",
+        bar_count=len(bars),
+        extra={"berg_setups": len(setups), "berg_orders": len(orders)},
+    )
+
+    return BacktestResult(
+        trades,
+        metrics,
+        curve,
+        warnings,
+        decision_events=events_payload,
+        rejected_setups=[r.to_dict() for r in rejected],
+        simulation_provenance=provenance,
+    )
 
 
 def _has_4h_history(bars: list[Bar]) -> bool:

@@ -13,6 +13,7 @@ const NAV = [
   { href: "/market-data", label: "Historical Data", short: "Data" },
   { href: "/berg-tnb", label: "Berg TNB Model", short: "TNB" },
   { href: "/strategy-compare", label: "Strategy Compare", short: "Compare" },
+  { href: "/strategy-debugger", label: "Strategy Debugger", short: "Debug" },
   { href: "/strategies", label: "Strategies (advanced)", short: "Strategies" },
   { href: "/research", label: "Jobs (advanced)", short: "Jobs" },
 ];
