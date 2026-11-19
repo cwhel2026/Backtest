@@ -1,0 +1,4 @@
+{
+  "example_usd": 1.23,
+  "note": "Fixture documents shape only — client reads float from API"
+}

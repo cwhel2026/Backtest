@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     paper_profit_target: float = Field(default=6_000, validation_alias="PAPER_PROFIT_TARGET")
     paper_max_slots: int = Field(default=8, validation_alias="PAPER_MAX_SLOTS")
     ohlcv_store_dir: str = Field(default="data/ohlcv", validation_alias="OHLCV_STORE_DIR")
+    ohlcv_persistent_required: bool = Field(default=False, validation_alias="OHLCV_PERSISTENT_REQUIRED")
+    ohlcv_s3_bucket: str = Field(default="", validation_alias="OHLCV_S3_BUCKET")
+    databento_live_smoke: bool = Field(default=False, validation_alias="DATABENTO_LIVE_SMOKE")
     research_data_budget_gbp: float = Field(default=50.0, validation_alias="RESEARCH_DATA_BUDGET_GBP")
     gbp_usd_rate: float | None = Field(default=None, validation_alias="GBP_USD_RATE")
 

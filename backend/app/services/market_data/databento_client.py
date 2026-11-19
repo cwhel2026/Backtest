@@ -13,6 +13,13 @@ from databento import BentoClientError, BentoError
 
 from app.core.config import get_settings
 from app.backtest.bars import Bar
+from app.services.market_data.contract_series import (
+    PriceSeriesKind,
+    SeriesSelection,
+    databento_stype_in,
+    databento_symbol,
+    series_metadata,
+)
 from app.services.market_data.databento_ingest import (
     DATABENTO_FUTURES_DATASET,
     DATABENTO_OHLCV_SCHEMA,
@@ -94,7 +101,9 @@ def quote_download_cost(
 ) -> DatabentoCostQuote:
     """Official metadata.get_cost when a key is present; heuristic offline otherwise."""
     root = validate_root_symbol(instrument_symbol)
-    symbol = databento_continuous_symbol(root)
+    series = SeriesSelection(root=root, kind=PriceSeriesKind.CONTINUOUS_UNADJUSTED)
+    symbol = databento_symbol(series)
+    stype_in = databento_stype_in(series)
     start_utc = _ensure_utc(start)
     end_utc = _ensure_utc(end)
     if end_utc <= start_utc:
@@ -128,7 +137,7 @@ def quote_download_cost(
             end=end_utc,
             symbols=symbol,
             schema=DATABENTO_OHLCV_SCHEMA,
-            stype_in="continuous",
+            stype_in=stype_in,
         )
         usd = float(raw) if raw is not None else 0.0
         source = "databento.get_cost"
@@ -169,14 +178,17 @@ def fetch_ohlcv_1m_with_retries(
     end: datetime,
     *,
     api_key: str | None = None,
+    series: SeriesSelection | None = None,
     max_attempts: int = 3,
     retry_sleep_s: float = 2.0,
 ) -> tuple[list[Bar], dict]:
     """Download 1m OHLCV; returns bars and symbology/rollover metadata (not back-adjusted)."""
-    validate_root_symbol(instrument_symbol)
+    root = validate_root_symbol(instrument_symbol)
     start_utc = _ensure_utc(start)
     end_utc = _ensure_utc(end)
-    symbol = databento_continuous_symbol(instrument_symbol)
+    series = series or SeriesSelection(root=root, kind=PriceSeriesKind.CONTINUOUS_UNADJUSTED)
+    symbol = databento_symbol(series)
+    stype_in = databento_stype_in(series)
     key = (api_key or get_settings().databento_api_key).strip()
     if not key:
         raise ValueError("Databento API key not configured")
@@ -191,7 +203,7 @@ def fetch_ohlcv_1m_with_retries(
                 symbols=symbol,
                 start=start_utc,
                 end=end_utc,
-                stype_in="continuous",
+                stype_in=stype_in,
                 stype_out="instrument_id",
             )
             frame = store.to_df()
@@ -199,10 +211,11 @@ def fetch_ohlcv_1m_with_retries(
             bars = _frame_to_bars(frame)
             return bars, {
                 **meta,
+                **series_metadata(series),
                 "databento_dataset": DATABENTO_FUTURES_DATASET,
                 "databento_continuous_symbol": symbol,
                 "databento_actual_symbol_type": "instrument_id",
-                "back_adjusted": False,
+                "back_adjusted": series.kind == PriceSeriesKind.CONTINUOUS_ADJUSTED,
                 "price_stitching": False,
             }
         except (BentoClientError, BentoError) as exc:

@@ -10,6 +10,7 @@ from app.models.instrument import Instrument
 from app.models.market_data import HistoricalDataset
 from app.services.market_data.bar_storage import persist_bars_to_dataset
 from app.services.market_data.budget import record_actual_spend
+from app.services.market_data.contract_series import selection_from_ingest_payload
 from app.services.market_data.databento_client import quote_download_cost
 from app.services.market_data.databento_ingest import bars_for_timeframe, fetch_databento_ohlcv_1m_with_meta
 from app.services.market_data.dataset_catalog import create_versioned_dataset, ingest_fingerprint
@@ -42,7 +43,10 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
     if not inst:
         raise ValueError(f"Unknown instrument {symbol}")
 
-    bars_1m, sym_meta = fetch_databento_ohlcv_1m_with_meta(instrument_symbol=symbol, start=start, end=end)
+    series = selection_from_ingest_payload(payload, symbol)
+    bars_1m, sym_meta = fetch_databento_ohlcv_1m_with_meta(
+        instrument_symbol=symbol, start=start, end=end, series=series
+    )
     if not bars_1m:
         raise ValueError(
             f"No OHLCV bars returned for {symbol} ({start.isoformat()} → {end.isoformat()}). "
@@ -91,7 +95,13 @@ def run_databento_ingestion(session: Session, payload: dict) -> HistoricalDatase
             **{k: v for k, v in sym_meta.items() if k not in ("rollover_events", "symbology_note")},
         },
     )
-    validate_and_persist(session, dataset, symbol=symbol, tick_size=inst.tick_size)
+    validate_and_persist(
+        session,
+        dataset,
+        symbol=symbol,
+        tick_size=inst.tick_size,
+        instrument_trading_hours=inst.trading_hours or {},
+    )
     session.flush()
     return dataset
 

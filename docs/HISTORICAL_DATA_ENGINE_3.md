@@ -30,10 +30,20 @@
 ## Limitations
 
 - No live FX for GBP — set `GBP_USD_RATE` manually.
-- Databento integration tests use mocks unless you run with a real key locally.
-- Session/holiday calendar is heuristic (RTH session keys); not a full exchange calendar DB.
+- Databento integration tests use mocks; live `get_cost` only when `DATABENTO_LIVE_SMOKE=true` (skipped in CI).
+- `exchange_calendars` **CMES** covers exchange schedules; RTH window still comes from instrument `trading_hours`.
+- S3 object store hook (`OHLCV_S3_BUCKET`) is metadata-only until a backend driver is added — use Railway volume today.
 - Roll metadata is best-effort from Databento symbology; prices are **not** back-adjusted across rolls.
-- Yahoo/FinzData/IBKR paths unchanged in structure; Engine 3.0 hardens Databento + quality + budget + UI.
+- Yahoo/FinzData/IBKR paths unchanged in structure.
+
+## Hardening pass (calendar, rollover, health)
+
+- **Calendar:** `exchange_calendar.py` + `sessions.py` — CMES holidays/early close, configurable RTH/ETH from instrument hours.
+- **Rollover:** `contract_series.py` — continuous unadjusted (default), adjusted/outright flags, roll-gap detection in quality.
+- **Databento spec tests:** `test_databento_api_spec.py` asserts SDK params; optional `test_databento_live_smoke.py`.
+- **Persistence:** `storage_health.py` + `OHLCV_PERSISTENT_REQUIRED` warns on Railway if store is repo-local.
+- **Health API:** `GET /api/v1/market-data/health` + dashboard panel.
+- **Video strategies:** session keys from calendar RTH; readiness counts `rth:` sessions; limit rules unchanged in `video_strategies.py`.
 
 ## Video strategies
 

@@ -373,3 +373,70 @@ async def request_ingestion(
         background_tasks.add_task(run_data_ingestion, job_id)
         status = "processing"
     return {"job_id": job_id, "status": status, "meta": meta}
+
+
+@router.get("/health")
+async def market_data_health(
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.core.config import get_settings
+    from app.models.instrument import Instrument
+    from app.services.market_data.databento_client import check_dataset_range
+    from app.services.market_data.storage_health import (
+        check_database,
+        check_not_ephemeral,
+        check_store_writable,
+        store_paths,
+    )
+
+    settings = get_settings()
+
+    db_ok = True
+    db_msg = "async pool ok"
+    try:
+        await db.execute(select(Instrument).limit(1))
+    except Exception as exc:
+        db_ok = False
+        db_msg = str(exc)
+
+    sync_db_ok, sync_db_msg = True, "n/a"
+    with SyncSession() as session:
+        sync_db_ok, sync_db_msg = check_database(session)
+        budget = budget_status(session)
+
+    store_ok, store_msg = check_store_writable()
+    persist_ok, persist_msg = check_not_ephemeral()
+
+    databento = {
+        "configured": settings.databento_configured,
+        "live_smoke_enabled": settings.databento_live_smoke,
+    }
+    if settings.databento_configured:
+        databento["range_probe"] = check_dataset_range(
+            datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+            datetime.fromisoformat("2024-06-02T00:00:00+00:00"),
+        )
+
+    datasets = (await db.execute(select(HistoricalDataset).order_by(HistoricalDataset.downloaded_at.desc()).limit(20))).scalars().all()
+    ready = sum(1 for d in datasets if (d.meta or {}).get("quality_class") == "ready")
+    blocked = sum(1 for d in datasets if (d.meta or {}).get("quality_class") == "blocked")
+
+    return {
+        "database": {"async_ok": db_ok, "async_detail": db_msg, "sync_ok": sync_db_ok, "sync_detail": sync_db_msg},
+        "storage": {
+            **store_paths(),
+            "writable": store_ok,
+            "writable_detail": store_msg,
+            "persistent_ok": persist_ok,
+            "persistent_detail": persist_msg,
+        },
+        "databento": databento,
+        "budget": budget,
+        "datasets": {
+            "count_recent": len(datasets),
+            "ready": ready,
+            "blocked": blocked,
+        },
+        "providers": [p.slug for p in await all_provider_health()],
+    }

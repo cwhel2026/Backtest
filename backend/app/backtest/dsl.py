@@ -98,13 +98,10 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     return errors
 
 
-def session_keys_rth(bars: list[Bar], tz: str = "America/Chicago") -> list[str]:
-    zone = ZoneInfo(tz)
-    keys: list[str] = []
-    for b in bars:
-        local = b.ts.astimezone(zone)
-        keys.append(local.date().isoformat())
-    return keys
+def session_keys_rth(bars: list[Bar], tz: str = "America/Chicago", instrument_trading_hours: dict | None = None) -> list[str]:
+    from app.services.market_data.sessions import session_keys_rth_calendar
+
+    return session_keys_rth_calendar(bars, tz=tz, instrument_trading_hours=instrument_trading_hours)
 
 
 def opening_range_bounds(

@@ -39,10 +39,11 @@ def fetch_databento_ohlcv_1m_with_meta(
     start: datetime,
     end: datetime,
     api_key: str | None = None,
+    series=None,
 ) -> tuple[list[Bar], dict]:
     from app.services.market_data.databento_client import fetch_ohlcv_1m_with_retries
 
-    return fetch_ohlcv_1m_with_retries(instrument_symbol, start, end, api_key=api_key)
+    return fetch_ohlcv_1m_with_retries(instrument_symbol, start, end, api_key=api_key, series=series)
 
 
 def bars_for_timeframe(bars_1m: list[Bar], timeframe: str) -> list[tuple[datetime, Decimal, Decimal, Decimal, Decimal, int]]:

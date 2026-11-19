@@ -43,6 +43,19 @@ type Readiness = {
   backtest_allowed: boolean;
 };
 
+type EngineHealth = {
+  database: { async_ok: boolean; sync_ok: boolean; sync_detail: string };
+  storage: {
+    writable: boolean;
+    writable_detail: string;
+    persistent_ok: boolean;
+    persistent_detail: string;
+    resolved_path: string;
+  };
+  databento: { configured: boolean; live_smoke_enabled: boolean };
+  datasets: { count_recent: number; ready: number; blocked: number };
+};
+
 export default function HistoricalDataPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
@@ -58,6 +71,7 @@ export default function HistoricalDataPage() {
   const [selectedDataset, setSelectedDataset] = useState<string>("");
   const [quality, setQuality] = useState<Record<string, unknown> | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const [health, setHealth] = useState<EngineHealth | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApi = useRef<IChartApi | null>(null);
 
@@ -67,11 +81,13 @@ export default function HistoricalDataPage() {
       apiFetch<Instrument[]>("/api/v1/instruments"),
       apiFetch<Dataset[]>("/api/v1/market-data/datasets"),
       apiFetch<Budget>("/api/v1/market-data/budget"),
-    ]).then(([p, i, d, b]) => {
+      apiFetch<EngineHealth>("/api/v1/market-data/health"),
+    ]).then(([p, i, d, b, h]) => {
       setProviders(p);
       setInstruments(i);
       setDatasets(d);
       setBudget(b);
+      setHealth(h);
       if (d.length && !selectedDataset) setSelectedDataset(d[0].id);
     });
   }, [selectedDataset]);
@@ -193,6 +209,26 @@ export default function HistoricalDataPage() {
           Engine 3.0 — parquet library, Databento GLBX.MDP3 primary, quality gates for video strategies.
         </p>
       </header>
+
+      {health ? (
+        <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+          <h3 className="text-sm font-medium text-zinc-200">Engine health</h3>
+          <ul className="mt-2 grid gap-2 text-sm text-zinc-400 sm:grid-cols-2">
+            <li>
+              Database: {health.database.async_ok && health.database.sync_ok ? "ok" : "degraded"} (
+              {health.database.sync_detail})
+            </li>
+            <li>
+              Parquet store: {health.storage.writable ? "writable" : "fail"} ·{" "}
+              {health.storage.persistent_ok ? "persistent path" : "ephemeral risk"} — {health.storage.resolved_path}
+            </li>
+            <li>Databento: {health.databento.configured ? "key set" : "not configured"}</li>
+            <li>
+              Datasets (recent): {health.datasets.ready} ready · {health.datasets.blocked} blocked
+            </li>
+          </ul>
+        </section>
+      ) : null}
 
       {budget ? (
         <section className="grid gap-3 sm:grid-cols-4">

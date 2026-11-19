@@ -5,7 +5,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.backtest.bars import Bar
-from app.backtest.dsl import session_keys_rth, validate_spec
+from app.backtest.dsl import validate_spec
+from app.services.market_data.sessions import session_keys_for_bars
 from app.backtest.engine import BacktestAssumptions, BacktestResult
 from app.backtest.metrics import SimulatedTrade, compute_metrics
 from app.backtest.video_strategies import (
@@ -31,8 +32,11 @@ def run_video_backtest(
         raise ValueError("; ".join(errors))
     validate_bars(bars)
     entry_type = (spec.get("entry") or {}).get("type", "")
-    tz = str((spec.get("session") or {}).get("timezone") or "America/Chicago")
-    session_keys = session_keys_rth(bars, tz=tz)
+    session_keys = session_keys_for_bars(
+        bars,
+        spec,
+        instrument_trading_hours=getattr(instrument, "trading_hours", None) or {},
+    )
     cfg = VideoConfig.from_instrument(
         instrument,
         spec,
@@ -83,7 +87,12 @@ def run_video_backtest(
     if int(metrics.get("trade_count") or 0) == 0:
         from app.services.market_data.validate_dataset import backtest_zero_trade_hint, video_strategy_readiness
 
-        readiness = video_strategy_readiness(bars, symbol=instrument.symbol, timeframe=dataset_timeframe)
+        readiness = video_strategy_readiness(
+            bars,
+            symbol=instrument.symbol,
+            timeframe=dataset_timeframe,
+            instrument_trading_hours=getattr(instrument, "trading_hours", None) or {},
+        )
         hint = backtest_zero_trade_hint(0, readiness, "ready")
         if hint:
             warnings.append(f"Zero trades: {hint}")

@@ -8,7 +8,9 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.backtest.bars import Bar, load_bars
-from app.backtest.dsl import session_keys_rth
+from app.services.market_data.contract_series import detect_rollover_jumps
+from app.services.market_data.exchange_calendar import SessionPolicy, expected_closure_between, session_policy_from_spec
+from app.services.market_data.sessions import session_keys_for_bars
 from app.models.enums import DatasetValidationStatus
 from app.models.market_data import DataQualityReport, HistoricalDataset
 from app.services.market_data.quality import DatasetQualityReport, audit_bars
@@ -39,25 +41,29 @@ def extended_audit(
     timeframe: str,
     symbol: str,
     tick_size: Decimal | None = None,
+    rollover_events: list[dict] | None = None,
+    instrument_trading_hours: dict | None = None,
 ) -> DatasetQualityReport:
     base = audit_bars(bars, timeframe=timeframe, source=None)
     warnings = list(base.warnings)
     malformed = base.malformed_bars
-    jump_threshold = (tick_size or Decimal("0.25")) * 400
-    jumps = 0
-    prev_close: Decimal | None = None
-    for b in bars:
-        if b.volume < 0:
-            malformed += 1
-            warnings.append("negative volume detected")
-            break
-        if prev_close is not None:
-            if abs(b.open - prev_close) > jump_threshold:
-                jumps += 1
-        prev_close = b.close
-    if jumps:
-        warnings.append(f"{jumps} large open gaps vs prior close (possible rolls or bad ticks)")
-    gaps = base.gaps
+    policy = session_policy_from_spec({"session": {"allowed": ["RTH", "ETH"]}}, instrument_trading_hours)
+
+    gaps: list[dict] = []
+    for g in base.gaps:
+        try:
+            prev = datetime.fromisoformat(g["from"].replace("Z", "+00:00"))
+            curr = datetime.fromisoformat(g["to"].replace("Z", "+00:00"))
+        except Exception:
+            gaps.append(g)
+            continue
+        if expected_closure_between(prev, curr, policy):
+            continue
+        gaps.append(g)
+
+    roll_hits = detect_rollover_jumps(list(bars), rollover_events or [], tick_size=tick_size or Decimal("0.25"))
+    if roll_hits:
+        warnings.append(f"{len(roll_hits)} unadjusted roll-style gaps (documented, not stitched)")
     return DatasetQualityReport(
         bar_count=base.bar_count,
         duplicates=base.duplicates,
@@ -71,15 +77,22 @@ def extended_audit(
     )
 
 
-def video_strategy_readiness(bars: Sequence[Bar], *, symbol: str, timeframe: str) -> dict:
+def video_strategy_readiness(
+    bars: Sequence[Bar],
+    *,
+    symbol: str,
+    timeframe: str,
+    instrument_trading_hours: dict | None = None,
+) -> dict:
     """Warm-up checks for video_liquidity_sweep and video_anchor_bos — no rule changes."""
     if not bars:
         return {
             "video_liquidity_sweep": {"ready": False, "reason": "no bars"},
             "video_anchor_bos": {"ready": False, "reason": "no bars"},
         }
-    session_keys = session_keys_rth(list(bars), tz="America/Chicago")
-    sessions = set(session_keys)
+    spec = {"session": {"allowed": ["RTH"], "timezone": "America/Chicago"}}
+    session_keys = session_keys_for_bars(list(bars), spec, instrument_trading_hours=instrument_trading_hours)
+    sessions = {k for k in session_keys if k.startswith("rth:")}
     coverage_days = len(sessions)
     mins = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(timeframe, 5)
     bars_per_session = max(1, (6 * 60 + 30) // mins)
@@ -117,11 +130,29 @@ def backtest_zero_trade_hint(
     return "valid_no_signals: data adequate but strategy found no qualifying setups in range"
 
 
-def validate_and_persist(session: Session, dataset: HistoricalDataset, *, symbol: str, tick_size: Decimal | None) -> dict:
+def validate_and_persist(
+    session: Session,
+    dataset: HistoricalDataset,
+    *,
+    symbol: str,
+    tick_size: Decimal | None,
+    instrument_trading_hours: dict | None = None,
+) -> dict:
     bars = load_bars(session, dataset.id)
-    report = extended_audit(bars, timeframe=dataset.timeframe, symbol=symbol, tick_size=tick_size)
+    rollover_events = (dataset.meta or {}).get("rollover_events") if isinstance(dataset.meta, dict) else []
+    th = instrument_trading_hours if instrument_trading_hours is not None else {}
+    report = extended_audit(
+        bars,
+        timeframe=dataset.timeframe,
+        symbol=symbol,
+        tick_size=tick_size,
+        rollover_events=rollover_events,
+        instrument_trading_hours=th,
+    )
     qclass, notes = classify_quality(report, symbol=symbol, timeframe=dataset.timeframe)
-    readiness = video_strategy_readiness(bars, symbol=symbol, timeframe=dataset.timeframe)
+    readiness = video_strategy_readiness(
+        bars, symbol=symbol, timeframe=dataset.timeframe, instrument_trading_hours=th
+    )
 
     gap_max = 0
     for g in report.gaps:
