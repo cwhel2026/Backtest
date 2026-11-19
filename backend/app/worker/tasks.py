@@ -124,7 +124,8 @@ def run_data_ingestion(job_id: str) -> None:
             elif provider == "finzdata":
                 dataset = run_finzdata_ingestion(db, job.payload)
             else:
-                dataset = run_databento_ingestion(db, job.payload)
+                payload = {**job.payload, "research_job_id": str(job.id)}
+                dataset = run_databento_ingestion(db, payload)
             db.commit()
             job.status = ResearchJobStatus.COMPLETED
             job.progress_pct = 100

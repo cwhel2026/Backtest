@@ -16,7 +16,8 @@ export function MobileTabBar() {
         {MOBILE_PRIMARY.map((item) => {
           const active =
             item.href === "/more"
-              ? pathname === "/more" || ["/market-data", "/leaderboard", "/settings"].some((p) => pathname.startsWith(p))
+              ? pathname === "/more" ||
+                ["/market-data", "/leaderboard", "/settings"].some((p) => pathname.startsWith(p))
               : isNavActive(pathname, item.href);
           return (
             <li key={item.href} className="flex-1">

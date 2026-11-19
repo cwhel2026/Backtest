@@ -59,6 +59,65 @@ def find_validated_duplicate(
     return None
 
 
+def create_pending_dataset(
+    session: Session,
+    *,
+    provider_slug: str,
+    instrument_id: uuid.UUID,
+    timeframe: str,
+    meta: dict,
+    fingerprint: str,
+) -> HistoricalDataset:
+    """Reserve a dataset id and storage folder before chunked parquet writes."""
+    provider = session.execute(select(DataProvider).where(DataProvider.slug == provider_slug)).scalar_one_or_none()
+    if not provider:
+        raise ValueError(f"Unknown provider {provider_slug}")
+    inst = session.get(Instrument, instrument_id)
+    version_tag = datetime.now(UTC).strftime("v%Y%m%d%H%M%S")
+    dataset = HistoricalDataset(
+        provider_id=provider.id,
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        version_tag=version_tag,
+        validation_status=DatasetValidationStatus.PENDING,
+        meta={
+            **meta,
+            "ingest_fingerprint": fingerprint,
+            "instrument_symbol": inst.symbol if inst else None,
+            "synthetic": False,
+            "store": "parquet",
+        },
+    )
+    session.add(dataset)
+    session.flush()
+    from app.services.market_data.ohlcv_parquet import dataset_dir
+
+    dataset_dir(dataset.id)
+    return dataset
+
+
+def finalize_dataset_after_write(session: Session, dataset: HistoricalDataset) -> HistoricalDataset:
+    from app.services.market_data.ohlcv_parquet import bar_count, checksum_sha256, coverage, has_store
+
+    if not has_store(dataset.id):
+        raise ValueError("No parquet bars written for dataset")
+    dataset.row_count = bar_count(dataset.id)
+    start, end = coverage(dataset.id)
+    dataset.coverage_start = start
+    dataset.coverage_end = end
+    dataset.downloaded_at = datetime.now(UTC)
+    try:
+        dataset.content_checksum = checksum_sha256(dataset.id)
+    except Exception:
+        dataset.content_checksum = None
+    dataset.storage_uri = canonical_storage_uri(dataset.id)
+    meta = dict(dataset.meta or {})
+    meta["storage_uri"] = dataset.storage_uri
+    dataset.meta = meta
+    session.flush()
+    return dataset
+
+
 def create_versioned_dataset(
     session: Session,
     *,

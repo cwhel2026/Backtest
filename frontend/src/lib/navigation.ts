@@ -14,6 +14,7 @@ export const MOBILE_PRIMARY: NavItem[] = [
 ];
 
 export const MORE_LINKS: NavItem[] = [
+  { href: "/market-data/setup", label: "Import history", short: "Import" },
   { href: "/market-data", label: "Market Data", short: "Data" },
   { href: "/leaderboard", label: "Leaderboard", short: "Rank" },
   { href: "/strategy-debugger", label: "Strategy Debugger", short: "Debug" },
