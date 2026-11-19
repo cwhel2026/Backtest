@@ -31,5 +31,9 @@ celery_app.conf.update(
             "task": "app.worker.tasks.paper_forward_tick",
             "schedule": 60.0,
         },
+        "live-lab-forward-tick": {
+            "task": "app.worker.tasks.live_lab_forward_tick",
+            "schedule": 30.0,
+        },
     },
 )
