@@ -31,6 +31,10 @@ def build_4h_bias_series(
         prev_close = bars_4h[i - 1].close if i > 0 else None
         for f in visible:
             if f.kind == "high" and b.close > f.level and (prev_close is None or prev_close <= f.level):
+                if b.close <= f.level:
+                    continue
+                if b.high > f.level and max(b.open, b.close) <= f.level:
+                    continue
                 direction = "bullish"
                 last = Bias4hRecord(
                     "bullish",
@@ -41,6 +45,10 @@ def build_4h_bias_series(
                     fractal.definition_id,
                 )
             if f.kind == "low" and b.close < f.level and (prev_close is None or prev_close >= f.level):
+                if b.close >= f.level:
+                    continue
+                if b.low < f.level and min(b.open, b.close) >= f.level:
+                    continue
                 direction = "bearish"
                 last = Bias4hRecord(
                     "bearish",

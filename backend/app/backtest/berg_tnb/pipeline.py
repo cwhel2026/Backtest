@@ -10,7 +10,12 @@ from typing import Any
 from app.backtest.bars import Bar, aggregate_bars
 from app.backtest.berg_tnb.bias_4h import build_4h_bias_series, bias_for_5m_bar
 from app.backtest.berg_tnb.exits import resolve_exit_prices
-from app.backtest.berg_tnb.fib import fakeout_touched, fib_entry_limit, fib_fakeout_level
+from app.backtest.berg_tnb.fib import (
+    fakeout_anchor_extremes,
+    fakeout_touched,
+    fib_entry_limit,
+    fib_fakeout_level,
+)
 from app.backtest.berg_tnb.fractals import FractalConfig, confirmed_fractals, fractals_visible_at
 from app.backtest.berg_tnb.sessions import aggregate_session_extremes, completed_measurement_for_bar, get_profile
 from app.backtest.berg_tnb.types import (
@@ -82,12 +87,21 @@ def _candle_dir(o: Decimal, c: Decimal, doji_mode: str) -> str | None:
     return None
 
 
+def _body_close_bos(b: Bar, level: Decimal, direction: str) -> bool:
+    """PDF: wick through level is NOT BOS — candle body must close beyond fractal."""
+    if direction == "bullish":
+        return b.close > level
+    return b.close < level
+
+
 def _bos_after_fakeout(
     bars: list[Bar],
     fractals,
     i: int,
     bias: str,
 ) -> tuple[bool, ConfirmedFractal | None]:
+    if i < 1:
+        return False, None
     vis = fractals_visible_at(fractals, i)
     b = bars[i]
     if bias == "bullish":
@@ -95,14 +109,14 @@ def _bos_after_fakeout(
         if not highs:
             return False, None
         level = highs[-1].level
-        if b.close > level and bars[i - 1].close <= level:
+        if _body_close_bos(b, level, "bullish") and bars[i - 1].close <= level:
             return True, highs[-1]
     else:
         lows = [f for f in vis if f.kind == "low"]
         if not lows:
             return False, None
         level = lows[-1].level
-        if b.close < level and bars[i - 1].close >= level:
+        if _body_close_bos(b, level, "bearish") and bars[i - 1].close >= level:
             return True, lows[-1]
     return False, None
 
@@ -163,6 +177,10 @@ class BergTnbEngine:
         session_low_track: Decimal | None = None
         session_high_track: Decimal | None = None
         pending_order: Order | None = None
+        sweep_idx: int | None = None
+        current_session_lo: Decimal | None = None
+        current_session_hi: Decimal | None = None
+        post_bos_extreme_start: int | None = None
 
         for i, b in enumerate(self.bars):
             if i in suppress:
@@ -235,6 +253,8 @@ class BergTnbEngine:
                         )
                         setup.session_level = session_rec
                         liquidity_level = liq
+                        current_session_lo = lo
+                        current_session_hi = hi
                         _log(
                             setup,
                             ts=b.ts,
@@ -247,6 +267,13 @@ class BergTnbEngine:
                         )
                         state = BergTnbState.WAITING_FOR_SWEEP
                 continue
+
+            if current_session_lo is not None and liquidity_level is not None and state not in (
+                BergTnbState.WAITING_FOR_4H_BIAS,
+                BergTnbState.WAITING_FOR_SESSION_LEVEL,
+            ):
+                current_session_lo = min(current_session_lo, b.low)
+                current_session_hi = max(current_session_hi or b.high, b.high)
 
             if state == BergTnbState.WAITING_FOR_SWEEP and liquidity_level is not None:
                 swept = False
@@ -264,13 +291,7 @@ class BergTnbEngine:
                 if swept and min_pen > 0 and pen < min_pen:
                     swept = False
                 if swept:
-                    setup.sweep = SweepRecord(
-                        b.ts,
-                        i,
-                        pen,
-                        kind,
-                        {"o": str(b.open), "h": str(b.high), "l": str(b.low), "c": str(b.close)},
-                    )
+                    sweep_idx = i
                     _log(
                         setup,
                         ts=b.ts,
@@ -280,6 +301,13 @@ class BergTnbEngine:
                         reason="Liquidity sweep/touch",
                         evidence={"penetration": str(pen)},
                         cfg=self.cfg,
+                    )
+                    setup.sweep = SweepRecord(
+                        b.ts,
+                        i,
+                        pen,
+                        kind,
+                        {"o": str(b.open), "h": str(b.high), "l": str(b.low), "c": str(b.close)},
                     )
                     state = BergTnbState.WAITING_FOR_REVERSAL_CANDLE
                 continue
@@ -302,41 +330,41 @@ class BergTnbEngine:
                     state = BergTnbState.WAITING_FOR_FAKEOUT_0079
                 continue
 
-            if state == BergTnbState.WAITING_FOR_FAKEOUT_0079 and reversal_idx is not None:
-                # Anchors: highest between current/previous session, lowest (interpretation per user spec)
-                if session_rec:
-                    anchor_hi = max(session_rec.session_high, b.high)
-                    anchor_lo = min(session_rec.session_low, b.low)
-                    for j in range(reversal_idx, i + 1):
-                        anchor_hi = max(anchor_hi, self.bars[j].high)
-                        anchor_lo = min(anchor_lo, self.bars[j].low)
-                    ratio = Decimal(self.cfg["fib_fakeout_ratio"])
-                    level = fib_fakeout_level(anchor_hi, anchor_lo, bias_dir, ratio)
-                    fakeout = FakeoutFibRecord(
-                        anchor_hi,
-                        anchor_lo,
-                        self.bars[reversal_idx].ts,
-                        self.bars[reversal_idx].ts,
-                        level,
-                        None,
-                        None,
+            if state == BergTnbState.WAITING_FOR_FAKEOUT_0079 and reversal_idx is not None and session_rec and sweep_idx is not None:
+                anchor_hi, anchor_lo = fakeout_anchor_extremes(
+                    self.bars,
+                    session_high=session_rec.session_high,
+                    session_low=session_rec.session_low,
+                    from_index=sweep_idx,
+                    to_index=i,
+                )
+                ratio = Decimal(self.cfg["fib_fakeout_ratio"])
+                level = fib_fakeout_level(anchor_hi, anchor_lo, bias_dir, ratio)
+                fakeout = FakeoutFibRecord(
+                    anchor_hi,
+                    anchor_lo,
+                    self.bars[reversal_idx].ts,
+                    self.bars[sweep_idx].ts,
+                    level,
+                    None,
+                    None,
+                )
+                setup.fakeout = fakeout
+                if fakeout_touched(bias_dir, level, b.low, b.high):
+                    fakeout.confirmed_ts = b.ts
+                    fakeout.bar_index = i
+                    fakeout_done = True
+                    _log(
+                        setup,
+                        ts=b.ts,
+                        frm=state,
+                        to=BergTnbState.WAITING_FOR_5M_BOS,
+                        bar_index=i,
+                        reason="0.079 fakeout touch",
+                        evidence={"level": str(level), "anchor_hi": str(anchor_hi), "anchor_lo": str(anchor_lo)},
+                        cfg=self.cfg,
                     )
-                    setup.fakeout = fakeout
-                    if fakeout_touched(bias_dir, level, b.low, b.high):
-                        fakeout.confirmed_ts = b.ts
-                        fakeout.bar_index = i
-                        fakeout_done = True
-                        _log(
-                            setup,
-                            ts=b.ts,
-                            frm=state,
-                            to=BergTnbState.WAITING_FOR_5M_BOS,
-                            bar_index=i,
-                            reason="0.079 fakeout touch",
-                            evidence={"level": str(level)},
-                            cfg=self.cfg,
-                        )
-                        state = BergTnbState.WAITING_FOR_5M_BOS
+                    state = BergTnbState.WAITING_FOR_5M_BOS
                 continue
 
             if state == BergTnbState.WAITING_FOR_5M_BOS and fakeout_done and not bos_done:
@@ -352,10 +380,11 @@ class BergTnbEngine:
                         ticks,
                     )
                     bos_done = True
+                    post_bos_extreme_start = i
                     post_bos_high = b.high
                     post_bos_low = b.low
-                    session_low_track = b.low
-                    session_high_track = b.high
+                    session_low_track = current_session_lo or b.low
+                    session_high_track = current_session_hi or b.high
                     _log(
                         setup,
                         ts=b.ts,
@@ -370,17 +399,23 @@ class BergTnbEngine:
                 continue
 
             if state == BergTnbState.TRACKING_ENTRY_FIB and bos_done and pending_order is None:
-                session_low_track = min(session_low_track or b.low, b.low)
-                session_high_track = max(session_high_track or b.high, b.high)
-                post_bos_high = max(post_bos_high or b.high, b.high)
-                post_bos_low = min(post_bos_low or b.low, b.low)
+                if post_bos_extreme_start is not None:
+                    post_bos_high = max(post_bos_high or b.high, b.high)
+                    post_bos_low = min(post_bos_low or b.low, b.low)
+                if current_session_lo is not None:
+                    session_low_track = current_session_lo
+                if current_session_hi is not None:
+                    session_high_track = current_session_hi
+                for j in range((post_bos_extreme_start or i), i + 1):
+                    post_bos_high = max(post_bos_high or self.bars[j].high, self.bars[j].high)
+                    post_bos_low = min(post_bos_low or self.bars[j].low, self.bars[j].low)
                 ratio = Decimal(self.cfg["entry_fib_ratio"])
                 if bias_dir == "bullish":
-                    low_a = session_low_track
-                    high_a = post_bos_high
+                    low_a = session_low_track or b.low
+                    high_a = post_bos_high or b.high
                 else:
-                    low_a = post_bos_low
-                    high_a = session_high_track
+                    low_a = post_bos_low or b.low
+                    high_a = session_high_track or b.high
                 limit = fib_entry_limit(low_a, high_a, bias_dir, ratio, self.tick)
                 setup.entry_fib = EntryFibRecord(low_a, high_a, b.ts, b.ts, ratio, limit, [])
                 structural = (

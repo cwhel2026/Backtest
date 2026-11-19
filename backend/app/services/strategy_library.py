@@ -201,6 +201,7 @@ _BERG_TNB_BASE = {
         "setup_preset": "new_york_setup",
         "fib_fakeout_ratio": "0.079",
         "entry_fib_ratio": "0.618",
+        "entry_fib_ratios_experimental": ["0.500", "0.550", "0.595", "0.618", "0.786"],
         "fractal_4h_left": 2,
         "fractal_4h_right": 2,
         "fractal_5m_left": 2,

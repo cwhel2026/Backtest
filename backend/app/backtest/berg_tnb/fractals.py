@@ -1,4 +1,8 @@
-"""Configurable fractal swings — Rachel_T Fractals not in repo (fidelity unverified)."""
+"""Fractal swings — Williams-style pivots (approximates TradingView Fractals by Rachel_T).
+
+PDF step 2: only fractal highs/lows (arrow markers) qualify as BOS reference points.
+Rachel_T source code not in repo — default 2+2 matches common TV Fractals preset (**interpretation**).
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ from app.backtest.bars import Bar
 class FractalConfig:
     left: int = 2
     right: int = 2
-    definition_id: str = "configurable_pivot_approximation"
+    definition_id: str = "williams_fractal_2_2_rachel_t_approx"
 
     def as_meta(self) -> dict:
         return {
@@ -20,6 +24,7 @@ class FractalConfig:
             "left": self.left,
             "right": self.right,
             "rachel_t_verified": False,
+            "pdf_reference": "Berg PDF step 2 — fractal indicator by Rachel_T",
         }
 
 

@@ -10,7 +10,8 @@ from app.backtest.berg_tnb.pipeline import BergTnbEngine
 from app.backtest.dsl import validate_spec
 from app.backtest.engine import BacktestAssumptions, BacktestResult
 from app.backtest.metrics import SimulatedTrade, compute_metrics
-from app.backtest.video_strategies import VideoConfig, simulate, validate_bars
+from app.backtest.video_execution import run_video_orders
+from app.backtest.video_strategies import VideoConfig, validate_bars
 from app.models.instrument import Instrument
 
 
@@ -44,7 +45,7 @@ def run_berg_tnb_backtest(
         spec,
         slippage_ticks=assumptions.slippage_ticks_per_side,
     )
-    trades = simulate(bars, orders, cfg, instrument)
+    trades, order_stats, exec_analytics = run_video_orders(bars, orders, cfg, instrument)
     setup_by_order: dict[int, dict] = {}
     for s in setups:
         if s.order_index is not None:
@@ -95,6 +96,13 @@ def run_berg_tnb_backtest(
     metrics["berg_setups"] = len(setups)
     metrics["berg_orders"] = len(orders)
     metrics["strategy_id"] = "berg_tnb_model_v1"
+    metrics.update({f"video_{k}": v for k, v in exec_analytics.items() if v is not None})
+    metrics["execution_engine"] = "video_execution_pr47_compatible"
+    metrics["video_order_stats"] = {
+        "placed": order_stats.orders_placed,
+        "filled": order_stats.orders_filled,
+        "expired": order_stats.orders_expired,
+    }
     return BacktestResult(trades, metrics, curve, warnings)
 
 
