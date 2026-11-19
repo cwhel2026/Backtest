@@ -378,6 +378,22 @@ def paper_forward_tick() -> None:
         tick_paper_book(db)
 
 
+@celery_app.task(name="app.worker.tasks.live_lab_stream_ingest")
+def live_lab_stream_ingest() -> None:
+    from app.services.live_lab.stream_ingest import ingest_stream_once
+
+    settings_ref = get_settings()
+    if not settings_ref.live_lab_tick_enabled:
+        return
+    with SyncSession() as db:
+        try:
+            ingest_stream_once(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
 @celery_app.task(name="app.worker.tasks.live_lab_forward_tick")
 def live_lab_forward_tick() -> None:
     from app.services.live_lab.service import tick_live_strategy_lab

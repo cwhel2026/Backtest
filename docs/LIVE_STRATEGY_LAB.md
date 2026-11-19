@@ -1,10 +1,12 @@
-# Live Strategy Lab (Phase 3)
+# Live Strategy Lab (Phase 3 / 3.1)
 
 ## Status
 
-Forward-testing platform with **replay-verified** logic. **No live CME/Databento/IBKR feed tested** on the agent VM (no credentials).
+**Phase 3.1:** chronological `IncrementalVideoForwardEngine` (pending orders, amendments, fills, stops, position carry in `runner_state`). Berg/video signals discovered **per closed bar** (`incremental_signals.py`) — not bar-close trade reconciliation.
 
-Default provider: `LIVE_LAB_PROVIDER=replay` (deterministic JSONL-style events).
+**IBKR stream adapter:** implemented (`ibkr_stream`); **connectivity unverified** without `IBKR_HOST` + gateway on the worker network.
+
+Default provider: `LIVE_LAB_PROVIDER=replay`. Persisted archive: `live_market_events` + `LIVE_LAB_PROVIDER=event_store` for worker restart recovery.
 
 ## Architecture
 

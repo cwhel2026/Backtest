@@ -122,7 +122,6 @@ def on_closed_candle(
             else None
         ),
     }
-    broker = PaperBroker(session, run.id, inst)
     for fill in fills:
         append_ledger_event(
             session,
