@@ -17,11 +17,20 @@ type Dataset = {
   row_count: number;
   validation_status: string;
   quality_class?: string | null;
+  data_lineage?: string | null;
+  genuine_for_research?: boolean | null;
+  data_lineage_label?: string | null;
   coverage_start: string | null;
   coverage_end: string | null;
   version_tag: string;
   content_checksum?: string | null;
   meta?: Record<string, unknown>;
+};
+
+type ProviderComparison = {
+  micro_contracts: string[];
+  providers: { id: string; name: string; genuine_for_research: boolean; typical_cost_gbp_month_note: string }[];
+  estimates?: { available: boolean; note?: string; symbols?: Record<string, unknown> };
 };
 
 type Budget = {
@@ -78,6 +87,7 @@ export default function HistoricalDataPage() {
   const [quality, setQuality] = useState<Record<string, unknown> | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [health, setHealth] = useState<EngineHealth | null>(null);
+  const [comparison, setComparison] = useState<ProviderComparison | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApi = useRef<IChartApi | null>(null);
 
@@ -88,12 +98,14 @@ export default function HistoricalDataPage() {
       apiFetch<Dataset[]>("/api/v1/market-data/datasets"),
       apiFetch<Budget>("/api/v1/market-data/budget"),
       apiFetch<EngineHealth>("/api/v1/market-data/health"),
-    ]).then(([p, i, d, b, h]) => {
+      apiFetch<ProviderComparison>("/api/v1/market-data/provider-comparison?days=14"),
+    ]).then(([p, i, d, b, h, cmp]) => {
       setProviders(p);
       setInstruments(i);
       setDatasets(d);
       setBudget(b);
       setHealth(h);
+      setComparison(cmp);
       if (d.length && !selectedDataset) setSelectedDataset(d[0].id);
     });
   }, [selectedDataset]);
@@ -212,9 +224,42 @@ export default function HistoricalDataPage() {
       <header>
         <h2 className="page-title">Historical Data</h2>
         <p className="page-sub">
-          Engine 3.0 — parquet library, Databento GLBX.MDP3 primary, quality gates for video strategies.
+          Phase 2 — licensed Databento 1m primary (£0–£50 budget). Synthetic/free feeds blocked for genuine backtests.
         </p>
       </header>
+
+      {comparison ? (
+        <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
+          <h3 className="text-sm font-medium text-zinc-200">MNQ / MES / MGC providers</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            Recommended: Databento 1m → derive 5m/4H locally. Live cost when{" "}
+            <code className="text-zinc-400">DATABENTO_API_KEY</code> is set on the server.
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-zinc-500">
+                <tr>
+                  <th className="px-2 py-1">Provider</th>
+                  <th className="px-2 py-1">Genuine research</th>
+                  <th className="px-2 py-1">Cost notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comparison.providers.map((pr) => (
+                  <tr key={pr.id} className="border-t border-zinc-800">
+                    <td className="px-2 py-2 text-zinc-200">{pr.name}</td>
+                    <td className="px-2 py-2">{pr.genuine_for_research ? "Yes" : "No"}</td>
+                    <td className="px-2 py-2 text-zinc-400">{pr.typical_cost_gbp_month_note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {comparison.estimates && !comparison.estimates.available && (
+            <p className="mt-2 text-xs text-amber-400/90">{comparison.estimates.note}</p>
+          )}
+        </section>
+      ) : null}
 
       {health ? (
         <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-4">
@@ -288,7 +333,7 @@ export default function HistoricalDataPage() {
               value={ingestTf}
               onChange={(e) => setIngestTf(e.target.value)}
             >
-              {["1m", "5m", "15m", "30m", "1h"].map((tf) => (
+              {["1m", "5m", "15m", "30m", "1h", "4h"].map((tf) => (
                 <option key={tf} value={tf}>
                   {tf}
                 </option>
@@ -344,6 +389,7 @@ export default function HistoricalDataPage() {
                 <th className="px-2 py-1">TF</th>
                 <th className="px-2 py-1">Bars</th>
                 <th className="px-2 py-1">Quality</th>
+                <th className="px-2 py-1">Lineage</th>
                 <th className="px-2 py-1">Range</th>
                 <th className="px-2 py-1">Version</th>
               </tr>
@@ -359,6 +405,13 @@ export default function HistoricalDataPage() {
                   <td className="px-2 py-2">{d.timeframe}</td>
                   <td className="px-2 py-2">{d.row_count}</td>
                   <td className="px-2 py-2">{d.quality_class || d.validation_status}</td>
+                  <td className="px-2 py-2 text-xs">
+                    {d.genuine_for_research ? (
+                      <span className="text-emerald-400">Genuine</span>
+                    ) : (
+                      <span className="text-amber-500">{d.data_lineage || "legacy"}</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-xs text-zinc-500">
                     {d.coverage_start?.slice(0, 10)} → {d.coverage_end?.slice(0, 10)}
                   </td>

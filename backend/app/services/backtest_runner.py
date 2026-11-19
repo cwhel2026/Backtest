@@ -39,16 +39,26 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
             raise ValueError(
                 "Dataset quality is BLOCKED — fix or ingest validated data before backtesting."
             )
+        run_assumptions = run.assumptions or {}
+        require_genuine = run_assumptions.get("require_genuine_historical", True)
+        if require_genuine is not False:
+            from app.services.market_data.data_lineage import assert_genuine_for_backtest
+
+            if not meta.get("data_lineage"):
+                raise ValueError(
+                    "Dataset missing data_lineage metadata — ingest via Databento or CSV import "
+                    "and wait for validation to complete before genuine research backtests."
+                )
+            assert_genuine_for_backtest(meta)
 
         bars = load_bars(session, dataset.id)
         if not bars:
             raise ValueError("Dataset has no OHLCV bars — import CSV or connect a data provider.")
 
-        assumptions = run.assumptions or {}
         bt_assume = BacktestAssumptions(
-            slippage_ticks_per_side=int(assumptions.get("slippage_ticks_per_side", 1)),
-            commission_per_side=Decimal(str(assumptions["commission_per_side"]))
-            if assumptions.get("commission_per_side") is not None
+            slippage_ticks_per_side=int(run_assumptions.get("slippage_ticks_per_side", 1)),
+            commission_per_side=Decimal(str(run_assumptions["commission_per_side"]))
+            if run_assumptions.get("commission_per_side") is not None
             else None,
         )
 

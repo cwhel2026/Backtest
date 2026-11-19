@@ -13,6 +13,7 @@ from app.services.market_data.exchange_calendar import SessionPolicy, expected_c
 from app.services.market_data.sessions import session_keys_for_bars
 from app.models.enums import DatasetValidationStatus
 from app.models.market_data import DataQualityReport, HistoricalDataset
+from app.services.market_data.data_lineage import apply_lineage_meta, assert_genuine_for_backtest
 from app.services.market_data.quality import DatasetQualityReport, audit_bars
 
 QualityClass = str  # ready | warning | blocked
@@ -177,6 +178,10 @@ def validate_and_persist(
     meta["quality_class"] = qclass
     meta["video_readiness"] = readiness
     meta["quality_report_id"] = str(dq.id)
+    provider_slug = meta.get("provider") or meta.get("source") or "unknown"
+    if isinstance(provider_slug, str) and provider_slug.startswith("databento"):
+        provider_slug = "databento"
+    meta = apply_lineage_meta(meta, provider_slug=str(provider_slug))
     dataset.meta = meta
     dataset.quality_score = Decimal("100") if qclass == "ready" else Decimal("70") if qclass == "warning" else Decimal("0")
     if qclass == "blocked":

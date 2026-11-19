@@ -22,6 +22,9 @@ class HistoricalDatasetOut(BaseModel):
     content_checksum: str | None = None
     storage_uri: str | None = None
     quality_class: str | None = None
+    data_lineage: str | None = None
+    genuine_for_research: bool | None = None
+    data_lineage_label: str | None = None
     meta: dict = {}
 
     model_config = {"from_attributes": True}
