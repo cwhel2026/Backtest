@@ -1,7 +1,8 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.railway import celery_urls_from_redis, to_async_database_url, to_sync_database_url
@@ -60,17 +61,97 @@ class Settings(BaseSettings):
     )
 
     databento_api_key: str = ""
+    finzdata_api_key: str = Field(default="", validation_alias=AliasChoices("FINZDATA_API_KEY", "finzdata_api_key"))
+    ibkr_host: str = Field(default="", validation_alias=AliasChoices("IBKR_HOST", "ibkr_host"))
+    ibkr_port: int = Field(default=7497, validation_alias=AliasChoices("IBKR_PORT", "ibkr_port"))
+    ibkr_client_id: int = Field(default=11, validation_alias=AliasChoices("IBKR_CLIENT_ID", "ibkr_client_id"))
     openai_api_key: str = ""
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
     ai_research_enabled: bool = False
     max_experiments_per_day: int = 50
+    autonomous_hourly_enabled: bool = Field(default=True, validation_alias="AUTONOMOUS_HOURLY_ENABLED")
+    autonomous_forward_sim: bool = True
+    search_budget_per_symbol: int = Field(default=150, validation_alias="SEARCH_BUDGET_PER_SYMBOL")
+    search_history_days: int = Field(default=50, validation_alias="SEARCH_HISTORY_DAYS")
+    search_symbols: str = Field(default="MNQ,NQ,MES,ES", validation_alias="SEARCH_SYMBOLS")
+    search_stale_queued_minutes: int = Field(default=12, validation_alias="SEARCH_STALE_QUEUED_MINUTES")
+    search_stale_running_minutes: int = Field(default=25, validation_alias="SEARCH_STALE_RUNNING_MINUTES")
+    search_backtest_timeout_s: int = Field(default=90, validation_alias="SEARCH_BACKTEST_TIMEOUT_S")
+    reverse_search_enabled: bool = Field(default=True, validation_alias="REVERSE_SEARCH_ENABLED")
+    reverse_winrate_max: float = Field(default=0.20, validation_alias="REVERSE_WINRATE_MAX")
+    search_walkforward_folds: int = Field(default=3, validation_alias="SEARCH_WALKFORWARD_FOLDS")
+    search_oos_min_win_rate: float = Field(default=0.38, validation_alias="SEARCH_OOS_MIN_WIN_RATE")
+    search_ai_rounds: int = Field(default=2, validation_alias="SEARCH_AI_ROUNDS")
+    search_ai_specs_per_round: int = Field(default=14, validation_alias="SEARCH_AI_SPECS_PER_ROUND")
+    search_timeframes: str = Field(default="5m,1m", validation_alias="SEARCH_TIMEFRAMES")
+    search_1m_budget_per_symbol: int = Field(default=72, validation_alias="SEARCH_1M_BUDGET_PER_SYMBOL")
+    search_1m_history_days: int = Field(default=7, validation_alias="SEARCH_1M_HISTORY_DAYS")
+    search_1m_paid_history_days: int = Field(default=30, validation_alias="SEARCH_1M_PAID_HISTORY_DAYS")
+    search_prefer_ibkr: bool = Field(default=False, validation_alias="SEARCH_PREFER_IBKR")
+    search_robustness_enabled: bool = Field(default=True, validation_alias="SEARCH_ROBUSTNESS_ENABLED")
+    search_robustness_shuffles: int = Field(default=8, validation_alias="SEARCH_ROBUSTNESS_SHUFFLES")
+    search_stress_slip_ticks: int = Field(default=2, validation_alias="SEARCH_STRESS_SLIP_TICKS")
+    search_robustness_min_pass: float = Field(default=0.5, validation_alias="SEARCH_ROBUSTNESS_MIN_PASS")
+    paper_starting_equity: float = Field(default=100_000, validation_alias="PAPER_STARTING_EQUITY")
+    paper_daily_loss: float = Field(default=2_000, validation_alias="PAPER_DAILY_LOSS")
+    paper_trailing_dd: float = Field(default=3_000, validation_alias="PAPER_TRAILING_DD")
+    paper_profit_target: float = Field(default=6_000, validation_alias="PAPER_PROFIT_TARGET")
+    paper_max_slots: int = Field(default=8, validation_alias="PAPER_MAX_SLOTS")
+    ohlcv_store_dir: str = Field(default="data/ohlcv", validation_alias="OHLCV_STORE_DIR")
+    ohlcv_persistent_required: bool = Field(default=False, validation_alias="OHLCV_PERSISTENT_REQUIRED")
+    ohlcv_s3_bucket: str = Field(default="", validation_alias="OHLCV_S3_BUCKET")
+    ohlcv_s3_endpoint: str = Field(default="", validation_alias="OHLCV_S3_ENDPOINT")
+    ohlcv_s3_region: str = Field(default="", validation_alias="OHLCV_S3_REGION")
+    ohlcv_s3_access_key: str = Field(default="", validation_alias="OHLCV_S3_ACCESS_KEY")
+    ohlcv_s3_secret_key: str = Field(default="", validation_alias="OHLCV_S3_SECRET_KEY")
+    databento_live_smoke: bool = Field(default=False, validation_alias="DATABENTO_LIVE_SMOKE")
+    research_data_budget_gbp: float = Field(default=50.0, validation_alias="RESEARCH_DATA_BUDGET_GBP")
+    gbp_usd_rate: float | None = Field(default=None, validation_alias="GBP_USD_RATE")
 
     api_v1_prefix: str = "/api/v1"
 
-    @field_validator("database_url", "database_url_sync", mode="before")
+    @field_validator(
+        "database_url",
+        "database_url_sync",
+        "initial_admin_email",
+        "initial_admin_password",
+        mode="before",
+    )
     @classmethod
     def _strip_wrapping_quotes(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip().strip('"').strip("'")
+        return v
+
+    @field_validator(
+        "search_budget_per_symbol",
+        "search_history_days",
+        "search_stale_queued_minutes",
+        "search_stale_running_minutes",
+        "search_backtest_timeout_s",
+        "search_walkforward_folds",
+        "search_ai_rounds",
+        "search_ai_specs_per_round",
+        "search_1m_budget_per_symbol",
+        "search_1m_history_days",
+        "search_1m_paid_history_days",
+        "search_robustness_shuffles",
+        "search_stress_slip_ticks",
+        "ibkr_port",
+        "ibkr_client_id",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_env_int(cls, v: object, info: ValidationInfo) -> object:
+        """Railway env values are sometimes set as \"60+\" or left blank."""
+        if isinstance(v, str):
+            s = v.strip().strip('"').strip("'")
+            if s == "":
+                return {"ibkr_port": 7497, "ibkr_client_id": 11}.get(info.field_name, v)
+            while s.endswith("+"):
+                s = s[:-1].strip()
+            if s.isdigit():
+                return int(s)
         return v
 
     @model_validator(mode="after")
@@ -85,6 +166,10 @@ class Settings(BaseSettings):
             self.database_url_sync = to_sync_database_url(self.database_url)
 
         on_railway = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+        if on_railway and os.getenv("OHLCV_PERSISTENT_REQUIRED") is None:
+            self.ohlcv_persistent_required = True
+        if on_railway and os.getenv("OHLCV_STORE_DIR") is None and Path("/data").is_dir():
+            self.ohlcv_store_dir = "/data/ohlcv"
         if on_railway and self.redis_url:
             broker, backend = celery_urls_from_redis(self.redis_url)
             self.celery_broker_url = broker
@@ -95,12 +180,43 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
     @property
+    def on_railway(self) -> bool:
+        return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
+    @property
+    def ohlcv_s3_configured(self) -> bool:
+        return bool(
+            self.ohlcv_s3_bucket.strip()
+            and self.ohlcv_s3_access_key.strip()
+            and self.ohlcv_s3_secret_key.strip()
+        )
+
+    @property
     def databento_configured(self) -> bool:
         return bool(self.databento_api_key.strip())
 
     @property
+    def finzdata_configured(self) -> bool:
+        return bool(self.finzdata_api_key.strip())
+
+    @property
     def ai_configured(self) -> bool:
         return bool(self.openai_api_key.strip()) and self.ai_research_enabled
+
+    @property
+    def ibkr_configured(self) -> bool:
+        return bool(self.ibkr_host.strip())
+
+    def search_timeframe_list(self) -> list[str]:
+        return [t.strip() for t in self.search_timeframes.split(",") if t.strip()]
+
+    def search_1m_window_days(self) -> int:
+        """Yahoo 1m max is 7 days. FinzData / Databento can fill a 30-day keeper window."""
+        yahoo_cap = int(self.search_1m_history_days or 7)
+        paid = int(self.search_1m_paid_history_days or 30)
+        if self.finzdata_configured or self.databento_configured:
+            return max(yahoo_cap, paid)
+        return yahoo_cap
 
 
 @lru_cache

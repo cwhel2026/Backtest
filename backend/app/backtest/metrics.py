@@ -27,6 +27,8 @@ def compute_metrics(trades: list[SimulatedTrade], starting_equity: Decimal = Dec
             "expectancy_per_trade": None,
             "max_drawdown": 0.0,
             "sharpe_per_trade": None,
+            "max_consecutive_losses": 0,
+            "recovery_factor": None,
         }
 
     nets = [t.net_pnl for t in trades]
@@ -49,7 +51,20 @@ def compute_metrics(trades: list[SimulatedTrade], starting_equity: Decimal = Dec
 
     sharpe = None
     if len(nets) > 1:
-        sharpe = float(mean([float(x) for x in nets]) / pstdev([float(x) for x in nets]))
+        stdev = pstdev([float(x) for x in nets])
+        if stdev > 0:
+            sharpe = float(mean([float(x) for x in nets]) / stdev)
+
+    streak = 0
+    max_loss_streak = 0
+    for n in nets:
+        if n <= 0:
+            streak += 1
+            max_loss_streak = max(max_loss_streak, streak)
+        else:
+            streak = 0
+    net_sum = sum(nets, Decimal(0))
+    recovery = float(net_sum / max_dd) if max_dd > 0 else None
 
     return {
         "total_net_profit": float(sum(nets, Decimal(0))),
@@ -65,5 +80,7 @@ def compute_metrics(trades: list[SimulatedTrade], starting_equity: Decimal = Dec
         "trade_count": len(trades),
         "commissions_paid": float(sum((t.commissions for t in trades), Decimal(0))),
         "slippage_total": float(sum((t.slippage for t in trades), Decimal(0))),
+        "max_consecutive_losses": max_loss_streak,
+        "recovery_factor": recovery,
         "performance_category": "backtest",
     }

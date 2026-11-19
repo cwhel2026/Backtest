@@ -2,11 +2,12 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, Numeric, String, Text
+from sqlalchemy import DateTime, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.enums import pg_enum
 from app.models.enums import AssetClass
 
 
@@ -18,7 +19,7 @@ class Instrument(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     symbol: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    asset_class: Mapped[AssetClass] = mapped_column(Enum(AssetClass, name="asset_class"), nullable=False)
+    asset_class: Mapped[AssetClass] = mapped_column(pg_enum(AssetClass, "asset_class"), nullable=False)
     exchange: Mapped[str] = mapped_column(String(32), default="CME", nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
 

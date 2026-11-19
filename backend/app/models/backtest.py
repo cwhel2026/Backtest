@@ -2,11 +2,12 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.enums import pg_enum
 from app.models.enums import PerformanceCategory
 
 
@@ -34,7 +35,7 @@ class BacktestRun(Base):
     strategy_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("strategy_definitions.id"))
     dataset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("historical_datasets.id"))
     performance_category: Mapped[PerformanceCategory] = mapped_column(
-        Enum(PerformanceCategory, name="performance_category"),
+        pg_enum(PerformanceCategory, "performance_category"),
         default=PerformanceCategory.BACKTEST,
         nullable=False,
     )
@@ -52,6 +53,7 @@ class BacktestRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    simulation_log: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class BacktestTrade(Base):

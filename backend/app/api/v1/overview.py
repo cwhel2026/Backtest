@@ -24,7 +24,9 @@ async def overview_stats(
     db: AsyncSession = Depends(get_db),
 ) -> OverviewStats:
     settings = get_settings()
-    instruments = (await db.execute(select(func.count()).select_from(Instrument))).scalar_one()
+    instruments = (
+        await db.execute(select(func.count()).select_from(Instrument).where(Instrument.is_active))
+    ).scalar_one()
     strategies = (await db.execute(select(func.count()).select_from(StrategyDefinition))).scalar_one()
     validated = (
         await db.execute(

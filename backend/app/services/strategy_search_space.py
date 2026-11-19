@@ -1,0 +1,520 @@
+"""Signal-first combinatorial search — families sampled evenly, one risk profile."""
+
+from __future__ import annotations
+
+import random
+from decimal import Decimal
+from itertools import product
+from typing import Any, Iterator
+
+SESSION = {"allowed": ["RTH"], "timezone": "America/Chicago"}
+DEFAULT_RISK = {"dollar_risk_per_trade": 75, "max_contracts": 3}
+
+# Include tighter R:R so reverse/fade (high WR, small winners) can survive.
+STOP_TARGETS = (
+    (8, 12),
+    (8, 16),
+    (10, 20),
+    (12, 18),
+    (12, 24),
+    (16, 24),
+    (16, 32),
+    (20, 30),
+    (20, 40),
+)
+
+
+def _base(symbol: str, timeframe: str, category: str, entry: dict, name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "instrument_symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "category": category,
+        "session": dict(SESSION),
+        "entry": entry,
+        "exit": {"stop_ticks": 16, "target_ticks": 32, "session_end_flatten": True},
+        "risk": dict(DEFAULT_RISK),
+    }
+
+
+def _with_exits(base: dict[str, Any], stop: int, target: int) -> dict[str, Any]:
+    copy = {
+        **base,
+        "exit": {"stop_ticks": stop, "target_ticks": target, "session_end_flatten": True},
+        "name": f"{base['name']} {stop}/{target}",
+    }
+    return copy
+
+
+def _orb_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for minutes, side, (stop, target) in product((10, 15, 20, 30), ("both", "long", "short"), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "opening_range_breakout",
+            {"type": "opening_range_breakout", "range_minutes": minutes, "side": side},
+            f"{symbol} ORB {minutes}m {side}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _ema_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    pairs = ((5, 13), (8, 21), (9, 26), (12, 26), (13, 34), (20, 50))
+    for (fast, slow), (stop, target) in product(pairs, STOP_TARGETS):
+        if fast >= slow:
+            continue
+        base = _base(
+            symbol,
+            timeframe,
+            "trend_continuation",
+            {"type": "ema_crossover", "fast_period": fast, "slow_period": slow},
+            f"{symbol} EMA {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _vwap_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for dev, (stop, target) in product((10, 14, 16, 20, 24, 32), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "vwap_mean_reversion",
+            {"type": "vwap_reversion", "deviation_ticks": dev},
+            f"{symbol} VWAP rev {dev}t",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _rsi_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for period, oversold, overbought, (stop, target) in product(
+        (7, 14),
+        (25, 30),
+        (70, 75),
+        STOP_TARGETS,
+    ):
+        if oversold >= overbought:
+            continue
+        base = _base(
+            symbol,
+            timeframe,
+            "rsi_reversion",
+            {
+                "type": "rsi_reversion",
+                "period": period,
+                "oversold": oversold,
+                "overbought": overbought,
+            },
+            f"{symbol} RSI {period} {oversold}/{overbought}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _donchian_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, (stop, target) in product((10, 16, 20, 30), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "donchian_breakout",
+            {"type": "donchian_breakout", "lookback": lookback},
+            f"{symbol} Donchian {lookback}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for min_gap, max_age, side, (stop, target) in product(
+        (2, 4, 6),
+        (24, 36, 48),
+        ("both", "long", "short"),
+        STOP_TARGETS[:6],
+    ):
+        base = _base(
+            symbol,
+            timeframe,
+            "fair_value_gap",
+            {
+                "type": "fair_value_gap",
+                "min_gap_ticks": min_gap,
+                "max_age_bars": max_age,
+                "side": side,
+            },
+            f"{symbol} FVG {min_gap}t {max_age}b {side}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _bollinger_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for period, mult, (stop, target) in product((14, 20), (Decimal("1.5"), Decimal("2"), Decimal("2.5")), STOP_TARGETS[:7]):
+        base = _base(
+            symbol,
+            timeframe,
+            "bollinger_reversion",
+            {"type": "bollinger_reversion", "period": period, "std_mult": float(mult)},
+            f"{symbol} BB {period} {mult}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _liquidity_sweep_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, sweep, (stop, target) in product((8, 12, 16), (1, 2, 3), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "liquidity_sweep",
+            {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": sweep},
+            f"{symbol} liq sweep {lookback}/{sweep}t",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _ema_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    pairs = ((8, 21), (9, 26), (12, 26))
+    for (fast, slow), (stop, target) in product(pairs, STOP_TARGETS[:8]):
+        if fast >= slow:
+            continue
+        base = _base(
+            symbol,
+            timeframe,
+            "ema_pullback",
+            {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+            f"{symbol} EMA pull {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _streak_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for count, (stop, target) in product((3, 4, 5), STOP_TARGETS):
+        base = _base(
+            symbol,
+            timeframe,
+            "consecutive_closes",
+            {"type": "consecutive_closes", "count": count},
+            f"{symbol} streak {count}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _order_block_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for disp, max_age, side, (stop, target) in product((10, 14, 16), (36, 48, 72), ("both", "long", "short"), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "order_block",
+            {
+                "type": "order_block_retest",
+                "displacement_ticks": disp,
+                "max_age_bars": max_age,
+                "side": side,
+            },
+            f"{symbol} OB {disp}t {max_age}b",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _premium_discount_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for dmax, pmin, zone, (stop, target) in product(
+        (0.32, 0.38),
+        (0.62, 0.68),
+        ("both", "discount", "premium"),
+        STOP_TARGETS[:6],
+    ):
+        base = _base(
+            symbol,
+            timeframe,
+            "premium_discount",
+            {
+                "type": "premium_discount",
+                "discount_max": dmax,
+                "premium_min": pmin,
+                "zone": zone,
+            },
+            f"{symbol} P/D {zone} {dmax}/{pmin}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _mtf_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    htf = "15m" if timeframe in ("1m", "5m") else "1h"
+    for (fast, slow), (stop, target) in product(((8, 21), (9, 26)), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "mtf_pullback",
+            {
+                "type": "mtf_ema_pullback",
+                "htf": htf,
+                "fast_period": fast,
+                "slow_period": slow,
+            },
+            f"{symbol} MTF {htf} pull {fast}/{slow}",
+        )
+        yield _with_exits(base, stop, target)
+
+
+def _orb_vwap_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    """Opening-range break only when aligned with session VWAP, NY morning only."""
+    for minutes, side, (stop, target) in product((10, 15, 20), ("both", "long", "short"), STOP_TARGETS[:6]):
+        base = _base(
+            symbol,
+            timeframe,
+            "orb_vwap",
+            {"type": "opening_range_breakout", "range_minutes": minutes, "side": side},
+            f"{symbol} ORB VWAP {minutes}m {side}",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _killzone_fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for min_gap, side, (stop, target) in product((2, 4, 6), ("both", "long", "short"), STOP_TARGETS[:5]):
+        base = _base(
+            symbol,
+            timeframe,
+            "killzone_fvg",
+            {"type": "fair_value_gap", "min_gap_ticks": min_gap, "max_age_bars": 36, "side": side},
+            f"{symbol} KZ FVG {min_gap}t {side}",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "htf": "15m" if timeframe in ("1m", "5m") else "1h",
+            "htf_ema": 21,
+            "max_trades_per_day": 3,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _atr_pullback_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for (fast, slow), stop_atr, target_atr in product(((8, 21), (9, 26)), (1.0, 1.5), (1.5, 2.0)):
+        base = _base(
+            symbol,
+            timeframe,
+            "atr_pullback",
+            {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+            f"{symbol} ATR pull {fast}/{slow} {stop_atr}/{target_atr}A",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "14:30",
+            "atr_min_ticks": 6,
+            "max_trades_per_day": 3,
+        }
+        base["exit"] = {
+            "stop_ticks": 16,
+            "target_ticks": 24,
+            "stop_atr": stop_atr,
+            "target_atr": target_atr,
+            "breakeven_r": 1.0,
+            "trail_atr": 1.0,
+            "max_bars": 18,
+            "session_end_flatten": True,
+        }
+        yield base
+
+
+def _sweep_discount_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, sweep, (stop, target) in product((8, 12), (1, 2), STOP_TARGETS[:5]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_discount",
+            {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": sweep},
+            f"{symbol} sweep+disc {lookback}/{sweep}t",
+        )
+        base["filters"] = {
+            "vwap_align": "against",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:30",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _sweep_fvg_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, gap, window, (stop, target) in product((8, 12), (2, 4), (2, 3), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_fvg",
+            {
+                "type": "confluence",
+                "window_bars": window,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": 2},
+                    {"type": "fair_value_gap", "min_gap_ticks": gap, "max_age_bars": 36, "side": "both"},
+                ],
+            },
+            f"{symbol} sweep+FVG {lookback}/{gap}t w{window}",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _sweep_ob_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for lookback, disp, (stop, target) in product((8, 12), (10, 14), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "sweep_ob",
+            {
+                "type": "confluence",
+                "window_bars": 3,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": lookback, "sweep_ticks": 2},
+                    {"type": "order_block_retest", "displacement_ticks": disp, "max_age_bars": 48, "side": "both"},
+                ],
+            },
+            f"{symbol} sweep+OB {lookback}/{disp}t",
+        )
+        base["filters"] = {
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:00",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _orb_pull_specs(symbol: str, timeframe: str = "5m") -> Iterator[dict[str, Any]]:
+    for minutes, (fast, slow), (stop, target) in product((15, 20), ((8, 21), (9, 26)), STOP_TARGETS[:4]):
+        base = _base(
+            symbol,
+            timeframe,
+            "orb_pull",
+            {
+                "type": "confluence",
+                "window_bars": 4,
+                "all": [
+                    {"type": "opening_range_breakout", "range_minutes": minutes, "side": "both"},
+                    {"type": "ema_pullback", "fast_period": fast, "slow_period": slow},
+                ],
+            },
+            f"{symbol} ORB+pull {minutes}m {fast}/{slow}",
+        )
+        base["filters"] = {
+            "vwap_align": "with",
+            "start_hhmm": "08:30",
+            "end_hhmm": "11:30",
+            "max_trades_per_day": 2,
+        }
+        yield _with_exits(base, stop, target)
+
+
+def _intraday_1m_specs(symbol: str) -> Iterator[dict[str, Any]]:
+    """Tighter families on 1m for scalping-style search."""
+    for builder in (
+        _fvg_specs,
+        _order_block_specs,
+        _liquidity_sweep_specs,
+        _premium_discount_specs,
+        _killzone_fvg_specs,
+        _orb_vwap_specs,
+        _atr_pullback_specs,
+        _sweep_fvg_specs,
+        _sweep_ob_specs,
+    ):
+        for spec in builder(symbol, "1m"):
+            yield spec
+
+
+FAMILY_BUILDERS = {
+    "orb": _orb_specs,
+    "ema": _ema_specs,
+    "ema_pullback": _ema_pullback_specs,
+    "vwap": _vwap_specs,
+    "rsi": _rsi_specs,
+    "donchian": _donchian_specs,
+    "streak": _streak_specs,
+    "fvg": _fvg_specs,
+    "bollinger": _bollinger_specs,
+    "liquidity": _liquidity_sweep_specs,
+    "order_block": _order_block_specs,
+    "premium_discount": _premium_discount_specs,
+    "mtf_pullback": _mtf_pullback_specs,
+    "orb_vwap": _orb_vwap_specs,
+    "killzone_fvg": _killzone_fvg_specs,
+    "atr_pullback": _atr_pullback_specs,
+    "sweep_discount": _sweep_discount_specs,
+    "sweep_fvg": _sweep_fvg_specs,
+    "sweep_ob": _sweep_ob_specs,
+    "orb_pull": _orb_pull_specs,
+}
+
+
+def family_pools(symbol: str, timeframe: str = "5m") -> dict[str, list[dict[str, Any]]]:
+    if timeframe == "1m":
+        pool = list(_intraday_1m_specs(symbol))
+        return {"intraday_1m": pool}
+    return {name: list(builder(symbol, timeframe)) for name, builder in FAMILY_BUILDERS.items()}
+
+
+def all_search_specs(symbol: str, timeframe: str = "5m") -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    if timeframe == "1m":
+        specs.extend(_intraday_1m_specs(symbol))
+        return specs
+    for builder in FAMILY_BUILDERS.values():
+        specs.extend(builder(symbol, timeframe))
+    return specs
+
+
+def sample_search_specs(
+    symbol: str,
+    budget: int,
+    *,
+    seed: int | None = None,
+    timeframe: str = "5m",
+) -> list[dict[str, Any]]:
+    """Draw evenly from each family so ORB stop-grid doesn't crowd out RSI/Donchian."""
+    universe = all_search_specs(symbol, timeframe)
+    if budget >= len(universe):
+        return universe
+    pools = family_pools(symbol, timeframe)
+    rng = random.Random(seed)
+    families = [name for name, pool in pools.items() if pool]
+    if not families or budget <= 0:
+        return []
+    per = max(1, budget // len(families))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name in families:
+        pool = pools[name]
+        take = min(per, len(pool))
+        picked = rng.sample(pool, take) if take < len(pool) else list(pool)
+        for spec in picked:
+            key = spec["name"]
+            if key not in seen:
+                seen.add(key)
+                out.append(spec)
+            if len(out) >= budget:
+                return out
+    leftover = budget - len(out)
+    if leftover > 0:
+        rest = [s for s in all_search_specs(symbol, timeframe) if s["name"] not in seen]
+        extra = rng.sample(rest, min(leftover, len(rest))) if rest else []
+        out.extend(extra)
+    return out[:budget]
+
+
+def refine_spec(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Local mutations around a near-miss candidate."""
+    stop = int(spec["exit"]["stop_ticks"])
+    target = int(spec["exit"]["target_ticks"])
+    out: list[dict[str, Any]] = []
+    for ds, dt in ((-2, 0), (0, 4), (2, 4), (-2, -4), (2, 0), (0, -4)):
+        s2, t2 = max(4, stop + ds), max(6, target + dt)
+        if s2 < 4 or t2 < 6:
+            continue
+        copy = {**spec, "exit": {**spec["exit"], "stop_ticks": s2, "target_ticks": t2}}
+        copy["name"] = f"{spec['name']} refine {s2}/{t2}"
+        out.append(copy)
+    return out

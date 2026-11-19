@@ -59,16 +59,220 @@ LIBRARY: list[dict] = [
             "risk": {"dollar_risk_per_trade": 100, "max_contracts": 2},
         },
     },
+    {
+        "name": "MNQ 5m ORB with VWAP",
+        "symbol": "MNQ",
+        "category": "orb_vwap",
+        "timeframe": "5m",
+        "hypothesis": "RTH opening-range break only when price is on the VWAP side of the move, first 2.5h.",
+        "spec": {
+            "name": "MNQ 5m ORB with VWAP",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "orb_vwap",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {"type": "opening_range_breakout", "range_minutes": 15, "side": "both"},
+            "filters": {
+                "vwap_align": "with",
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "max_trades_per_day": 2,
+            },
+            "exit": {
+                "stop_ticks": 16,
+                "target_ticks": 24,
+                "breakeven_r": 1.0,
+                "max_bars": 18,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
+    {
+        "name": "MNQ 5m Killzone FVG",
+        "symbol": "MNQ",
+        "category": "killzone_fvg",
+        "timeframe": "5m",
+        "hypothesis": "FVG retests only in the NY morning window, with 15m EMA bias.",
+        "spec": {
+            "name": "MNQ 5m Killzone FVG",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "killzone_fvg",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {"type": "fair_value_gap", "min_gap_ticks": 4, "max_age_bars": 36, "side": "both"},
+            "filters": {
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "htf": "15m",
+                "htf_ema": 21,
+                "max_trades_per_day": 3,
+            },
+            "exit": {
+                "stop_ticks": 12,
+                "target_ticks": 20,
+                "stop_atr": 1.2,
+                "target_atr": 1.8,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
+    {
+        "name": "MNQ 5m Sweep + FVG",
+        "symbol": "MNQ",
+        "category": "sweep_fvg",
+        "timeframe": "5m",
+        "hypothesis": "Liquidity sweep and FVG retest must agree within 3 bars during NY morning.",
+        "spec": {
+            "name": "MNQ 5m Sweep + FVG",
+            "instrument_symbol": "MNQ",
+            "timeframe": "5m",
+            "category": "sweep_fvg",
+            "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+            "entry": {
+                "type": "confluence",
+                "window_bars": 3,
+                "all": [
+                    {"type": "liquidity_sweep", "lookback": 12, "sweep_ticks": 2},
+                    {"type": "fair_value_gap", "min_gap_ticks": 4, "max_age_bars": 36, "side": "both"},
+                ],
+            },
+            "filters": {
+                "start_hhmm": "08:30",
+                "end_hhmm": "11:00",
+                "max_trades_per_day": 2,
+            },
+            "exit": {
+                "stop_ticks": 12,
+                "target_ticks": 20,
+                "breakeven_r": 1.0,
+                "max_bars": 16,
+                "session_end_flatten": True,
+            },
+            "risk": {"dollar_risk_per_trade": 75, "max_contracts": 3},
+        },
+    },
 ]
+
+_VIDEO_SWEEP_TEMPLATE = {
+    "category": "video_liquidity_sweep",
+    "timeframe": "5m",
+    "hypothesis": "Prior completed session H/L sweep, rejection close, optional pivot BOS, fib limit entry.",
+    "entry": {
+        "type": "video_liquidity_sweep",
+        "pivot_left": 3,
+        "pivot_right": 3,
+        "sweep_ticks": 1,
+        "stop_buffer_ticks": 2,
+        "fib_ratio": "0.618",
+        "reward_risk": "2",
+        "order_expire_bars": 12,
+        "bos_window": 20,
+        "require_bos_after_sweep": True,
+    },
+    "exit": {"stop_ticks": 16, "target_ticks": 32, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+_VIDEO_ANCHOR_TEMPLATE = {
+    "category": "video_anchor_bos",
+    "timeframe": "5m",
+    "hypothesis": "Confirmed pivot anchor, close break vs prior bar, fib retracement limit entry.",
+    "entry": {
+        "type": "video_anchor_bos",
+        "pivot_left": 3,
+        "pivot_right": 3,
+        "fib_ratio": "0.618",
+        "reward_risk": "2",
+        "order_expire_bars": 16,
+    },
+    "exit": {"stop_ticks": 20, "target_ticks": 40, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+_BERG_TNB_BASE = {
+    "category": "berg_tnb_model_v1",
+    "timeframe": "5m",
+    "hypothesis": "Berg TNB: 4H bias → session level → sweep → reversal → 0.079 fakeout → 5m BOS → entry fib (research).",
+    "entry": {
+        "type": "berg_tnb_model_v1",
+        "session_profile": "pdf_indices",
+        "setup_preset": "new_york_setup",
+        "fib_fakeout_ratio": "0.079",
+        "entry_fib_ratio": "0.618",
+        "entry_fib_ratios_experimental": ["0.500", "0.550", "0.595", "0.618", "0.786"],
+        "fractal_4h_left": 2,
+        "fractal_4h_right": 2,
+        "fractal_5m_left": 2,
+        "fractal_5m_right": 2,
+        "doji_mode": "skip",
+        "allow_exact_sweep_touch": True,
+        "order_expire_bars": 48,
+        "execution_scenario": "ohlc_conservative",
+    },
+    "exit_meta": {"profile": "structural_rr", "reward_risk": "2"},
+    "exit": {"stop_ticks": 20, "target_ticks": 40, "session_end_flatten": False},
+    "risk": {"dollar_risk_per_trade": 75, "max_contracts": 2},
+}
+
+for _sym in ("MNQ", "MES", "MGC"):
+    _berg = {**_BERG_TNB_BASE}
+    _berg["name"] = f"{_sym} 5m Berg TNB Model v1"
+    _berg["symbol"] = _sym
+    _berg["spec"] = {
+        "name": _berg["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": "berg_tnb_model_v1",
+        "session": {"allowed": ["ALL"], "timezone": "UTC", "profile_note": "PDF GMT markers via entry.session_profile"},
+        "entry": dict(_BERG_TNB_BASE["entry"]),
+        "exit_meta": dict(_BERG_TNB_BASE["exit_meta"]),
+        "exit": dict(_BERG_TNB_BASE["exit"]),
+        "risk": dict(_BERG_TNB_BASE["risk"]),
+    }
+    LIBRARY.append(_berg)
+
+for _sym in ("MNQ", "MES", "MGC"):
+    _sweep = {**_VIDEO_SWEEP_TEMPLATE}
+    _sweep["name"] = f"{_sym} 5m Video Liquidity Sweep"
+    _sweep["symbol"] = _sym
+    _sweep["spec"] = {
+        "name": _sweep["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": _VIDEO_SWEEP_TEMPLATE["category"],
+        "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+        "entry": dict(_VIDEO_SWEEP_TEMPLATE["entry"]),
+        "exit": dict(_VIDEO_SWEEP_TEMPLATE["exit"]),
+        "risk": dict(_VIDEO_SWEEP_TEMPLATE["risk"]),
+    }
+    LIBRARY.append(_sweep)
+
+    _anchor = {**_VIDEO_ANCHOR_TEMPLATE}
+    _anchor["name"] = f"{_sym} 5m Video Anchor BOS"
+    _anchor["symbol"] = _sym
+    _anchor["spec"] = {
+        "name": _anchor["name"],
+        "instrument_symbol": _sym,
+        "timeframe": "5m",
+        "category": _VIDEO_ANCHOR_TEMPLATE["category"],
+        "session": {"allowed": ["RTH"], "timezone": "America/Chicago"},
+        "entry": dict(_VIDEO_ANCHOR_TEMPLATE["entry"]),
+        "exit": dict(_VIDEO_ANCHOR_TEMPLATE["exit"]),
+        "risk": dict(_VIDEO_ANCHOR_TEMPLATE["risk"]),
+    }
+    LIBRARY.append(_anchor)
 
 
 async def seed_strategy_library(session: AsyncSession) -> int:
-    existing = await session.execute(select(StrategyDefinition).limit(1))
-    if existing.scalar_one_or_none():
-        return 0
-
     created = 0
     for item in LIBRARY:
+        already = (
+            await session.execute(select(StrategyDefinition).where(StrategyDefinition.name == item["name"]))
+        ).scalar_one_or_none()
+        if already:
+            continue
         inst = (
             await session.execute(select(Instrument).where(Instrument.symbol == item["symbol"]))
         ).scalar_one_or_none()

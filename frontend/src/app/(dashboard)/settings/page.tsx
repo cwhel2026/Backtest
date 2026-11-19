@@ -1,10 +1,14 @@
 export default function SettingsPage() {
   return (
     <div className="max-w-2xl space-y-6">
-      <h2 className="text-2xl font-semibold text-white">Settings</h2>
+      <h2 className="page-title">Settings</h2>
       <section className="rounded-lg border border-zinc-800 bg-[#181b22] p-6 text-sm text-zinc-400">
         <p className="font-medium text-zinc-200">Server-side configuration</p>
         <ul className="mt-3 list-inside list-disc space-y-2">
+          <li>
+            <code className="text-emerald-400">FINZDATA_API_KEY</code> — FinzData historical futures (free =
+            daily only; paid market unlocks 1m/5m)
+          </li>
           <li>
             <code className="text-emerald-400">DATABENTO_API_KEY</code> — licensed historical futures data
           </li>

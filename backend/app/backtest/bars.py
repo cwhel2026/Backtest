@@ -6,8 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.backtest import OhlcvBar
+from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 
-TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
+TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,11 @@ class Bar:
 
 
 def load_bars(session: Session, dataset_id, start: datetime | None = None, end: datetime | None = None) -> list[Bar]:
+    if has_store(dataset_id):
+        return [
+            Bar(ts=ts, open=o, high=h, low=low, close=c, volume=v)
+            for ts, o, h, low, c, v in read_parquet_bars(dataset_id, start=start, end=end)
+        ]
     q = select(OhlcvBar).where(OhlcvBar.dataset_id == dataset_id).order_by(OhlcvBar.ts)
     if start:
         q = q.where(OhlcvBar.ts >= start)

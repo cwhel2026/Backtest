@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.enums import StrategyLifecycle
 
@@ -21,6 +21,15 @@ class StrategyVersionOut(BaseModel):
     specification: dict
     changelog: str
     created_at: str
+
+
+class StrategyCreateRequest(BaseModel):
+    specification: dict
+    economic_rationale: str = Field(default="", max_length=4000)
+
+
+class StrategyCloneRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
 
 
 class StrategyDetail(BaseModel):

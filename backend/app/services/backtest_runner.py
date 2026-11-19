@@ -6,6 +6,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.backtest import ENGINE_VERSION
+from app.util.serde import clamp_str
 from app.backtest.bars import load_bars
 from app.backtest.engine import BacktestAssumptions, run_backtest
 from app.backtest.reproducibility import build_reproducibility_id
@@ -32,6 +33,13 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         if not all([version, strategy, dataset, instrument]):
             raise ValueError("Missing strategy, version, dataset, or instrument")
 
+        meta = dataset.meta or {}
+        qclass = (meta.get("quality_class") or "").lower()
+        if qclass == "blocked" or dataset.validation_status.value == "failed":
+            raise ValueError(
+                "Dataset quality is BLOCKED — fix or ingest validated data before backtesting."
+            )
+
         bars = load_bars(session, dataset.id)
         if not bars:
             raise ValueError("Dataset has no OHLCV bars — import CSV or connect a data provider.")
@@ -44,8 +52,18 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
             else None,
         )
 
+        spec = dict(version.specification)
+        entry_type = (spec.get("entry") or {}).get("type")
+        if entry_type in ("video_liquidity_sweep", "video_anchor_bos", "berg_tnb_model_v1"):
+            spec["data_context"] = {
+                **(spec.get("data_context") or {}),
+                "rollover_events": meta.get("rollover_events") or [],
+                "dataset_version": dataset.version_tag,
+                "dataset_checksum": dataset.content_checksum,
+            }
+
         result = run_backtest(
-            version.specification,
+            spec,
             bars,
             instrument,
             dataset.timeframe,
@@ -64,9 +82,27 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         run.equity_curve = result.equity_curve
         run.warnings = result.warnings
         run.engine_version = ENGINE_VERSION
+        run.parameters = {
+            **(run.parameters or {}),
+            "dataset_version_tag": dataset.version_tag,
+            "dataset_checksum": dataset.content_checksum,
+            "dataset_quality_class": meta.get("quality_class"),
+            "dataset_provider_id": str(dataset.provider_id),
+            "instrument_symbol": instrument.symbol,
+            "timeframe": dataset.timeframe,
+            "coverage_start": dataset.coverage_start.isoformat() if dataset.coverage_start else None,
+            "coverage_end": dataset.coverage_end.isoformat() if dataset.coverage_end else None,
+        }
         run.performance_category = PerformanceCategory.BACKTEST
         run.completed_at = datetime.now(UTC)
         run.status = "completed"
+        if result.decision_events is not None or result.rejected_setups is not None:
+            run.simulation_log = {
+                "decision_events": result.decision_events or [],
+                "rejected_setups": result.rejected_setups or [],
+                "simulation_provenance": result.simulation_provenance or {},
+                "engine_version": ENGINE_VERSION,
+            }
 
         session.execute(delete(BacktestTrade).where(BacktestTrade.backtest_run_id == run.id))
         for t in result.trades:
@@ -83,7 +119,7 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
                     exit_price=t["exit_price"],
                     stop_price=t.get("stop_price"),
                     target_price=t.get("target_price"),
-                    exit_reason=t["exit_reason"],
+                    exit_reason=clamp_str(str(t["exit_reason"]), 64),
                     gross_pnl=t["gross_pnl"],
                     commissions=t["commissions"],
                     slippage=t["slippage"],

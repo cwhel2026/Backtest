@@ -1,12 +1,24 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from app.backtest.bars import Bar, resample_if_needed
-from app.backtest.dsl import EntrySignal, session_keys_rth, signal_at_bar, validate_spec
+from app.backtest.costs import apply_slippage, settle_trade
+from app.backtest.dsl import build_signal_context, session_keys_rth, signal_at_bar, validate_spec
+from app.backtest.execution import OrderType, SimulatedOrder, process_order_bar, serialize_events
+from app.backtest.exits import (
+    ManagedPosition,
+    check_intrabar_exit,
+    manage_at_bar_close,
+    resolve_stop_target,
+    time_stop_hit,
+)
 from app.backtest.metrics import SimulatedTrade, compute_metrics
 from app.models.instrument import Instrument
 from app.services.futures_math import contracts_for_risk
+
+VIDEO_ENTRY_TYPES = frozenset({"video_liquidity_sweep", "video_anchor_bos"})
+BERG_ENTRY_TYPES = frozenset({"berg_tnb_model_v1"})
 
 
 @dataclass
@@ -21,22 +33,9 @@ class BacktestResult:
     metrics: dict
     equity_curve: list[dict]
     warnings: list[str]
-
-
-def _apply_slippage(price: Decimal, direction: str, side: str, tick: Decimal, ticks: int) -> Decimal:
-    adj = tick * Decimal(ticks)
-    if side == "entry":
-        if direction == "long":
-            return price + adj
-        return price - adj
-    if direction == "long":
-        return price - adj
-    return price + adj
-
-
-def _pnl_points(entry: Decimal, exit_px: Decimal, direction: str, qty: int, multiplier: Decimal) -> Decimal:
-    diff = exit_px - entry if direction == "long" else entry - exit_px
-    return diff * multiplier * Decimal(qty)
+    decision_events: list[dict] | None = None
+    rejected_setups: list[dict] | None = None
+    simulation_provenance: dict | None = None
 
 
 def run_backtest(
@@ -51,9 +50,25 @@ def run_backtest(
     if errors:
         raise ValueError("; ".join(errors))
 
+    entry_type = (spec.get("entry") or {}).get("type")
+    if entry_type in VIDEO_ENTRY_TYPES:
+        from app.backtest.video_backtest import run_video_backtest
+
+        return run_video_backtest(spec, bars, instrument, dataset_timeframe, assumptions, starting_equity)
+
+    if entry_type in BERG_ENTRY_TYPES:
+        from app.backtest.berg_tnb.backtest import run_berg_tnb_backtest
+
+        spec = dict(spec)
+        entry = dict(spec.get("entry") or {})
+        if "data_context" not in spec and spec.get("data_context") is None:
+            spec["data_context"] = spec.get("data_context") or {}
+        spec["entry"] = entry
+        return run_berg_tnb_backtest(spec, bars, instrument, dataset_timeframe, assumptions, starting_equity)
+
     warnings: list[str] = []
     warnings.append(
-        "Signals on bar close; entries at next bar open. Intrabar stop/target: stop checked before target."
+        "Signals on bar close; market entries at next bar open. Intrabar stop/target: stop checked before target."
     )
 
     strategy_tf = spec.get("timeframe", dataset_timeframe)
@@ -63,6 +78,7 @@ def run_backtest(
 
     session_keys = session_keys_rth(bars)
     tick = instrument.tick_size
+    signal_ctx = build_signal_context(spec, bars, session_keys, instrument_tick=tick)
     commission_side = assumptions.commission_per_side or instrument.default_commission_per_side
     slip = assumptions.slippage_ticks_per_side
     dollar_risk = Decimal(str(spec["risk"].get("dollar_risk_per_trade", 100)))
@@ -73,85 +89,163 @@ def run_backtest(
     equity = starting_equity
     equity_curve = [{"ts": bars[0].ts.isoformat(), "equity": float(equity)}]
 
+    trades_by_session: dict[str, int] = {}
+    max_trades_day = int((spec.get("filters") or {}).get("max_trades_per_day") or 0)
+
     i = 0
     while i < len(bars) - 2:
-        sig = signal_at_bar(spec, bars, i, session_keys, tick)
+        if max_trades_day and trades_by_session.get(session_keys[i], 0) >= max_trades_day:
+            i += 1
+            continue
+        sig = signal_at_bar(spec, bars, i, session_keys, tick, signal_ctx)
         if not sig:
             i += 1
             continue
 
-        entry_bar = bars[i + 1]
-        raw_entry = entry_bar.open
-        qty = contracts_for_risk(raw_entry, sig.stop_price, dollar_risk, instrument)
+        order_events: list[dict] = []
+        entry_bar: Bar | None = None
+        ref_entry: Decimal
+        signal_index = i
+        fill_index = i + 1
+
+        if sig.entry_mode == "limit" and sig.limit_price is not None:
+            expire_at = bars[i].ts + timedelta(
+                minutes=max(1, sig.order_expire_bars) * _bar_minutes(bars, i)
+            )
+            order = SimulatedOrder(
+                order_id=len(trade_ledgers) + 1,
+                direction=sig.direction,
+                order_type=OrderType.LIMIT,
+                limit_or_stop_price=sig.limit_price,
+                qty=1,
+                created_ts=sig.signal_ts,
+                expire_ts=expire_at,
+                stop_price=sig.stop_price,
+                target_price=sig.target_price,
+                reason=sig.reason,
+            )
+            order.log(bars[i].ts, "placed", f"limit {sig.limit_price}")
+            filled_px: Decimal | None = None
+            for k in range(i + 1, min(len(bars), i + 1 + sig.order_expire_bars)):
+                px = process_order_bar(order, bars[k], tick)
+                if px is not None:
+                    filled_px = px
+                    entry_bar = bars[k]
+                    fill_index = k
+                    break
+            order_events = serialize_events(order.events)
+            if filled_px is None:
+                i += 1
+                continue
+            ref_entry = filled_px
+        else:
+            entry_bar = bars[i + 1]
+            ref_entry = entry_bar.open
+            fill_index = i + 1
+
+        assert entry_bar is not None
+        qty = contracts_for_risk(ref_entry, sig.stop_price, dollar_risk, instrument)
         qty = min(max(qty, 1 if qty > 0 else 0), max_contracts)
         if qty < 1:
             i += 1
             continue
 
-        entry_px = _apply_slippage(raw_entry, sig.direction, "entry", tick, slip)
-        stop = sig.stop_price
-        target = sig.target_price
+        entry_px = apply_slippage(ref_entry, sig.direction, "entry", tick, slip)
+        atr_now = signal_ctx.atr[i] if signal_ctx.atr else None
+        stop, target = resolve_stop_target(
+            spec,
+            direction=sig.direction,
+            entry_px=entry_px,
+            tick=tick,
+            atr=atr_now,
+            fallback_stop=sig.stop_price,
+            fallback_target=sig.target_price,
+        )
+        position = ManagedPosition(
+            direction=sig.direction,
+            entry=entry_px,
+            stop=stop,
+            target=target,
+            bars_held=0,
+            initial_risk=abs(entry_px - stop),
+        )
 
-        exit_px = entry_px
+        ref_exit = ref_entry
+        exec_exit = entry_px
         exit_ts = entry_bar.ts
         exit_reason = "session_end"
         mae = Decimal(0)
         mfe = Decimal(0)
 
-        j = i + 1
+        j = fill_index
         while j < len(bars):
             b = bars[j]
-            bar_mae = Decimal(0)
-            bar_mfe = Decimal(0)
             if sig.direction == "long":
                 bar_mfe = max(Decimal(0), (b.high - entry_px) * instrument.multiplier * qty)
                 bar_mae = max(Decimal(0), (entry_px - b.low) * instrument.multiplier * qty)
-                stop_hit = b.low <= stop
-                target_hit = b.high >= target
             else:
                 bar_mfe = max(Decimal(0), (entry_px - b.low) * instrument.multiplier * qty)
                 bar_mae = max(Decimal(0), (b.high - entry_px) * instrument.multiplier * qty)
-                stop_hit = b.high >= stop
-                target_hit = b.low <= target
-
             mae = max(mae, bar_mae)
             mfe = max(mfe, bar_mfe)
 
-            if stop_hit:
-                exit_px = _apply_slippage(stop, sig.direction, "exit", tick, slip)
+            hit_px, hit_reason = check_intrabar_exit(sig.direction, position.stop, position.target, b)
+            if hit_px is not None and hit_reason is not None:
+                ref_exit = hit_px
+                exec_exit = apply_slippage(hit_px, sig.direction, "exit", tick, slip)
                 exit_ts = b.ts
-                exit_reason = "stop_loss"
-                break
-            if target_hit:
-                exit_px = _apply_slippage(target, sig.direction, "exit", tick, slip)
-                exit_ts = b.ts
-                exit_reason = "take_profit"
+                exit_reason = hit_reason
+                stop, target = position.stop, position.target
                 break
 
             if j + 1 < len(bars) and session_keys[j + 1] != session_keys[j] and spec.get("exit", {}).get(
                 "session_end_flatten", True
             ):
-                exit_px = _apply_slippage(b.close, sig.direction, "exit", tick, slip)
+                ref_exit = b.close
+                exec_exit = apply_slippage(b.close, sig.direction, "exit", tick, slip)
                 exit_ts = b.ts
                 exit_reason = "session_flatten"
+                stop, target = position.stop, position.target
                 break
+
+            atr_j = signal_ctx.atr[j] if signal_ctx.atr else None
+            position = manage_at_bar_close(position, b, spec, tick, atr_j)
+            if time_stop_hit(position, spec):
+                ref_exit = b.close
+                exec_exit = apply_slippage(b.close, sig.direction, "exit", tick, slip)
+                exit_ts = b.ts
+                exit_reason = "time_stop"
+                stop, target = position.stop, position.target
+                break
+            stop, target = position.stop, position.target
             j += 1
 
-        gross = _pnl_points(entry_px, exit_px, sig.direction, qty, instrument.multiplier)
-        slip_cost = (
-            tick * Decimal(slip) * instrument.multiplier * Decimal(qty) * Decimal(2)
-        )  # approximate $ slippage
-        commissions = commission_side * Decimal(2) * Decimal(qty)
-        net = gross - commissions - slip_cost
+        if exit_reason == "session_end":
+            last = bars[-1]
+            ref_exit = last.close
+            exec_exit = apply_slippage(last.close, sig.direction, "exit", tick, slip)
+            exit_ts = last.ts
+            exit_reason = "end_of_data"
+
+        settlement = settle_trade(
+            direction=sig.direction,
+            qty=qty,
+            instrument=instrument,
+            ref_entry=ref_entry,
+            exec_entry=entry_px,
+            ref_exit=ref_exit,
+            exec_exit=exec_exit,
+            commission_per_side=commission_side,
+        )
 
         simulated.append(
             SimulatedTrade(
                 sig.direction,
                 qty,
-                net,
-                gross,
-                commissions,
-                slip_cost,
+                settlement.net_pnl,
+                settlement.gross_pnl,
+                settlement.commissions,
+                settlement.slippage,
                 mae,
                 mfe,
             )
@@ -165,22 +259,37 @@ def run_backtest(
                 "entry_ts": entry_bar.ts,
                 "entry_price": entry_px,
                 "exit_ts": exit_ts,
-                "exit_price": exit_px,
+                "exit_price": exec_exit,
                 "stop_price": stop,
                 "target_price": target,
                 "exit_reason": exit_reason,
-                "gross_pnl": gross,
-                "commissions": commissions,
-                "slippage": slip_cost,
-                "net_pnl": net,
+                "gross_pnl": settlement.gross_pnl,
+                "commissions": settlement.commissions,
+                "slippage": settlement.slippage,
+                "net_pnl": settlement.net_pnl,
                 "mae": mae,
                 "mfe": mfe,
-                "meta": {"signal_reason": sig.reason},
+                "meta": {
+                    "signal_reason": sig.reason,
+                    "reference_entry": ref_entry,
+                    "reference_exit": ref_exit,
+                    "entry_mode": sig.entry_mode,
+                    "setup": sig.setup_meta or {},
+                    "order_events": order_events,
+                },
             }
         )
-        equity += net
+        equity += settlement.net_pnl
         equity_curve.append({"ts": exit_ts.isoformat(), "equity": float(equity)})
+        trades_by_session[session_keys[signal_index]] = trades_by_session.get(session_keys[signal_index], 0) + 1
         i = j + 1
 
     metrics = compute_metrics(simulated, starting_equity)
     return BacktestResult(trade_ledgers, metrics, equity_curve, warnings)
+
+
+def _bar_minutes(bars: list[Bar], i: int) -> int:
+    if i + 1 < len(bars):
+        delta = bars[i + 1].ts - bars[i].ts
+        return max(1, int(delta.total_seconds() // 60))
+    return 5

@@ -12,6 +12,7 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
@@ -21,6 +22,14 @@ celery_app.conf.update(
         "research-health-pulse": {
             "task": "app.worker.tasks.health_pulse",
             "schedule": 300.0,
+        },
+        "autonomous-prop-hourly": {
+            "task": "app.worker.tasks.autonomous_prop_cycle",
+            "schedule": 3600.0,
+        },
+        "paper-forward-tick": {
+            "task": "app.worker.tasks.paper_forward_tick",
+            "schedule": 60.0,
         },
     },
 )

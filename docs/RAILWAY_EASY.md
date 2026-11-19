@@ -119,7 +119,8 @@ On the **frontend** service → **Variables**:
 
 | Variable name | Value |
 |---------------|--------|
-| `NEXT_PUBLIC_API_URL` | Your **API URL** from Step 6 (must start with `https://`) |
+| `BACKEND_INTERNAL_URL` | Your **API URL** from Step 6 (must start with `https://`) — preferred |
+| `NEXT_PUBLIC_API_URL` | Same URL (optional if `BACKEND_INTERNAL_URL` is set) |
 
 Example: `https://backtest-production-xxxx.up.railway.app`
 
@@ -174,6 +175,7 @@ Browsers block the site unless the API allows your frontend URL.
 |---------|------------|
 | `/health` does not load | Backend **Deploy Logs** — usually wrong root directory or branch without `railway.toml` |
 | Login fails | Check `INITIAL_ADMIN_PASSWORD` spelling; redeploy backend |
+| Login says **recovery mode** / API 502 | Postgres crash-recovered after DiskFull. Open the **Postgres** plugin → **Restart**. Wait until Running. Increase the volume. Then sign in again. |
 | “CORS” / network error in browser | `ALLOWED_ORIGINS` must match frontend URL exactly; redeploy backend |
 | Backtest stuck on “queued” | Redeploy backend — worker runs inside the same service (check logs for “celery”) |
 | Build fails on frontend | `NEXT_PUBLIC_API_URL` must be set **before** or redeploy after adding it |
@@ -182,6 +184,8 @@ Browsers block the site unless the API allows your frontend URL.
 
 ## Optional later
 
+- **OHLCV volume (required for serious history):** See [RAILWAY_HISTORICAL_DATA.md](./RAILWAY_HISTORICAL_DATA.md). Mount a volume at `/data`, set `OHLCV_STORE_DIR=/data/ohlcv` and `OHLCV_PERSISTENT_REQUIRED=true`. Split API/worker services need S3 mirror vars on both.  
+- **FinzData:** add `FINZDATA_API_KEY` on the backend. Free plan is daily bars; 1m/5m search needs a paid market, otherwise Yahoo is used.  
 - **Databento:** add `DATABENTO_API_KEY` on the backend.  
 - **Full split deploy** (separate worker): see [DEPLOY_RAILWAY.md](./DEPLOY_RAILWAY.md).
 

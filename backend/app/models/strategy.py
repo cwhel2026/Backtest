@@ -1,11 +1,12 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.enums import pg_enum
 from app.models.enums import StrategyLifecycle
 
 
@@ -20,7 +21,7 @@ class StrategyHypothesis(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
-    created_by: Mapped[str] = mapped_column(String(32), default="system", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), default="system", nullable=False)
 
 
 class StrategyDefinition(Base):
@@ -35,7 +36,7 @@ class StrategyDefinition(Base):
     timeframe: Mapped[str] = mapped_column(String(16), default="1m", nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     lifecycle: Mapped[StrategyLifecycle] = mapped_column(
-        Enum(StrategyLifecycle, name="strategy_lifecycle"),
+        pg_enum(StrategyLifecycle, "strategy_lifecycle"),
         default=StrategyLifecycle.RESEARCHING,
         nullable=False,
     )

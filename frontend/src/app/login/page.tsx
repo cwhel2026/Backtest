@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { login, setStoredToken } from "@/lib/api";
+import { login, POSTGRES_RECOVERY_COPY, setStoredToken } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,8 +19,23 @@ export default function LoginPage() {
       const token = await login(email, password);
       setStoredToken(token.access_token);
       router.push("/");
-    } catch {
-      setError("Invalid credentials. Use the admin email from .env and your configured password.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg === "INVALID_CREDENTIALS") {
+        setError(
+          "Password or email does not match the backend database. On Railway backend: re-save INITIAL_ADMIN_PASSWORD (no spaces), redeploy backend, wait 1 minute, try again.",
+        );
+      } else if (
+        !msg ||
+        /^API_ERROR_/.test(msg) ||
+        /failed to fetch|failed to respond|recovery mode|starting up|connection reset|last database write failed/i.test(
+          msg,
+        )
+      ) {
+        setError(POSTGRES_RECOVERY_COPY);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -30,7 +45,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-[#0e1015] px-4">
       <form
         onSubmit={onSubmit}
-        className="w-full max-w-md rounded-xl border border-zinc-800 bg-[#12141a] p-8 shadow-xl"
+        className="w-full max-w-md rounded-xl border border-zinc-800 bg-[#12141a] p-6 shadow-xl md:p-8"
       >
         <p className="text-xs font-semibold tracking-[0.25em] text-emerald-400">PROP EDGE AI</p>
         <h1 className="mt-2 text-2xl font-medium text-white">Private research login</h1>
@@ -57,7 +72,7 @@ export default function LoginPage() {
             required
           />
         </label>
-        {error ? <p className="mt-4 text-sm text-red-400">{error}</p> : null}
+        {error ? <p className="mt-4 text-xs leading-relaxed text-red-400 md:text-sm">{error}</p> : null}
         <button
           type="submit"
           disabled={loading}

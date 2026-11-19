@@ -1,4 +1,5 @@
 from app.models.backtest import BacktestRun, BacktestTrade, OhlcvBar
+from app.models.paper import PaperAccount, PaperFill, PaperSlot
 from app.models.instrument import FuturesContract, Instrument
 from app.models.market_data import DataProvider, DataQualityReport, HistoricalDataset
 from app.models.research import AuditLog, ResearchActivity, ResearchJob
@@ -21,4 +22,7 @@ __all__ = [
     "ResearchJob",
     "ResearchActivity",
     "AuditLog",
+    "PaperAccount",
+    "PaperSlot",
+    "PaperFill",
 ]

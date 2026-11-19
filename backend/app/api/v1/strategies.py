@@ -10,7 +10,14 @@ from app.models.backtest import BacktestRun
 from app.models.instrument import Instrument
 from app.models.strategy import StrategyDefinition, StrategyVersion
 from app.models.user import User
-from app.schemas.strategy import StrategyDetail, StrategySummary, StrategyVersionOut
+from app.schemas.strategy import (
+    StrategyCloneRequest,
+    StrategyCreateRequest,
+    StrategyDetail,
+    StrategySummary,
+    StrategyVersionOut,
+)
+from app.services.strategy_factory import clone_strategy_async, create_strategy_async
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -38,6 +45,45 @@ async def list_strategies(
         )
         for defn, symbol in rows
     ]
+
+
+@router.post("", response_model=StrategyDetail)
+async def create_strategy(
+    body: StrategyCreateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyDetail:
+    try:
+        defn = await create_strategy_async(
+            db,
+            specification=body.specification,
+            economic_rationale=body.economic_rationale or body.specification.get("name", ""),
+            created_by=user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    await db.commit()
+    return await get_strategy(str(defn.id), user, db)
+
+
+@router.post("/{strategy_id}/clone", response_model=StrategyDetail)
+async def clone_strategy(
+    strategy_id: str,
+    body: StrategyCloneRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyDetail:
+    try:
+        defn = await clone_strategy_async(
+            db,
+            strategy_id=uuid.UUID(strategy_id),
+            new_name=body.name,
+            created_by=user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    await db.commit()
+    return await get_strategy(str(defn.id), user, db)
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetail)
@@ -79,7 +125,11 @@ async def get_strategy(
             "id": str(latest.id),
             "reproducibility_id": latest.reproducibility_id,
             "metrics": latest.metrics,
-            "performance_category": latest.performance_category.value,
+            "performance_category": (
+                latest.performance_category.value
+                if hasattr(latest.performance_category, "value")
+                else str(latest.performance_category)
+            ),
         }
     return StrategyDetail(
         id=str(defn.id),
