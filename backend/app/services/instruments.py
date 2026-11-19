@@ -41,6 +41,17 @@ INSTRUMENT_SPECS: list[dict] = [
     {"symbol": "MNQ", "name": "Micro E-mini Nasdaq-100", "asset_class": AssetClass.EQUITY_INDEX, "tick_size": "0.25", "tick_value": "0.50", "multiplier": "2", "hours": CME_INDEX_HOURS, "micro_of": "NQ", "is_micro": True},
     {"symbol": "CL", "name": "Crude Oil (WTI)", "asset_class": AssetClass.ENERGY, "tick_size": "0.01", "tick_value": "10.00", "multiplier": "1000", "hours": CME_GLOBEX_COMMODITY},
     {"symbol": "GC", "name": "Gold", "asset_class": AssetClass.METAL, "tick_size": "0.10", "tick_value": "10.00", "multiplier": "100", "hours": CME_GLOBEX_COMMODITY},
+    {
+        "symbol": "MGC",
+        "name": "Micro Gold",
+        "asset_class": AssetClass.METAL,
+        "tick_size": "0.10",
+        "tick_value": "1.00",
+        "multiplier": "10",
+        "hours": CME_GLOBEX_COMMODITY,
+        "micro_of": "GC",
+        "is_micro": True,
+    },
 ]
 
 CURATED_SYMBOLS = frozenset(s["symbol"] for s in INSTRUMENT_SPECS)

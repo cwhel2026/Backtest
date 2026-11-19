@@ -16,6 +16,13 @@ from app.backtest.ict import (
 )
 from app.backtest.indicators import atr_series, bollinger_series, ema_series, rsi_series, session_vwap
 from app.backtest.mtf import htf_bars_from_ltf, ltf_to_htf_index, series_on_ltf
+from app.backtest.structure import (
+    anchor_limit_price,
+    confirmed_swings,
+    detect_anchor_bos_retrace,
+    detect_liquidity_sweep_reversal,
+    sweep_limit_price,
+)
 
 
 @dataclass
@@ -25,6 +32,10 @@ class EntrySignal:
     stop_price: Decimal
     target_price: Decimal
     reason: str
+    entry_mode: str = "market"  # market | limit
+    limit_price: Decimal | None = None
+    order_expire_bars: int = 12
+    setup_meta: dict | None = None
 
 
 ENTRY_TYPES = frozenset(
@@ -39,6 +50,9 @@ ENTRY_TYPES = frozenset(
         "fair_value_gap",
         "bollinger_reversion",
         "liquidity_sweep",
+        "liquidity_sweep_reversal",
+        "anchor_bos_retrace",
+        "sweep_bos_combined",
         "order_block_retest",
         "premium_discount",
         "mtf_ema_pullback",
@@ -134,6 +148,7 @@ class SignalContext:
     atr: list[Decimal | None] | None = None
     filter_htf_ema: list[Decimal | None] | None = None
     leg_contexts: list["SignalContext"] | None = None
+    swings: list | None = None
 
 
 def build_signal_context(
@@ -217,6 +232,10 @@ def build_signal_context(
         htf_bars = htf_bars_from_ltf(bars, htf)
         idx = ltf_to_htf_index(bars, htf_bars)
         ctx.filter_htf_ema = series_on_ltf(ema_series([b.close for b in htf_bars], period), idx)
+    if entry_type in ("liquidity_sweep_reversal", "anchor_bos_retrace", "sweep_bos_combined"):
+        left = int(entry.get("swing_left", 2))
+        right = int(entry.get("swing_right", 2))
+        ctx.swings = confirmed_swings(bars, left=left, right=right)
     return ctx
 
 
@@ -505,6 +524,136 @@ def signal_at_bar(
         if bar.high > swing_hi + sweep and bar.close < swing_hi:
             return pack("short", "liq_sweep_high")
         return None
+
+    if entry_type == "liquidity_sweep_reversal":
+        sweep_ticks = int(entry.get("sweep_ticks", 2))
+        fib_ratio = Decimal(str(entry.get("fib_ratio", "0.618")))
+        buffer_ticks = int(entry.get("stop_buffer_ticks", 2))
+        rr = Decimal(str(entry.get("reward_risk", "2")))
+        require_bos = bool(entry.get("require_bos", False))
+        setup = detect_liquidity_sweep_reversal(
+            bars,
+            i,
+            session_keys,
+            tick,
+            sweep_ticks=sweep_ticks,
+            fib_ratio=fib_ratio,
+            require_bos=require_bos,
+            swings=ctx.swings,
+        )
+        if not setup:
+            return None
+        limit = sweep_limit_price(setup, fib_ratio)
+        if setup.direction == "long":
+            stop = setup.sweep_extreme - tick * Decimal(buffer_ticks)
+            target = limit + (limit - stop) * rr
+        else:
+            stop = setup.sweep_extreme + tick * Decimal(buffer_ticks)
+            target = limit - (stop - limit) * rr
+        sig = EntrySignal(
+            setup.direction,
+            setup.signal_ts,
+            stop,
+            target,
+            setup.reason,
+            entry_mode="limit",
+            limit_price=limit,
+            order_expire_bars=int(entry.get("order_expire_bars", 12)),
+            setup_meta={"strategy": "liquidity_sweep_reversal", "reclaimed": str(setup.reclaimed_level)},
+        )
+        return _apply_filters(spec, bars, i, ctx, tick, sig)
+
+    if entry_type == "anchor_bos_retrace":
+        if not ctx.swings:
+            return None
+        setup = detect_anchor_bos_retrace(
+            bars,
+            i,
+            ctx.swings,
+            require_close_confirm=bool(entry.get("close_confirm", True)),
+        )
+        if not setup:
+            return None
+        fib_ratio = Decimal(str(entry.get("fib_ratio", "0.618")))
+        buffer_ticks = int(entry.get("stop_buffer_ticks", 2))
+        rr = Decimal(str(entry.get("reward_risk", "2")))
+        limit = anchor_limit_price(setup, fib_ratio)
+        if setup.direction == "long":
+            stop = setup.impulse_low - tick * Decimal(buffer_ticks)
+            target = limit + (limit - stop) * rr
+        else:
+            stop = setup.impulse_high + tick * Decimal(buffer_ticks)
+            target = limit - (stop - limit) * rr
+        sig = EntrySignal(
+            setup.direction,
+            setup.signal_ts,
+            stop,
+            target,
+            setup.reason,
+            entry_mode="limit",
+            limit_price=limit,
+            order_expire_bars=int(entry.get("order_expire_bars", 16)),
+            setup_meta={
+                "strategy": "anchor_bos_retrace",
+                "anchor_confirmed_at": setup.anchor.confirmed_at,
+            },
+        )
+        return _apply_filters(spec, bars, i, ctx, tick, sig)
+
+    if entry_type == "sweep_bos_combined":
+        sweep_ticks = int(entry.get("sweep_ticks", 2))
+        max_bars_between = int(entry.get("max_bars_between", 6))
+        fib_ratio = Decimal(str(entry.get("fib_ratio", "0.618")))
+        min_rr = Decimal(str(entry.get("min_reward_risk", "1.5")))
+        a = detect_liquidity_sweep_reversal(
+            bars,
+            i,
+            session_keys,
+            tick,
+            sweep_ticks=sweep_ticks,
+            require_bos=True,
+            swings=ctx.swings,
+        )
+        if not a:
+            return None
+        found_bos = False
+        bos_dir = a.direction
+        for lag in range(1, max_bars_between + 1):
+            j = i - lag
+            if j < 0 or not ctx.swings:
+                break
+            bsetup = detect_anchor_bos_retrace(bars, j, ctx.swings, require_close_confirm=True)
+            if bsetup and bsetup.direction == bos_dir:
+                found_bos = True
+                break
+        if not found_bos:
+            return None
+        limit = sweep_limit_price(a, fib_ratio)
+        buffer_ticks = int(entry.get("stop_buffer_ticks", 2))
+        if a.direction == "long":
+            stop = a.sweep_extreme - tick * Decimal(buffer_ticks)
+            risk = limit - stop
+            if risk <= 0:
+                return None
+            target = limit + risk * min_rr
+        else:
+            stop = a.sweep_extreme + tick * Decimal(buffer_ticks)
+            risk = stop - limit
+            if risk <= 0:
+                return None
+            target = limit - risk * min_rr
+        sig = EntrySignal(
+            a.direction,
+            a.signal_ts,
+            stop,
+            target,
+            "sweep_bos_combined",
+            entry_mode="limit",
+            limit_price=limit,
+            order_expire_bars=int(entry.get("order_expire_bars", 12)),
+            setup_meta={"strategy": "sweep_bos_combined"},
+        )
+        return _apply_filters(spec, bars, i, ctx, tick, sig)
 
     if entry_type == "order_block_retest":
         zones = ctx.order_blocks

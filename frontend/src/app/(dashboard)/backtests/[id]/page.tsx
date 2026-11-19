@@ -22,6 +22,12 @@ type Trade = {
   exit_ts: string;
   net_pnl: number;
   exit_reason: string;
+  meta?: {
+    signal_reason?: string;
+    entry_mode?: string;
+    order_events?: { event: string; detail: string; ts: string }[];
+    setup?: Record<string, unknown>;
+  };
 };
 
 export default function BacktestDetailPage() {
@@ -149,7 +155,8 @@ function TradesTable({ trades }: { trades: Trade[] }) {
             <th className="px-3 py-2">Entry</th>
             <th className="px-3 py-2">Exit</th>
             <th className="px-3 py-2">Net</th>
-            <th className="px-3 py-2">Reason</th>
+            <th className="px-3 py-2">Exit</th>
+            <th className="px-3 py-2">Replay</th>
           </tr>
         </thead>
         <tbody>
@@ -160,7 +167,14 @@ function TradesTable({ trades }: { trades: Trade[] }) {
               <td className="px-3 py-2 text-xs">{t.entry_ts}</td>
               <td className="px-3 py-2 text-xs">{t.exit_ts}</td>
               <td className="px-3 py-2">{t.net_pnl.toFixed(2)}</td>
-              <td className="px-3 py-2">{t.exit_reason}</td>
+              <td className="px-3 py-2 text-xs">{t.exit_reason}</td>
+              <td className="px-3 py-2 text-xs text-zinc-400">
+                {t.meta?.signal_reason ?? "—"}
+                {t.meta?.entry_mode === "limit" ? " · limit" : ""}
+                {t.meta?.order_events?.length
+                  ? ` · ${t.meta.order_events.map((e) => e.event).join(" → ")}`
+                  : ""}
+              </td>
             </tr>
           ))}
         </tbody>

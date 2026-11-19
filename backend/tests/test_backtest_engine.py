@@ -113,6 +113,28 @@ def test_rsi_and_donchian_specs_validate_and_run():
     assert "trade_count" in d.metrics
 
 
+def test_slippage_reported_not_subtracted_twice():
+    spec = {
+        "name": "test ema",
+        "instrument_symbol": "MES",
+        "timeframe": "5m",
+        "category": "trend",
+        "session": {"allowed": ["RTH"]},
+        "entry": {"type": "ema_crossover", "fast_period": 3, "slow_period": 6},
+        "exit": {"stop_ticks": 30, "target_ticks": 30, "session_end_flatten": True},
+        "risk": {"dollar_risk_per_trade": 75, "max_contracts": 1},
+    }
+    bars = _synthetic_rth_bars()
+    result = run_backtest(spec, bars, _mes(), "5m", BacktestAssumptions(slippage_ticks_per_side=2))
+    for t in result.trades:
+        gross = Decimal(str(t["gross_pnl"]))
+        comm = Decimal(str(t["commissions"]))
+        slip = Decimal(str(t["slippage"]))
+        net = Decimal(str(t["net_pnl"]))
+        assert net == gross - comm
+        assert slip >= 0
+
+
 def test_backtest_reproducible_trade_count():
     spec = {
         "name": "test ema",

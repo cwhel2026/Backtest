@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -16,8 +17,10 @@ from app.models.market_data import HistoricalDataset
 from app.models.user import User
 from app.schemas.market_data import HistoricalDatasetOut, OhlcvBarOut, ProviderHealthOut
 from app.services.market_data.csv_import import import_csv_bars
+from app.backtest.bars import Bar
 from app.services.market_data.ohlcv_parquet import has_store, read_bars as read_parquet_bars
 from app.services.market_data.providers import PROVIDER_REGISTRY, all_provider_health
+from app.services.market_data.quality import audit_bars, estimate_download_cost_usd
 from app.worker.tasks import create_ingestion_job, run_data_ingestion
 
 settings = get_settings()
@@ -33,6 +36,14 @@ class IngestionRequest(BaseModel):
     timeframe: str = "1m"
     start: datetime
     end: datetime
+    confirm_paid: bool = False
+
+
+class IngestCostEstimate(BaseModel):
+    provider_slug: str
+    instrument_symbol: str
+    timeframe: str = "5m"
+    days: int = 30
 
 
 @router.get("/providers", response_model=list[ProviderHealthOut])
@@ -162,6 +173,59 @@ async def dataset_bars(
     ]
 
 
+@router.post("/ingest/estimate", response_model=dict)
+async def ingest_cost_estimate(
+    body: IngestCostEstimate,
+    _: User = Depends(get_current_user),
+) -> dict:
+    return estimate_download_cost_usd(
+        body.provider_slug,
+        symbols=1,
+        days=body.days,
+        timeframe=body.timeframe,
+    )
+
+
+@router.get("/datasets/{dataset_id}/quality")
+async def dataset_quality(
+    dataset_id: str,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    cap = 50_000
+    ds_id = uuid.UUID(dataset_id)
+    ds = (
+        await db.execute(select(HistoricalDataset).where(HistoricalDataset.id == ds_id))
+    ).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    bars: list[Bar] = []
+    if has_store(ds_id):
+        for ts, o, h, low, c, v in read_parquet_bars(ds_id)[:cap]:
+            bars.append(
+                Bar(
+                    ts=ts,
+                    open=Decimal(str(o)),
+                    high=Decimal(str(h)),
+                    low=Decimal(str(low)),
+                    close=Decimal(str(c)),
+                    volume=int(v),
+                )
+            )
+    else:
+        rows = (
+            await db.execute(
+                select(OhlcvBar).where(OhlcvBar.dataset_id == ds_id).order_by(OhlcvBar.ts).limit(cap)
+            )
+        ).scalars().all()
+        for r in rows:
+            bars.append(
+                Bar(ts=r.ts, open=r.open, high=r.high, low=r.low, close=r.close, volume=int(r.volume or 0))
+            )
+    source = (ds.meta or {}).get("provider") if isinstance(ds.meta, dict) else None
+    return audit_bars(bars, timeframe=ds.timeframe, source=source).to_dict()
+
+
 @router.post("/ingest")
 async def request_ingestion(
     body: IngestionRequest,
@@ -171,6 +235,16 @@ async def request_ingestion(
     provider = PROVIDER_REGISTRY.get(body.provider_slug)
     if not provider:
         raise HTTPException(status_code=404, detail="Unknown provider")
+    days = max(1, int((body.end - body.start).total_seconds() // 86400))
+    cost = estimate_download_cost_usd(body.provider_slug, symbols=1, days=days, timeframe=body.timeframe)
+    if cost.get("requires_approval") and not body.confirm_paid:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": "Paid provider requires confirm_paid=true after reviewing the cost estimate.",
+                "estimate": cost,
+            },
+        )
     try:
         meta = await provider.ingest_historical(
             body.instrument_symbol, body.timeframe, body.start, body.end
