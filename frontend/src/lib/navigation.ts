@@ -3,47 +3,61 @@ export type NavItem = {
   label: string;
   short: string;
   icon?: string;
+  description?: string;
 };
 
-export const MOBILE_PRIMARY: NavItem[] = [
-  { href: "/", label: "Home", short: "Home", icon: "⌂" },
-  { href: "/live-lab", label: "Live Strategy Lab", short: "Live", icon: "◎" },
-  { href: "/strategies", label: "Strategies", short: "Lab", icon: "◈" },
-  { href: "/backtests", label: "Backtests", short: "Tests", icon: "▣" },
-  { href: "/research", label: "AI Research", short: "AI", icon: "✦" },
-  { href: "/more", label: "More", short: "More", icon: "⋯" },
+/** Primary product navigation (8 sections). */
+export const PRIMARY_NAV: NavItem[] = [
+  { href: "/", label: "Dashboard", short: "Home", icon: "⌂", description: "Command centre" },
+  { href: "/scanner", label: "Market Scanner", short: "Scan", icon: "◎", description: "Setups & feed status" },
+  { href: "/strategy-lab", label: "Strategy Lab", short: "Lab", icon: "◈", description: "Strategies & rules" },
+  { href: "/backtests", label: "Backtesting", short: "Tests", icon: "▣", description: "Historical simulation" },
+  { href: "/paper-trading", label: "Paper Trading", short: "Paper", icon: "◇", description: "Forward simulation" },
+  { href: "/analytics", label: "Analytics", short: "Stats", icon: "▤", description: "Performance & compare" },
+  { href: "/research", label: "AI Research", short: "AI", icon: "✦", description: "Research automation" },
+  { href: "/settings", label: "Settings", short: "Set", icon: "⚙", description: "Data, risk & health" },
 ];
 
-export const MORE_LINKS: NavItem[] = [
-  { href: "/market-data/import", label: "Import historical data", short: "Import" },
-  { href: "/market-data/setup", label: "Buy via API estimate", short: "Estimate" },
-  { href: "/market-data", label: "Market Data", short: "Data" },
-  { href: "/leaderboard", label: "Leaderboard", short: "Rank" },
-  { href: "/strategy-debugger", label: "Strategy Debugger", short: "Debug" },
-  { href: "/strategy-compare", label: "Compare strategies", short: "Compare" },
-  { href: "/berg-tnb", label: "Berg TNB", short: "TNB" },
+/** Mobile bottom bar — five slots; full nav via Menu. */
+export const MOBILE_TAB_NAV: NavItem[] = [
+  PRIMARY_NAV[0],
+  PRIMARY_NAV[1],
+  PRIMARY_NAV[2],
+  PRIMARY_NAV[3],
+  { href: "/menu", label: "Menu", short: "Menu", icon: "⋯" },
+];
+
+export const MENU_NAV: NavItem[] = [
+  PRIMARY_NAV[4],
+  PRIMARY_NAV[5],
+  PRIMARY_NAV[6],
+  PRIMARY_NAV[7],
+];
+
+export const ADVANCED_NAV: NavItem[] = [
+  { href: "/strategy-debugger", label: "Strategy debugger", short: "Debug" },
+  { href: "/berg-tnb", label: "Berg TNB explorer", short: "TNB" },
   { href: "/desk", label: "Prop desk search", short: "Desk" },
-  { href: "/paper", label: "Forward test", short: "Paper" },
-  { href: "/settings", label: "Settings", short: "Settings" },
-  { href: "/market-data/health", label: "System health", short: "Health" },
+  { href: "/market-data", label: "Historical data admin", short: "Data" },
+  { href: "/paper-trading/certification", label: "Accuracy certification", short: "Cert" },
+  { href: "/prop-firms", label: "Prop firms reference", short: "Firms" },
 ];
 
-function dedupeNavByHref(items: NavItem[]): NavItem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.href)) return false;
-    seen.add(item.href);
-    return true;
-  });
-}
+export const DESKTOP_NAV: NavItem[] = [...PRIMARY_NAV];
 
-export const DESKTOP_NAV: NavItem[] = dedupeNavByHref([
-  ...MOBILE_PRIMARY.filter((i) => i.href !== "/more"),
-  ...MORE_LINKS,
-]);
+export const SCAN_SYMBOLS = ["MNQ", "MES", "MGC"] as const;
 
 export function isNavActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
-  if (href === "/more") return pathname === "/more";
+  if (href === "/menu") return pathname === "/menu";
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function latencyLabel(mode: string | null | undefined): string {
+  if (!mode) return "Unknown";
+  if (mode === "licensed_realtime" || mode === "live") return "Live (licensed)";
+  if (mode === "delayed") return "Delayed";
+  if (mode === "historical_replay" || mode === "replay") return "Replay";
+  if (mode === "synthetic") return "Synthetic";
+  return mode.replace(/_/g, " ");
 }

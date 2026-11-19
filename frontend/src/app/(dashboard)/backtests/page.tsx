@@ -22,9 +22,9 @@ export default function ResultsPage() {
     <div className="space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="page-title">Backtests</h2>
+          <h2 className="page-title">Backtesting</h2>
           <p className="page-sub">
-            Completed runs and keeper-grade prop screens. Use the guided flow for a new test on genuine data.
+            Completed simulations and keeper-grade screens. Start the wizard — datasets show readable names, not IDs.
           </p>
         </div>
         <Link href="/backtests/run">

@@ -1,0 +1,1 @@
+export { default } from "../../live-lab/certification/page";

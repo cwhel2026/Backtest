@@ -34,15 +34,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Desktop top bar */}
         <header className="hidden items-center justify-between border-b border-[var(--border)] bg-[var(--shell-nav)] px-8 py-4 md:flex">
           <p className="text-sm text-zinc-500">
-            <span className="text-zinc-300">Terminal</span>
-            {pathname && pathname !== "/" ? ` · ${pathname.split("/").filter(Boolean).join(" / ")}` : ""}
+            <span className="text-zinc-300">PROP EDGE AI</span>
+            {pathname && pathname !== "/" ? (
+              <span className="text-zinc-600">
+                {" "}
+                · {pathname.split("/").filter(Boolean).map((s) => s.replace(/-/g, " ")).join(" / ")}
+              </span>
+            ) : (
+              <span className="text-zinc-600"> · Dashboard</span>
+            )}
           </p>
           <Button variant="secondary" className="min-h-[36px] py-2 text-xs" onClick={logout}>
             Sign out
           </Button>
         </header>
 
-        <main className="mx-auto w-full max-w-3xl flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 pb-[calc(88px+env(safe-area-inset-bottom,0px))] md:max-w-6xl md:px-8 md:py-8 md:pb-8">
+        <main className="mx-auto w-full max-w-3xl flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 pb-[calc(88px+env(safe-area-inset-bottom,0px))] md:max-w-7xl md:px-8 md:py-8 md:pb-8">
           {children}
         </main>
 

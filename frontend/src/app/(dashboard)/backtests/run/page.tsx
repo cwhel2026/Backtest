@@ -7,17 +7,12 @@ import { BacktestStepper } from "@/components/backtest/BacktestStepper";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { apiFetch } from "@/lib/api";
+import { formatDatasetLabel, datasetQualityHint, type DatasetRow } from "@/lib/datasets";
 import { FEATURED_STRATEGIES } from "@/lib/strategy-catalog";
 
 type Strategy = { id: string; name: string; symbol: string | null; timeframe: string; category: string };
 type Instrument = { id: string; symbol: string; name: string };
-type Dataset = {
-  id: string;
-  instrument_id: string;
-  timeframe: string;
-  genuine_for_research?: boolean | null;
-  meta?: { label?: string; data_lineage?: string };
-};
+type Dataset = DatasetRow;
 
 export default function BacktestWizardPage() {
   const router = useRouter();
@@ -77,8 +72,8 @@ export default function BacktestWizardPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="page-title">New backtest</h1>
-        <p className="page-sub">Five short steps — defaults favor genuine datasets when available.</p>
+        <h1 className="page-title">Backtesting</h1>
+        <p className="page-sub">Five steps — pick strategy, market, dataset, risk, then run. Datasets show names, not IDs.</p>
       </header>
 
       <BacktestStepper step={step} />
@@ -159,10 +154,10 @@ export default function BacktestWizardPage() {
                   datasetId === d.id ? "border-[var(--accent)] bg-[var(--accent-muted)]" : "border-[var(--border)]"
                 }`}
               >
-                <span className="font-medium">{d.timeframe}</span>
-                <span className="ml-2 text-xs text-zinc-500">
-                  {d.genuine_for_research ? "Genuine" : "Not genuine — backtest may be blocked"}
+                <span className="font-medium text-zinc-100">
+                  {formatDatasetLabel(d, instrument?.symbol)}
                 </span>
+                <span className="mt-1 block text-xs text-zinc-500">{datasetQualityHint(d)}</span>
               </button>
             ))
           )}
