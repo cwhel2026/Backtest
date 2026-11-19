@@ -110,8 +110,10 @@ def forward_test_chart(run_id: UUID, db: Session = Depends(get_sync_db), _user: 
         ],
         "markers": markers,
         "equity_curve": equity,
-        "open_position": (run.runner_state or {}).get("open_position"),
-        "pending_orders": (run.runner_state or {}).get("pending", []),
+        "open_position": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("open_position"),
+        "pending_orders": ((run.runner_state or {}).get("executor") or run.runner_state or {}).get("pending", []),
+        "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+        "runner_state_version": (run.runner_state or {}).get("version"),
         "paper_orders": [
             {
                 "client_order_id": o.client_order_id,
@@ -199,6 +201,8 @@ def get_forward_test(run_id: UUID, db: Session = Depends(get_sync_db), _user: Us
             "trade_count": run.trade_count,
             "max_drawdown": float(run.max_drawdown),
             "last_data_exchange_ts": run.last_data_exchange_ts.isoformat() if run.last_data_exchange_ts else None,
+            "strategy_phase": (run.runner_state or {}).get("strategy_phase"),
+            "runner_state_version": (run.runner_state or {}).get("version"),
         },
         "validation": {"passed": ok, "reasons": reasons, "gates": gates},
         "ledger": [
@@ -229,7 +233,10 @@ def certification_dashboard(db: Session = Depends(get_sync_db), _user: User = De
 
     rows = db.execute(select(AccuracyCertificationRun).order_by(desc(AccuracyCertificationRun.created_at)).limit(10)).scalars().all()
     latest = rows[0] if rows else None
+    from app.services.live_lab.certification.strategy_readiness import strategy_readiness_matrix
+
     return {
+        "strategy_readiness": strategy_readiness_matrix(),
         "latest": (
             {
                 "status": latest.status,

@@ -2,6 +2,8 @@
 
 ## Status
 
+**Phase 3.2B:** incremental Berg FSM resume (`loop_start` + `BergTnbFsmState`), video sweep/anchor incremental engines, runner_state v3, market-event reorder tolerance, strategy readiness matrix on certification dashboard.
+
 **Phase 3.2:** execution accuracy certification package (`services/live_lab/certification/`), market-event integrity gate on ingest, Berg forward runtime snapshots (`berg_forward.py`), Accuracy Certification UI (`/live-lab/certification`). Replay triple-pass + restart fingerprinting in `certify_replay_triple()`; parity comparator documents batch vs incremental differences.
 
 **Phase 3.1:** chronological `IncrementalVideoForwardEngine` (pending orders, amendments, fills, stops, position carry in `runner_state`). Berg/video signals discovered **per closed bar** (`incremental_signals.py`) — not bar-close trade reconciliation.

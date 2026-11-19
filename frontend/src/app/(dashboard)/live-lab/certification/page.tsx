@@ -17,6 +17,7 @@ type CertDash = {
   } | null;
   history: { id: string; status: string; symbol: string; created_at: string }[];
   disclaimer: string;
+  strategy_readiness?: Record<string, Record<string, unknown>>;
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -72,6 +73,15 @@ export default function AccuracyCertificationPage() {
           Run certification (MES)
         </Button>
       </section>
+
+      {data?.strategy_readiness && (
+        <section className="rounded-xl border border-zinc-800 p-3 text-xs">
+          <h2 className="text-sm font-semibold text-zinc-200">Strategy readiness</h2>
+          <pre className="mt-2 overflow-auto text-[10px] text-zinc-400">
+            {JSON.stringify(data.strategy_readiness, null, 2)}
+          </pre>
+        </section>
+      )}
 
       {latest?.payload && (
         <section className="rounded-xl border border-zinc-800 p-3">

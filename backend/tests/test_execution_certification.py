@@ -161,8 +161,8 @@ def test_berg_runtime_idempotent_step():
     bars_4h = []
     rt = BergForwardRuntime()
     tick = Decimal("0.25")
-    rt, o1, _ = berg_forward_step(rt, spec, bars[:20], bars_4h, tick)
-    rt2, o2, _ = berg_forward_step(rt, spec, bars[:20], bars_4h, tick)
+    rt, o1, _, _ = berg_forward_step(rt, spec, bars[:20], bars_4h, tick)
+    rt2, o2, _, _ = berg_forward_step(rt, spec, bars[:20], bars_4h, tick)
     assert o2 == []
     assert rt2.last_bar_index == rt.last_bar_index
 

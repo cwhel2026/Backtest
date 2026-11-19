@@ -8,48 +8,42 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.backtest.bars import Bar
-from app.backtest.video_strategies import VideoConfig
+from app.backtest.video_strategies import Order, VideoConfig
 from app.models.instrument import Instrument
 from app.models.live_lab import ForwardTestRun
 from app.services.live_lab.candle_engine import load_closed_bars
-from app.services.live_lab.incremental_executor import ForwardExecutorState, IncrementalVideoForwardEngine
+from app.services.live_lab.incremental_executor import IncrementalVideoForwardEngine
 from app.services.live_lab.berg_forward import BergForwardRuntime
 from app.services.live_lab.incremental_signals import discover_berg_orders, discover_video_orders
 from app.services.live_lab.ledger import append_ledger_event
+from app.services.live_lab.runner_state import load_runner_state, save_runner_state
 
 
-def _load_executor_state(run: ForwardTestRun) -> ForwardExecutorState:
-    raw = run.runner_state or {}
-    if raw.get("version") == 2:
-        return ForwardExecutorState(
-            version=2,
-            last_bar_ts=raw.get("last_bar_ts"),
-            bars_count=int(raw.get("bars_count", 0)),
-            busy_until=int(raw.get("busy_until", -1)),
-            pending=list(raw.get("pending") or []),
-            open_position=raw.get("open_position"),
-            placed_setup_keys=list(raw.get("placed_setup_keys") or []),
-            stats=dict(raw.get("stats") or {}),
-        )
-    return ForwardExecutorState()
+def _apply_berg_amendments(eng: IncrementalVideoForwardEngine, amendments: list, bar_index: int, bars: list[Bar]) -> None:
+    if not amendments:
+        return
+    pending = eng.load_pending()
+    for pv in pending:
+        for amd in amendments:
+            if amd.bar_index != bar_index:
+                continue
+            dup = any(a.bar_index == amd.bar_index and a.limit == amd.limit for a in pv.order.amendments)
+            if not dup:
+                pv.order.amendments.append(amd)
+    eng.save_pending(pending)
 
 
-def _save_executor_state(run: ForwardTestRun, eng: IncrementalVideoForwardEngine) -> None:
-    st = eng.state
-    run.runner_state = {
-        "version": 2,
-        "last_bar_ts": st.last_bar_ts,
-        "bars_count": st.bars_count,
-        "busy_until": st.busy_until,
-        "pending": st.pending,
-        "open_position": st.open_position,
-        "placed_setup_keys": st.placed_setup_keys,
-        "stats": {
-            "orders_placed": eng.stats.orders_placed,
-            "orders_filled": eng.stats.orders_filled,
-            "orders_expired": eng.stats.orders_expired,
-        },
-    }
+def _current_phase(runner_state: dict, entry: str) -> str | None:
+    st = runner_state or {}
+    if entry == "berg_tnb_model_v1":
+        snap = (st.get("berg_runtime") or {}).get("last_snapshot") or {}
+        return snap.get("state")
+    vr = st.get("video_runtime") or {}
+    if entry == "video_liquidity_sweep":
+        return "session_sweep" if vr.get("session_sweep") else None
+    if entry == "video_anchor_bos":
+        return "anchor_bos" if vr.get("anchor_bos") else None
+    return None
 
 
 def tick_video_forward(
@@ -66,9 +60,10 @@ def tick_video_forward(
     spec = dict(run.frozen_specification or {})
     entry = (spec.get("entry") or {}).get("type", "")
     cfg = VideoConfig.from_instrument(instrument, spec)
-    state = _load_executor_state(run)
+    state, strategy_fsm = load_runner_state(run.runner_state)
     eng = IncrementalVideoForwardEngine(state, cfg, instrument)
 
+    berg_amendments: list = []
     if entry == "berg_tnb_model_v1":
         bars_5m = load_closed_bars(session, run.symbol, "5m", limit=1200)
         if not bars_5m or bars_5m[-1].ts < bar.ts:
@@ -97,15 +92,17 @@ def tick_video_forward(
 
     if entry == "berg_tnb_model_v1":
         bars_4h = load_closed_bars(session, run.symbol, "4h", limit=200)
-        berg_rt = BergForwardRuntime.from_dict((run.runner_state or {}).get("berg_runtime"))
-        new_orders, berg_rt_dict = discover_berg_orders(
+        berg_rt = BergForwardRuntime.from_dict(strategy_fsm.get("berg_runtime"))
+        new_orders, berg_dict, berg_amendments = discover_berg_orders(
             spec, bars, instrument, at_index=bar_index, bars_4h=bars_4h, runtime=berg_rt.to_dict()
         )
-        st = run.runner_state or {}
-        st["berg_runtime"] = berg_rt_dict
-        run.runner_state = st
+        strategy_fsm["berg_runtime"] = berg_dict
+        strategy_fsm["berg_phase"] = (berg_dict.get("last_snapshot") or {}).get("state")
     else:
-        new_orders = discover_video_orders(spec, bars, instrument, at_index=bar_index)
+        new_orders, vrt = discover_video_orders(
+            spec, bars, instrument, at_index=bar_index, video_runtime=strategy_fsm.get("video_runtime")
+        )
+        strategy_fsm["video_runtime"] = vrt
 
     for order in new_orders:
         placed = eng.submit_order(order, bars)
@@ -120,6 +117,8 @@ def tick_video_forward(
                 decision_ts=decision_ts,
             )
             run.last_signal_at = bar.ts
+
+    _apply_berg_amendments(eng, berg_amendments, bar_index, bars)
 
     result = eng.on_bar(bars, bar_index)
     for ev in result.events:
@@ -166,7 +165,8 @@ def tick_video_forward(
             run.max_drawdown = dd
         run.last_signal_at = t["exit_ts"]
 
-    _save_executor_state(run, eng)
+    run.runner_state = save_runner_state(eng, strategy_fsm)
+    run.runner_state["strategy_phase"] = _current_phase(run.runner_state.get("strategy_fsm"), entry)
     run.last_data_exchange_ts = bar.ts
     run.last_decision_ts = decision_ts
     run.updated_at = datetime.now(UTC)

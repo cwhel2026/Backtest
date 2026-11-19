@@ -25,5 +25,26 @@ def validate_event(ev: MarketEvent, *, last_exchange_ts: datetime | None, last_s
     return issues
 
 
+REORDER_TOLERANCE_SEC = 2
+
+
 def quality_gate_ok(recent_issues: list[str], *, max_issues: int = 3) -> bool:
+    blocking = [i for i in recent_issues if i not in ("out_of_order_exchange_ts",)]
+    if blocking:
+        return len(blocking) <= max_issues
     return len(recent_issues) <= max_issues
+
+
+def reconcile_event_batch(events: list[MarketEvent]) -> tuple[list[MarketEvent], list[str]]:
+    """Sort and flag gaps; allow bounded timestamp reorder within a micro-batch."""
+    warnings: list[str] = []
+    ordered = sorted(events, key=lambda e: (e.exchange_ts, e.sequence or 0))
+    for i in range(1, len(ordered)):
+        prev, cur = ordered[i - 1], ordered[i]
+        if cur.exchange_ts < prev.exchange_ts:
+            delta = (prev.exchange_ts - cur.exchange_ts).total_seconds()
+            if delta > REORDER_TOLERANCE_SEC:
+                warnings.append("out_of_order_exchange_ts")
+        if prev.sequence and cur.sequence and cur.sequence - prev.sequence > 1:
+            warnings.append("sequence_gap")
+    return ordered, warnings
