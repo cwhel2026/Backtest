@@ -228,8 +228,8 @@ export default function HistoricalDataPage() {
         <p className="page-sub">
           Phase 2 — licensed Databento 1m primary (£0–£50 budget). Synthetic/free feeds blocked for genuine backtests.
         </p>
-        <Link href="/market-data/setup" className="mt-3 inline-block">
-          <Button className="w-full sm:w-auto">Mobile setup: MNQ · MES · MGC (5 years)</Button>
+        <Link href="/market-data/import" className="mt-3 inline-block">
+          <Button className="w-full sm:w-auto">Import purchased batch or upload from iPhone</Button>
         </Link>
       </header>
 

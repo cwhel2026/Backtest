@@ -6,9 +6,17 @@ PROP EDGE AI is **prepared** to import licensed GLBX.MDP3 `ohlcv-1m` for **MNQ.c
 
 **E2E success is not claimed until you complete a real import and backtest on Railway** with `DATABENTO_API_KEY` set.
 
-## Mobile setup (iPhone)
+## Import after purchase (recommended)
 
-1. Sign in → **More** → **Import history** (`/market-data/setup`).
+**Option A — retrieve batch (preferred)**  
+`/market-data/import` → **Databento purchase** → pick a **done** batch job → **Import selected batch**. Uses `batch.list_jobs` + `batch.download` only (no `submit_job`).
+
+**Option B — upload from iPhone**  
+Save `.dbn` / `.dbn.zst` files to Files → same page → **Upload from iPhone** → chunked upload → processing job.
+
+## Mobile setup (new paid API stream)
+
+1. Sign in → **More** → **Buy via API estimate** (`/market-data/setup`).
 2. Confirm Databento + three micros + ~5-year range.
 3. Tap **Get Databento estimate** (`metadata.get_cost` per symbol).
 4. Check the total (~$36 was quoted externally; your key’s `get_cost` is authoritative).

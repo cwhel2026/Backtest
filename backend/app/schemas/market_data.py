@@ -49,6 +49,23 @@ class IngestBundleEstimateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class DatabentoBatchImportRequest(BaseModel):
+    databento_batch_job_id: str
+    model_config = {"extra": "forbid"}
+
+
+class UploadInitRequest(BaseModel):
+    files: list[dict]
+
+    model_config = {"extra": "forbid"}
+
+
+class UploadCompleteRequest(BaseModel):
+    upload_id: str
+
+    model_config = {"extra": "forbid"}
+
+
 class IngestBundleRequest(BaseModel):
     provider_slug: str = "databento"
     symbols: list[str] = ["MNQ", "MES", "MGC"]

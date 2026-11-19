@@ -18,6 +18,7 @@ from app.services.autonomous_cycle import (
     find_active_prop_search_job,
     run_autonomous_prop_cycle,
 )
+from app.services.market_data.databento_batch import run_batch_job_import, run_upload_import
 from app.services.market_data.ingestion_runner import (
     run_databento_ingestion,
     run_finzdata_ingestion,
@@ -87,6 +88,41 @@ def run_data_ingestion(job_id: str) -> None:
         settings_ref = get_settings()
         if provider == "databento" and not settings_ref.databento_api_key:
             _fail_ingestion(db, job, "Databento API key not configured", "Ingestion failed: Databento not configured")
+            return
+
+        if provider in ("databento_batch", "databento_upload"):
+            if not settings_ref.databento_configured and provider == "databento_batch":
+                _fail_ingestion(db, job, "Databento API key not configured", "Batch import failed")
+                return
+            job.message = "Processing Databento files"
+            job.progress_pct = 5
+            db.commit()
+            try:
+                payload = {**job.payload, "research_job_id": str(job.id)}
+                if provider == "databento_batch":
+                    out = run_batch_job_import(db, payload)
+                else:
+                    out = run_upload_import(db, payload)
+                db.commit()
+                job.status = ResearchJobStatus.COMPLETED
+                job.progress_pct = 100
+                job.message = "Import complete — ready for backtesting"
+                job.completed_at = datetime.now(UTC)
+                job.payload = {**job.payload, **out}
+                db.add(
+                    ResearchActivity(
+                        headline="Databento batch import complete",
+                        detail=f"Datasets: {', '.join(out.get('datasets', []))}",
+                        job_id=job.id,
+                        meta=out,
+                    )
+                )
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                job = db.get(ResearchJob, uuid.UUID(job_id))
+                if job:
+                    _fail_ingestion(db, job, str(exc), "Databento import failed")
             return
 
         if provider == "finzdata" and not settings_ref.finzdata_configured:

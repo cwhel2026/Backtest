@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -534,6 +534,119 @@ async def request_ingestion(
         background_tasks.add_task(run_data_ingestion, job_id)
         status = "processing"
     return {"job_id": job_id, "status": status, "meta": meta}
+
+
+@router.get("/databento/batch-jobs")
+async def databento_batch_jobs_list(_: User = Depends(get_current_user)) -> dict:
+    """List existing Databento batch jobs (purchased/historical) — does not submit new jobs."""
+    from app.services.market_data.databento_batch import list_purchased_batch_jobs
+
+    if not settings.databento_configured:
+        return {
+            "configured": False,
+            "jobs": [],
+            "note": "Set DATABENTO_API_KEY on the server to list your purchased batch downloads.",
+        }
+    jobs = list_purchased_batch_jobs()
+    return {
+        "configured": True,
+        "jobs": jobs,
+        "note": "Select a completed (done) job to import. This re-downloads files you already paid for — no new charge.",
+    }
+
+
+@router.post("/databento/batch-import")
+async def databento_batch_import(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+) -> dict:
+    from app.schemas.market_data import DatabentoBatchImportRequest
+
+    req = DatabentoBatchImportRequest(**body)
+    if not settings.databento_configured:
+        raise HTTPException(400, detail="DATABENTO_API_KEY not configured")
+    job_id = create_ingestion_job(
+        {
+            "provider": "databento_batch",
+            "databento_batch_job_id": req.databento_batch_job_id,
+            "instrument_symbol": "MNQ",
+            "timeframe": "1m",
+        },
+        actor=user.email,
+    )
+    try:
+        run_data_ingestion.delay(job_id)
+    except Exception:
+        background_tasks.add_task(run_data_ingestion, job_id)
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "message": "Downloading your purchased batch — track progress under AI Research.",
+    }
+
+
+@router.post("/databento/upload/init")
+async def databento_upload_init(
+    body: dict,
+    _: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import init_upload_session
+
+    files = body.get("files") or []
+    try:
+        return init_upload_session(files)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/databento/upload/{upload_id}/chunk")
+async def databento_upload_chunk(
+    upload_id: str,
+    file_name: str = Query(...),
+    index: int = Query(...),
+    total: int = Query(...),
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import save_upload_chunk
+
+    data = await file.read()
+    try:
+        return save_upload_chunk(upload_id, file_name, index, total, data)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/databento/upload/complete")
+async def databento_upload_complete(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+) -> dict:
+    from app.services.market_data.databento_batch import complete_upload_session
+
+    upload_id = body.get("upload_id")
+    if not upload_id:
+        raise HTTPException(400, detail="upload_id required")
+    try:
+        files = complete_upload_session(upload_id)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    job_id = create_ingestion_job(
+        {"provider": "databento_upload", "upload_id": upload_id, "files": files, "instrument_symbol": "MNQ", "timeframe": "1m"},
+        actor=user.email,
+    )
+    try:
+        run_data_ingestion.delay(job_id)
+    except Exception:
+        background_tasks.add_task(run_data_ingestion, job_id)
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "files": files,
+        "message": "Processing uploaded files — track progress under AI Research.",
+    }
 
 
 @router.get("/health")
