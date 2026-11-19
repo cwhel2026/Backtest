@@ -3,11 +3,16 @@
 @tailwind utilities;
 
 :root {
-  --background: #12141a;
-  --foreground: #e4e4e7;
-  --card: #181b22;
-  --border: #27272a;
-  --accent: #34d399;
+  --background: #0b0f17;
+  --foreground: #e8eaed;
+  --card: #121825;
+  --card-elevated: #161d2e;
+  --border: #243044;
+  --shell-nav: #0d121c;
+  --accent: #38bdf8;
+  --accent-muted: rgba(56, 189, 248, 0.12);
+  --warning: #fbbf24;
+  --success: #4ade80;
 }
 
 body {
@@ -18,9 +23,18 @@ body {
 
 @layer utilities {
   .page-title {
-    @apply text-xl font-semibold text-white md:text-2xl;
+    @apply text-xl font-semibold tracking-tight text-white md:text-2xl;
   }
   .page-sub {
-    @apply mt-1 text-xs text-zinc-500 md:text-sm;
+    @apply mt-1 text-sm leading-relaxed text-zinc-400;
+  }
+  .metric-label {
+    @apply text-[11px] font-medium uppercase tracking-wide text-zinc-500;
+  }
+  .metric-value {
+    @apply text-lg font-semibold tabular-nums text-zinc-50;
+  }
+  .touch-target {
+    @apply min-h-[44px] min-w-[44px];
   }
 }

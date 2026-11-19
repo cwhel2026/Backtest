@@ -15,3 +15,5 @@ class OverviewStats(BaseModel):
     data_providers: list[ProviderHealthOut]
     ai_research_enabled: bool
     ai_configured: bool
+    genuine_datasets_count: int = 0
+    backtests_completed_count: int = 0
