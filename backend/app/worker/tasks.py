@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from app.worker.celery_app import celery_app
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -298,8 +298,19 @@ def run_backtest_task(run_id: str) -> None:
 
 @celery_app.task(name="app.worker.tasks.health_pulse")
 def health_pulse() -> None:
-    """Periodic worker heartbeat — no fabricated research activity."""
-    _ = SyncSession  # ensures DB connectivity on schedule
+    """Periodic worker heartbeat — persists DB connectivity, distinct from feed pause."""
+    from app.services.worker_health import record_worker_beat
+
+    with SyncSession() as db:
+        try:
+            db.execute(text("SELECT 1"))
+            record_worker_beat(db, "celery_scheduler", success=True, stale_after_seconds=600, detail={"pulse": "ok"})
+            db.commit()
+        except Exception as exc:
+            record_worker_beat(
+                db, "celery_scheduler", success=False, stale_after_seconds=600, detail={"error": str(exc)[:200]}
+            )
+            db.commit()
 
 
 def create_prop_search_job(actor: str) -> str:

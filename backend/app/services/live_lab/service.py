@@ -139,6 +139,26 @@ def tick_live_strategy_lab(session: Session) -> dict:
             for run in runs:
                 on_closed_candle(session, run, candle, decision_ts=decision_ts, allow_trading=allow_trading)
                 processed += 1
+            from app.services.scanner.cycle import run_scanner_on_candle
+
+            run_scanner_on_candle(session, candle, decision_ts=decision_ts)
+
+    from app.services.scanner.cycle import run_scanner_cycle
+    from app.services.worker_health import record_worker_beat
+
+    scan_meta = run_scanner_cycle(session) if not completed_count else {"setups_written": 0, "symbols": []}
+    record_worker_beat(
+        session,
+        "live_lab_forward",
+        success=True,
+        stale_after_seconds=180,
+        detail={
+            "candles_closed": completed_count,
+            "runs_touched": len(runs),
+            "allow_trading": allow_trading,
+            "scanner": scan_meta,
+        },
+    )
 
     return {
         "ok": True,

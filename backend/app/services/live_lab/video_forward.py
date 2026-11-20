@@ -17,6 +17,8 @@ from app.services.live_lab.berg_forward import BergForwardRuntime
 from app.services.live_lab.incremental_signals import discover_berg_orders, discover_video_orders
 from app.services.live_lab.ledger import append_ledger_event
 from app.services.live_lab.runner_state import load_runner_state, save_runner_state
+from app.services.scanner.persistence import sync_from_forward_ledger, upsert_order_setup
+from app.models.enums import ScannerSetupStatus
 
 
 def _apply_berg_amendments(eng: IncrementalVideoForwardEngine, amendments: list, bar_index: int, bars: list[Bar]) -> None:
@@ -70,15 +72,20 @@ def tick_video_forward(
             bars_5m.append(bar)
         bars_4h = load_closed_bars(session, run.symbol, "4h", limit=200)
         if len(bars_4h) < 3:
+            payload = {
+                "reason": "Berg TNB requires confirmed closed 4H candles",
+                "unresolved": "4h bias sourced from live store",
+            }
             append_ledger_event(
                 session,
                 run_id=run.id,
                 event_type="rejected_setup",
                 idempotency_key=f"berg:no_4h:{bar.ts.isoformat()}",
-                payload={"reason": "Berg TNB requires confirmed closed 4H candles", "unresolved": "4h bias sourced from live store"},
+                payload=payload,
                 exchange_ts=bar.ts,
                 decision_ts=decision_ts,
             )
+            sync_from_forward_ledger(session, run, "rejected_setup", payload, bar.ts)
             return
         bars = bars_5m
     else:
@@ -104,7 +111,32 @@ def tick_video_forward(
         )
         strategy_fsm["video_runtime"] = vrt
 
+    strategy_key = {
+        "berg_tnb_model_v1": "berg_tnb",
+        "video_liquidity_sweep": "liquidity_sweep",
+        "video_anchor_bos": "anchor_bos",
+    }.get(entry, entry or "unknown")
+    from app.models.strategy import StrategyDefinition
+
+    strat = session.get(StrategyDefinition, run.strategy_id)
+    strategy_name = strat.name if strat else strategy_key.replace("_", " ").title()
+
     for order in new_orders:
+        upsert_order_setup(
+            session,
+            order=order,
+            symbol=run.symbol,
+            strategy_key=strategy_key,
+            strategy_name=strategy_name,
+            strategy_version=entry or "unknown",
+            market_ts=bar.ts,
+            status=ScannerSetupStatus.DETECTED,
+            explanation=order.reason,
+            forward_run_id=run.id,
+            data_source=run.provider,
+            feed_latency_mode=run.latency_mode.value if run.latency_mode else None,
+            diagnostics={"order_key": order.setup_id},
+        )
         placed = eng.submit_order(order, bars)
         for ev in placed:
             append_ledger_event(
@@ -116,6 +148,7 @@ def tick_video_forward(
                 exchange_ts=bar.ts,
                 decision_ts=decision_ts,
             )
+            sync_from_forward_ledger(session, run, ev["type"], ev, bar.ts)
             run.last_signal_at = bar.ts
 
     _apply_berg_amendments(eng, berg_amendments, bar_index, bars)
@@ -131,27 +164,30 @@ def tick_video_forward(
             exchange_ts=bar.ts,
             decision_ts=decision_ts,
         )
+        sync_from_forward_ledger(session, run, ev["type"], ev, bar.ts)
 
     if result.trade_closed:
         t = result.trade_closed
         key = f"{t['direction']}:{t['entry_ts'].isoformat()}:{t['exit_ts'].isoformat()}"
+        tc_payload = {
+            "direction": t["direction"],
+            "qty": t["quantity"],
+            "net_pnl": str(t["net_pnl"]),
+            "exit_reason": t["exit_reason"],
+            "uncertainties": (t.get("meta") or {}).get("uncertainties", []),
+            "incremental": True,
+            "entry_type": entry,
+        }
         append_ledger_event(
             session,
             run_id=run.id,
             event_type="trade_closed",
             idempotency_key=f"incremental:{run.id}:{key}",
-            payload={
-                "direction": t["direction"],
-                "qty": t["quantity"],
-                "net_pnl": str(t["net_pnl"]),
-                "exit_reason": t["exit_reason"],
-                "uncertainties": (t.get("meta") or {}).get("uncertainties", []),
-                "incremental": True,
-                "entry_type": entry,
-            },
+            payload=tc_payload,
             exchange_ts=t["exit_ts"],
             decision_ts=decision_ts,
         )
+        sync_from_forward_ledger(session, run, "trade_closed", tc_payload, t["exit_ts"])
         pnl = Decimal(str(t["net_pnl"]))
         run.net_pnl = Decimal(run.net_pnl) + pnl
         run.equity = Decimal(run.equity) + pnl

@@ -7,6 +7,7 @@ from app.models.strategy import StrategyDefinition, StrategyHypothesis, Strategy
 from app.models.user import User
 from app.models import live_lab  # noqa: F401 — register ORM tables
 from app.models import certification  # noqa: F401
+from app.models import scanner  # noqa: F401
 
 __all__ = [
     "OhlcvBar",
