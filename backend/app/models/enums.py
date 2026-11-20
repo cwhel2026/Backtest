@@ -95,3 +95,14 @@ class PaperOrderState(str, enum.Enum):
     CANCELLED = "cancelled"
     EXPIRED = "expired"
     REJECTED = "rejected"
+
+
+class ScannerSetupStatus(str, enum.Enum):
+    DETECTED = "DETECTED"
+    PENDING_ENTRY = "PENDING_ENTRY"
+    FILLED_PAPER = "FILLED_PAPER"
+    TP_HIT = "TP_HIT"
+    SL_HIT = "SL_HIT"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+    INVALIDATED = "INVALIDATED"

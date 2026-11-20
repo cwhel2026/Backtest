@@ -4,133 +4,136 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { PnlText } from "@/components/ui/PnlText";
 import { apiFetch } from "@/lib/api";
-import { latencyLabel, SCAN_SYMBOLS } from "@/lib/navigation";
+import { latencyLabel } from "@/lib/navigation";
 
-type MarketRow = {
+type Setup = {
+  id: string;
+  setup_id: string;
   symbol: string;
-  lastCandle: string | null;
-  runs: { strategy_name: string; state: string; net_pnl: number; trade_count: number }[];
+  strategy_name: string;
+  direction: string;
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
+  risk_reward: number | null;
+  status: string;
+  market_ts: string;
+  explanation: string | null;
+  feed_latency_mode: string | null;
+  diagnostics: Record<string, unknown>;
+};
+
+type Platform = {
+  market_data: {
+    latency_mode: string;
+    connection_status: string;
+    provider: string | null;
+    platform_active: boolean;
+  };
+  workers: { worker_name: string; stale: boolean; last_success_at: string | null }[];
 };
 
 export default function MarketScannerPage() {
-  const [rows, setRows] = useState<MarketRow[]>([]);
-  const [feed, setFeed] = useState<{ latency_mode: string; connection_status: string; provider: string | null } | null>(
-    null,
-  );
+  const [setups, setSetups] = useState<Setup[]>([]);
+  const [platform, setPlatform] = useState<Platform | null>(null);
   const [loading, setLoading] = useState(true);
+  const [symbol, setSymbol] = useState<string | "">("");
 
   useEffect(() => {
-    async function load() {
-      const dash = await apiFetch<{
-        feed: { latency_mode: string; connection_status: string; provider: string | null };
-        runs: { symbol: string; strategy_name: string; research_state: string; net_pnl: number; trade_count: number }[];
-      }>("/api/v1/live-lab/dashboard");
+    const q = symbol ? `?symbol=${symbol}&limit=100` : "?limit=100";
+    Promise.all([
+      apiFetch<{ items: Setup[] }>(`/api/v1/scanner/setups${q}`),
+      apiFetch<Platform>("/api/v1/platform/status"),
+    ])
+      .then(([s, p]) => {
+        setSetups(s.items);
+        setPlatform(p);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [symbol]);
 
-      setFeed(dash.feed);
-      const out: MarketRow[] = [];
-      for (const sym of SCAN_SYMBOLS) {
-        let lastCandle: string | null = null;
-        try {
-          const candles = await apiFetch<{ bars: { ts: string }[] }>(
-            `/api/v1/live-lab/candles?symbol=${sym}&timeframe=5m&limit=1`,
-          );
-          lastCandle = candles.bars?.[0]?.ts ?? null;
-        } catch {
-          lastCandle = null;
-        }
-        const runs = dash.runs
-          .filter((r) => r.symbol === sym)
-          .map((r) => ({
-            strategy_name: r.strategy_name,
-            state: r.research_state,
-            net_pnl: r.net_pnl,
-            trade_count: r.trade_count,
-          }));
-        out.push({ symbol: sym, lastCandle, runs });
-      }
-      setRows(out);
-      setLoading(false);
-    }
-    load().catch(() => setLoading(false));
-  }, []);
-
-  const latency = latencyLabel(feed?.latency_mode);
+  const latency = latencyLabel(platform?.market_data?.latency_mode);
 
   return (
     <div className="space-y-6 pb-8">
       <header>
         <h1 className="page-title">Market Scanner</h1>
         <p className="page-sub">
-          Micro futures status, last stored candle, and paper-run activity. Prices are{" "}
-          <strong className="font-medium text-zinc-300">{latency}</strong> — not implied live fills.
+          Incremental strategy detections on MNQ, MES, and MGC — includes rejected diagnostics when engines decline a
+          candidate. Data class: <strong className="font-medium text-zinc-300">{latency}</strong>.
         </p>
       </header>
 
-      <Card className="panel text-sm text-zinc-400">
-        Feed: <span className="text-zinc-200">{feed?.connection_status ?? "—"}</span> · Provider{" "}
-        {feed?.provider ?? "—"}
+      <Card className="panel flex flex-wrap items-center gap-3 text-sm text-zinc-400">
+        <span>
+          Feed: <span className="text-zinc-200">{platform?.market_data.connection_status ?? "—"}</span>
+        </span>
+        <span>Provider {platform?.market_data.provider ?? "—"}</span>
+        <span>
+          Workers:{" "}
+          {platform?.workers?.map((w) => `${w.worker_name}${w.stale ? " (stale)" : ""}`).join(" · ") || "No beats yet"}
+        </span>
+        <div className="ml-auto flex gap-2">
+          {["", "MNQ", "MES", "MGC"].map((sym) => (
+            <button
+              key={sym || "all"}
+              type="button"
+              onClick={() => setSymbol(sym)}
+              className={`rounded px-2 py-1 text-xs ${symbol === sym ? "bg-[var(--accent)]/20 text-zinc-100" : "text-zinc-500"}`}
+            >
+              {sym || "All"}
+            </button>
+          ))}
+        </div>
       </Card>
 
       {loading ? (
-        <p className="text-sm text-zinc-500">Loading markets…</p>
-      ) : (
-        <ul className="space-y-4">
-          {rows.map((row) => (
-            <li key={row.symbol}>
-              <Card className="panel space-y-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h2 className="text-lg font-semibold text-zinc-50">{row.symbol}</h2>
-                  <span className="text-xs text-zinc-500">
-                    Last 5m close: {row.lastCandle ? new Date(row.lastCandle).toLocaleString() : "No candles in store"}
-                  </span>
-                </div>
-                {row.runs.length === 0 ? (
-                  <p className="text-sm text-zinc-500">No paper runs monitoring {row.symbol}.</p>
-                ) : (
-                  <div className="data-table-wrap">
-                    <table>
-                      <thead className="border-b border-[var(--border)] text-xs uppercase text-zinc-500">
-                        <tr>
-                          <th className="px-3 py-2">Strategy</th>
-                          <th className="px-3 py-2">Paper state</th>
-                          <th className="px-3 py-2">Trades</th>
-                          <th className="px-3 py-2 text-right">Sim. P&amp;L</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {row.runs.map((r, i) => (
-                          <tr key={i} className="border-b border-[var(--border)]/60">
-                            <td className="px-3 py-2 text-zinc-200">{r.strategy_name}</td>
-                            <td className="px-3 py-2 text-zinc-400">{r.state.replaceAll("_", " ")}</td>
-                            <td className="px-3 py-2 text-zinc-400">{r.trade_count}</td>
-                            <td className="px-3 py-2 text-right">
-                              <PnlText value={r.net_pnl} />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                <Link href="/paper-trading" className="text-sm text-[var(--accent)]">
-                  Manage paper runs →
-                </Link>
-              </Card>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {!loading && rows.every((r) => !r.lastCandle && !r.runs.length) ? (
+        <p className="text-sm text-zinc-500">Loading setups…</p>
+      ) : setups.length === 0 ? (
         <EmptyState
-          title="Scanner needs data"
-          description="Ingest historical or replay market events so candles exist for MNQ, MES, and MGC. Then start a paper run from Strategy Lab."
+          title="No setups in database"
+          description="Start replay ingestion and wait for closed 5m bars. Scanner rows are written when Berg TNB, Liquidity Sweep, or Anchor BOS engines emit orders on a bar close."
           actionHref="/settings"
           actionLabel="Settings & data"
         />
-      ) : null}
+      ) : (
+        <div className="data-table-wrap">
+          <table>
+            <thead className="border-b border-[var(--border)] text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-3 py-2 text-left">Strategy</th>
+                <th className="px-3 py-2 text-left">Symbol</th>
+                <th className="px-3 py-2">Dir</th>
+                <th className="px-3 py-2 text-right">Entry</th>
+                <th className="px-3 py-2 text-right">Stop</th>
+                <th className="px-3 py-2 text-right">Target</th>
+                <th className="px-3 py-2 text-right">R:R</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {setups.map((s) => (
+                <tr key={s.id} className="border-b border-[var(--border)]/60 hover:bg-white/5">
+                  <td className="px-3 py-2">
+                    <Link href={`/scanner/${s.id}`} className="text-[var(--accent)]">
+                      {s.strategy_name}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2 text-zinc-300">{s.symbol}</td>
+                  <td className="px-3 py-2 text-center text-zinc-400">{s.direction}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{s.entry_price ?? "—"}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{s.stop_price ?? "—"}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{s.target_price ?? "—"}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{s.risk_reward ?? "—"}</td>
+                  <td className="px-3 py-2 text-xs text-zinc-400">{s.status.replaceAll("_", " ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
