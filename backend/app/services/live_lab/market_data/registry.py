@@ -9,6 +9,7 @@ from app.services.instruments import PRIMARY_RESEARCH_SYMBOLS
 from app.services.live_lab.market_data.base import LiveMarketDataAdapter
 from app.services.live_lab.market_data.delayed_bars import DelayedBarsAdapter
 from app.services.live_lab.market_data.replay import ReplayMarketDataAdapter
+from app.services.live_lab.market_data.ibkr_fixture import IbkrFixtureAdapter
 from app.services.live_lab.market_data.ibkr_stream import IbkrStreamAdapter
 from app.services.live_lab.market_data.stubs import CmeWebSocketAdapter, DatabentoLiveAdapter, IbkrTwsAdapter
 
@@ -28,6 +29,8 @@ def get_market_data_adapter(session: Session, replay_events=None) -> LiveMarketD
         return DelayedBarsAdapter(session, symbols)
     if provider == "databento_live":
         return DatabentoLiveAdapter()
+    if provider == "ibkr_fixture":
+        return IbkrFixtureAdapter(symbols)
     if provider in ("ibkr_tws", "ibkr_stream"):
         if provider == "ibkr_stream" or settings.ibkr_configured:
             return IbkrStreamAdapter(symbols)

@@ -6,32 +6,30 @@ export type NavItem = {
   description?: string;
 };
 
-/** Primary product navigation (8 sections). */
+/** Primary product navigation — operator-first (6 sections). */
 export const PRIMARY_NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", short: "Home", icon: "⌂", description: "Command centre" },
-  { href: "/scanner", label: "Market Scanner", short: "Scan", icon: "◎", description: "Setups & feed status" },
-  { href: "/strategy-lab", label: "Strategy Lab", short: "Lab", icon: "◈", description: "Strategies & rules" },
-  { href: "/backtests", label: "Backtesting", short: "Tests", icon: "▣", description: "Historical simulation" },
-  { href: "/paper-trading", label: "Paper Trading", short: "Paper", icon: "◇", description: "Forward simulation" },
-  { href: "/analytics", label: "Analytics", short: "Stats", icon: "▤", description: "Performance & compare" },
-  { href: "/research", label: "AI Research", short: "AI", icon: "✦", description: "Research automation" },
-  { href: "/settings", label: "Settings", short: "Set", icon: "⚙", description: "Data, risk & health" },
+  { href: "/", label: "Home", short: "Home", icon: "⌂", description: "Markets, setups & paper P&L" },
+  { href: "/scanner", label: "Scanner", short: "Scan", icon: "◎", description: "Detected setups" },
+  { href: "/strategy-lab", label: "Strategies", short: "Strat", icon: "◈", description: "Strategy library" },
+  { href: "/backtests", label: "Backtests", short: "Tests", icon: "▣", description: "Historical tests" },
+  { href: "/research", label: "AI Research", short: "AI", icon: "✦", description: "Experiments & rankings" },
+  { href: "/settings", label: "Settings", short: "Set", icon: "⚙", description: "Data & health" },
 ];
 
-/** Mobile bottom bar — five slots; full nav via Menu. */
+/** Mobile bottom bar */
 export const MOBILE_TAB_NAV: NavItem[] = [
   PRIMARY_NAV[0],
   PRIMARY_NAV[1],
   PRIMARY_NAV[2],
   PRIMARY_NAV[3],
-  { href: "/menu", label: "Menu", short: "Menu", icon: "⋯" },
+  { href: "/menu", label: "More", short: "More", icon: "⋯" },
 ];
 
 export const MENU_NAV: NavItem[] = [
+  { href: "/paper-trading", label: "Paper Trading", short: "Paper", icon: "◇", description: "Simulated forward runs" },
+  { href: "/analytics", label: "Analytics", short: "Stats", icon: "▤", description: "Performance compare" },
   PRIMARY_NAV[4],
   PRIMARY_NAV[5],
-  PRIMARY_NAV[6],
-  PRIMARY_NAV[7],
 ];
 
 export const ADVANCED_NAV: NavItem[] = [

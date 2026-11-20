@@ -48,11 +48,13 @@ jobs:
         run: |
           . .venv/bin/activate
           pytest -q
-      - name: Integration (scaffold)
+      - name: Integration (Postgres E2E)
         working-directory: backend
         env:
           LIVE_LAB_INTEGRATION: "1"
           DATABASE_URL_SYNC: postgresql://propedge:propedge_dev@localhost:5432/propedge
+          DATABASE_URL: postgresql+asyncpg://propedge:propedge_dev@localhost:5432/propedge
+          REDIS_URL: redis://localhost:6379/0
         run: |
           . .venv/bin/activate
-          pytest tests/test_live_lab_postgres_e2e.py -q || true
+          pytest tests/test_live_lab_postgres_e2e.py -v --tb=short

@@ -31,25 +31,25 @@ type Setup = {
 };
 
 type Bar = { ts: string; open: number; high: number; low: number; close: number };
+type Overlay = { type: string; price?: number; ts?: string; label?: string };
 
 export default function ScannerSetupDetailPage() {
   const { setupId } = useParams<{ setupId: string }>();
   const [setup, setSetup] = useState<Setup | null>(null);
   const [bars, setBars] = useState<Bar[]>([]);
+  const [overlays, setOverlays] = useState<Overlay[]>([]);
   const [error, setError] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const chartApi = useRef<IChartApi | null>(null);
 
   useEffect(() => {
     if (!setupId) return;
-    apiFetch<Setup>(`/api/v1/scanner/setups/${setupId}`)
-      .then((s) => {
-        setSetup(s);
-        return apiFetch<{ bars: Bar[] }>(
-          `/api/v1/live-lab/candles?symbol=${s.symbol}&timeframe=5m&limit=300`,
-        );
+    apiFetch<{ setup: Setup; bars: Bar[]; overlays: Overlay[] }>(`/api/v1/scanner/setups/${setupId}/chart-context`)
+      .then((ctx) => {
+        setSetup(ctx.setup);
+        setBars(ctx.bars ?? []);
+        setOverlays(ctx.overlays ?? []);
       })
-      .then((c) => setBars(c.bars ?? []))
       .catch((e) => setError(String(e)));
   }, [setupId]);
 
@@ -127,6 +127,16 @@ export default function ScannerSetupDetailPage() {
         <p className="text-xs text-zinc-500">
           Signal bar: {new Date(setup.market_ts).toLocaleString()} · R:R {setup.risk_reward ?? "—"}
         </p>
+        {overlays.length ? (
+          <ul className="text-xs text-zinc-500">
+            {overlays.map((o, i) => (
+              <li key={i}>
+                {o.label ?? o.type}
+                {o.price != null ? ` @ ${o.price}` : ""}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Card>
 
       <Card className="panel overflow-hidden p-2">

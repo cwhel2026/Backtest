@@ -41,6 +41,19 @@ def build_platform_status(session: Session) -> dict:
     else:
         db_err = None
 
+    redis_ok = False
+    redis_err = None
+    try:
+        from app.core.config import get_settings
+        import redis
+
+        settings = get_settings()
+        r = redis.from_url(settings.redis_url, socket_connect_timeout=2)
+        r.ping()
+        redis_ok = True
+    except Exception as exc:
+        redis_err = str(exc)[:200]
+
     last_research = session.execute(
         select(ResearchJob).order_by(desc(ResearchJob.completed_at)).where(ResearchJob.status == ResearchJobStatus.COMPLETED).limit(1)
     ).scalar_one_or_none()
@@ -91,6 +104,7 @@ def build_platform_status(session: Session) -> dict:
         },
         "workers": beat_out,
         "database": {"ok": db_ok, "error": db_err},
+        "redis": {"ok": redis_ok, "error": redis_err},
         "scheduler": {
             "last_research_completed_at": last_research.completed_at.isoformat() if last_research and last_research.completed_at else None,
             "last_scanner_setup_at": last_scanner.detected_at.isoformat() if last_scanner else None,
