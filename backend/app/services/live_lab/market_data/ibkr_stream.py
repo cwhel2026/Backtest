@@ -8,6 +8,7 @@ from decimal import Decimal
 from app.core.config import get_settings
 from app.models.enums import MarketLatencyMode
 from app.services.live_lab.market_data.base import LiveMarketDataAdapter
+from app.services.live_lab.market_data.ibkr_contracts import resolve_front_month_via_ib, rollover_warning
 from app.services.live_lab.types import EventKind, MarketEvent
 
 _PRIMARY = {"MNQ", "MES", "MGC"}
@@ -24,17 +25,28 @@ class IbkrStreamAdapter(LiveMarketDataAdapter):
         self._ticker_map: dict = {}
         self._sequence = 0
         self._last_keys: set[str] = set()
+        self._contracts: dict = {}
+        self._md_type: dict[str, int] = {}
 
     def describe(self) -> dict:
         s = get_settings()
         return {
             "provider": self.provider_id,
-            "latency_mode": MarketLatencyMode.REALTIME.value if self._verified else MarketLatencyMode.SYNTHETIC.value,
+            "latency_mode": self._latency_label(),
             "documentation": "https://interactivebrokers.github.io/tws-api/md_request.html",
             "configured": s.ibkr_configured,
             "verified": self._verified,
             "note": "Requires reachable IB Gateway and market data subscription. Not tested in CI.",
         }
+
+    def _latency_label(self) -> str:
+        if not self._verified:
+            return MarketLatencyMode.SYNTHETIC.value
+        if any(t == 1 for t in self._md_type.values()):
+            return MarketLatencyMode.REALTIME.value
+        if any(t == 3 for t in self._md_type.values()):
+            return MarketLatencyMode.DELAYED.value
+        return MarketLatencyMode.DELAYED.value
 
     def verify_connectivity(self) -> dict:
         settings = get_settings()
@@ -64,13 +76,26 @@ class IbkrStreamAdapter(LiveMarketDataAdapter):
         self._connected = self._ib.isConnected()
         self._verified = self._connected
         for sym in self.symbols:
-            contract = Future(symbol=sym, exchange="CME" if sym != "MGC" else "COMEX", currency="USD")
-            qualified = self._ib.qualifyContracts(contract)
+            resolved = resolve_front_month_via_ib(self._ib, sym)
+            if not resolved or not resolved.con_id:
+                continue
+            prev = self._contracts.get(sym)
+            warn = rollover_warning(prev, resolved) if prev else None
+            if warn:
+                self._contracts[sym] = {**resolved.__dict__, "rollover_warning": warn}
+            else:
+                self._contracts[sym] = resolved.__dict__
+            from ib_insync import Future
+
+            c = Future(conId=resolved.con_id, exchange=resolved.exchange)
+            qualified = self._ib.qualifyContracts(c)
             if not qualified:
                 continue
             c = qualified[0]
             ticker = self._ib.reqMktData(c, "", False, False)
             self._ticker_map[sym] = ticker
+            mdt = getattr(ticker, "marketDataType", None) or 3
+            self._md_type[sym] = int(mdt)
 
     def disconnect(self) -> None:
         if self._ib:
@@ -101,8 +126,9 @@ class IbkrStreamAdapter(LiveMarketDataAdapter):
                 kind=EventKind.QUOTE if bid is not None or ask is not None else EventKind.TRADE,
                 exchange_ts=now,
                 server_received_ts=now,
-                latency_mode=MarketLatencyMode.REALTIME.value,
+                latency_mode=self._latency_label(),
                 source="ibkr_stream",
+                contract_id=(self._contracts.get(sym) or {}).get("local_symbol"),
                 price=Decimal(str(last)) if last not in (None, 0) else None,
                 bid=Decimal(str(bid)) if bid not in (None, 0) else None,
                 ask=Decimal(str(ask)) if ask not in (None, 0) else None,

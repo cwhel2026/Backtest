@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -9,7 +11,7 @@ from app.models.backtest import BacktestRun
 from app.models.enums import ScannerSetupStatus
 from app.models.instrument import Instrument
 from app.models.live_lab import ForwardTestRun, LiveCompletedCandle
-from app.models.scanner import ScannerSetup
+from app.models.scanner import ScannerSetup, WorkerHealthBeat
 from app.models.strategy import StrategyDefinition
 from app.services.live_lab.service import dashboard_summary
 from app.services.platform_status import build_platform_status
@@ -27,9 +29,20 @@ def build_home_dashboard(session: Session, *, symbols: list[str]) -> dict:
     platform = build_platform_status(session)
     paper = dashboard_summary(session)
 
+    now = datetime.now(UTC)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    setups_today = session.execute(
+        select(func.count()).select_from(ScannerSetup).where(ScannerSetup.detected_at >= day_start)
+    ).scalar_one()
     active_setups = session.execute(
         select(func.count()).select_from(ScannerSetup).where(ScannerSetup.status.in_(_active_statuses()))
     ).scalar_one()
+    forward_beat = session.execute(
+        select(WorkerHealthBeat).where(WorkerHealthBeat.worker_name == "live_lab_forward")
+    ).scalar_one_or_none()
+    from app.services.worker_health import worker_is_stale
+
+    scanner_running = bool(forward_beat and not worker_is_stale(forward_beat, now=now))
     completed_setups = session.execute(
         select(func.count())
         .select_from(ScannerSetup)
@@ -95,11 +108,16 @@ def build_home_dashboard(session: Session, *, symbols: list[str]) -> dict:
         "summary": {
             "markets_monitored": len(symbols),
             "active_setups": int(active_setups or 0),
+            "setups_today": int(setups_today or 0),
+            "scanner_running": scanner_running,
             "completed_setups": int(completed_setups or 0),
             "open_paper_runs": int(agg["active_strategy_count"] or 0),
             "paper_trades_recorded": int(runs_open or 0),
             "research_strategies_evaluated": len(recent_backtests),
         },
+        "workers_and_data": platform.get("workers", []),
+        "database_ok": platform.get("database", {}).get("ok"),
+        "redis_ok": platform.get("redis", {}).get("ok"),
         "market_data_status": platform["market_data"],
         "platform": platform,
         "markets": markets,

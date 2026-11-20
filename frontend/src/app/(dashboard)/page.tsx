@@ -14,11 +14,16 @@ type Home = {
   summary: {
     markets_monitored: number;
     active_setups: number;
+    setups_today: number;
+    scanner_running: boolean;
     open_paper_runs: number;
     paper_trades_recorded: number;
     completed_setups: number;
     research_strategies_evaluated: number;
   };
+  database_ok?: boolean;
+  redis_ok?: boolean;
+  workers_and_data?: { worker_name: string; stale: boolean }[];
   market_data_status: {
     latency_mode: string;
     connection_status: string;
@@ -118,19 +123,23 @@ export default function DashboardPage() {
           </section>
 
           <Card className="panel space-y-2">
-            <h2 className="text-sm font-semibold text-zinc-200">Market data status</h2>
+            <h2 className="text-sm font-semibold text-zinc-200">Platform health</h2>
             <p className="text-sm text-zinc-400">
-              {home?.market_data_status.connection_status ?? "—"} · {feedLatency}
-              {home?.market_data_status.provider ? ` · ${home.market_data_status.provider}` : ""}
+              Provider {home?.market_data_status.provider ?? "—"} · {feedLatency} ·{" "}
+              {home?.market_data_status.connection_status ?? "—"}
+            </p>
+            <p className="text-sm text-zinc-400">
+              Scanner {home?.summary.scanner_running ? "running" : "stopped or stale"} · Setups today{" "}
+              {home?.summary.setups_today ?? 0}
+            </p>
+            <p className="text-xs text-zinc-500">
+              Database {home?.database_ok ? "OK" : "issue"} · Redis {home?.redis_ok ? "OK" : "not checked"}
             </p>
             {!dataOk ? (
               <p className="text-xs text-amber-200/90">
-                Ingestion or worker heartbeat may be stale — scheduled research and scanner cycles need Postgres, Redis,
-                and Celery running.
+                Ingestion or worker heartbeat may be stale — Celery beat must run health_pulse and live_lab_forward_tick.
               </p>
-            ) : (
-              <p className="text-xs text-zinc-500">Feed connected and worker heartbeat within expected window.</p>
-            )}
+            ) : null}
           </Card>
 
           <section className="space-y-3">

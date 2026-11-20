@@ -26,6 +26,19 @@ def _direction_label(direction: str) -> str:
     return "buy" if direction == "long" else "sell"
 
 
+def _chart_events_from_order(order: Order, limit: Decimal, stop: Decimal, target: Decimal, market_ts: datetime) -> list[dict]:
+    ts = market_ts.isoformat()
+    events = [
+        {"type": "entry", "price": float(limit), "ts": ts, "label": "Proposed entry"},
+        {"type": "stop", "price": float(stop), "ts": ts, "label": "Stop loss"},
+        {"type": "target", "price": float(target), "ts": ts, "label": "Take profit"},
+        {"type": "detection", "price": float(limit), "ts": ts, "label": order.reason[:120] if order.reason else "Setup detected"},
+    ]
+    if order.setup_id:
+        events.append({"type": "setup_id", "id": order.setup_id, "ts": ts})
+    return events
+
+
 def _risk_reward(limit: Decimal, stop: Decimal, target: Decimal) -> Decimal | None:
     risk = abs(limit - stop)
     if risk <= 0:
@@ -83,7 +96,12 @@ def upsert_order_setup(
             data_source=data_source,
             feed_latency_mode=feed_latency_mode,
             forward_run_id=forward_run_id,
-            diagnostics=diagnostics or {"uncertainties": [], "source": "incremental_engine"},
+            diagnostics={
+                **(diagnostics or {}),
+                "uncertainties": (diagnostics or {}).get("uncertainties") or [],
+                "source": "incremental_engine",
+                "chart_events": _chart_events_from_order(order, limit, stop, target, market_ts),
+            },
             created_at=now,
             updated_at=now,
         )

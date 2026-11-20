@@ -7,7 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.scanner import ScannerSetup
 from app.models.user import User
+from app.backtest.bars import Bar
+from app.db.session import SyncSessionLocal
 from app.schemas.scanner import ScannerSetupList, ScannerSetupOut
+from app.services.live_lab.candle_engine import load_closed_bars
 
 router = APIRouter(prefix="/scanner", tags=["scanner"])
 
@@ -92,3 +95,39 @@ async def get_setup(
     if not row:
         raise HTTPException(404, "Setup not found")
     return _row_out(row)
+
+
+@router.get("/setups/{setup_uuid}/chart-context")
+async def setup_chart_context(
+    setup_uuid: str,
+    _: User = Depends(get_current_user),
+) -> dict:
+    with SyncSessionLocal() as session:
+        try:
+            uid = UUID(setup_uuid)
+        except ValueError:
+            uid = None
+        row = session.get(ScannerSetup, uid) if uid else None
+        if not row:
+            row = session.execute(
+                select(ScannerSetup).where(ScannerSetup.setup_id == setup_uuid)
+            ).scalar_one_or_none()
+        if not row:
+            raise HTTPException(404, "Setup not found")
+        bars: list[Bar] = load_closed_bars(session, row.symbol, "5m", limit=400)
+        return {
+            "setup": _row_out(row),
+            "bars": [
+                {
+                    "ts": b.ts.isoformat(),
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": b.volume,
+                }
+                for b in bars
+            ],
+            "overlays": (row.diagnostics or {}).get("chart_events") or [],
+            "data_freshness": row.feed_latency_mode,
+        }

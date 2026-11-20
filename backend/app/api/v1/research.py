@@ -9,9 +9,17 @@ from app.models.research import ResearchActivity, ResearchJob
 from app.models.user import User
 from app.schemas.research import AiGenerateRequest, AiGenerateResponse, ResearchActivityOut, ResearchJobOut
 from app.util.serde import enum_value
+from app.db.session import SyncSessionLocal
+from app.services.research_centre import build_research_centre
 from app.worker.tasks import enqueue_ai_hypothesis
 
 router = APIRouter(prefix="/research", tags=["research"])
+
+
+@router.get("/centre")
+async def research_centre(_: User = Depends(get_current_user)) -> dict:
+    with SyncSessionLocal() as session:
+        return build_research_centre(session, limit=50)
 
 
 @router.post("/ai/generate", response_model=AiGenerateResponse)
