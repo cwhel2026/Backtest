@@ -79,13 +79,27 @@ def emit_tick_log(detail: dict) -> None:
 
 
 def paper_tick_detail(result: dict[str, Any]) -> dict:
-    return {
+    opened = int(result.get("opened") or 0)
+    closed = int(result.get("closed") or 0)
+    refreshed = int(result.get("refreshed") or 0)
+    slots = int(result.get("active_slots") or result.get("slots") or 0)
+    work = bool(opened or closed or (refreshed and slots))
+    out = {
         "task": "paper_forward_tick",
         "last_tick_at": datetime.now(UTC).isoformat(),
-        "opened": result.get("opened", 0),
-        "closed": result.get("closed", 0),
-        "refreshed": result.get("refreshed", 0),
+        "opened": opened,
+        "closed": closed,
+        "refreshed": refreshed,
         "enrolled_new": result.get("enrolled_new", 0),
-        "work_done": bool(result.get("opened") or result.get("closed") or result.get("refreshed")),
+        "active_slots": slots,
+        "work_done": work,
         "errors": result.get("refresh_errors"),
     }
+    if not work:
+        if slots == 0:
+            out["idle_reason"] = "no_active_paper_slots"
+        elif not refreshed:
+            out["idle_reason"] = "no_bar_refresh"
+        else:
+            out["idle_reason"] = "no_new_trades_this_tick"
+    return out

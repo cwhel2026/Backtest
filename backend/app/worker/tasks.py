@@ -446,13 +446,15 @@ def autonomous_prop_cycle() -> None:
 def paper_forward_tick() -> None:
     from app.services.paper_book import tick_paper_book
     from app.services.worker_health import record_worker_beat
-    from app.services.worker_task_metrics import paper_tick_detail
+    from app.services.worker_task_metrics import emit_tick_log, paper_tick_detail
 
     with SyncSession() as db:
         try:
             result = tick_paper_book(db)
-            record_worker_beat(db, "paper_forward_tick", success=True, stale_after_seconds=180, detail=paper_tick_detail(result))
+            detail = paper_tick_detail(result)
+            record_worker_beat(db, "paper_forward_tick", success=True, stale_after_seconds=180, detail=detail)
             db.commit()
+            emit_tick_log(detail)
         except Exception as exc:
             record_worker_beat(
                 db,

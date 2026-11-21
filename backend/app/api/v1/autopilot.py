@@ -202,6 +202,8 @@ async def run_autopilot_now(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     restart: bool = Query(False),
+    budget_per_symbol: int | None = Query(None, ge=8, le=80, description="Bounded search budget (default from settings)"),
+    history_days: int | None = Query(None, ge=3, le=90, description="Bounded history window"),
 ) -> AutopilotRunResponse:
     active_job = (
         await db.execute(
@@ -229,6 +231,19 @@ async def run_autopilot_now(
         )
 
     job_id = await _queue_deep_prop_search(db, user.email)
+    if budget_per_symbol is not None or history_days is not None:
+        job = await db.get(ResearchJob, uuid.UUID(job_id))
+        if job:
+            payload = dict(job.payload or {})
+            sp = dict(payload.get("search_progress") or {})
+            if budget_per_symbol is not None:
+                sp["budget_per_symbol"] = budget_per_symbol
+            if history_days is not None:
+                sp["history_days"] = history_days
+            payload["search_progress"] = sp
+            payload["bounded_run"] = True
+            job.payload = payload
+            await db.flush()
     # Keep the heavy search off the web process. Running it inline was stalling
     # every other request and the proxy answered "Internal Server Error".
     try:
