@@ -246,7 +246,16 @@ def run_deep_search(
     if settings.ai_configured and ai_rounds < 1:
         ai_rounds = 1
 
+    from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+    elig = prepare_dataset_for_research(session, dataset)
+    if not elig.ok:
+        stats = {"skipped": elig.reason, "lineage": elig.lineage}
+        return [], 0, stats
+
     bars = load_bars(session, dataset.id)
+    if not bars:
+        return [], 0, {"skipped": "no bars in store", "lineage": elig.lineage}
     research, holdout = split_holdout(bars, HOLDOUT_FRAC)
     train, _test = _split_train_test(research)
     tf = dataset.timeframe
@@ -510,9 +519,16 @@ def persist_search_hits(
     for hit in hits:
         try:
             _persist_one_hit(session, hit, dataset, symbol, actor, forward_sim, winners)
-        except Exception:
+        except Exception as exc:
             session.rollback()
-            raise
+            session.add(
+                ResearchActivity(
+                    headline=f"Skip persist {symbol}",
+                    detail=str(exc)[:300],
+                    meta={"symbol": symbol, "hit": hit.spec.get("name")},
+                )
+            )
+            session.flush()
     return winners
 
 
@@ -594,7 +610,20 @@ def _persist_one_hit(
     )
     session.add(run)
     session.flush()
-    execute_backtest_run(session, run.id)
+    from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+    persist_elig = prepare_dataset_for_research(session, dataset)
+    if not persist_elig.genuine_persist:
+        session.delete(run)
+        session.flush()
+        return
+    try:
+        execute_backtest_run(session, run.id)
+    except ValueError as exc:
+        run.status = "failed"
+        run.error = str(exc)[:500]
+        session.flush()
+        return
     if run.status == "completed" and isinstance(run.metrics, dict):
         extra = {
             k: hit.full_metrics.get(k)

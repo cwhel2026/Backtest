@@ -11,6 +11,9 @@ celery_app = Celery(
     include=["app.worker.tasks"],
 )
 
+REALTIME_QUEUE = "realtime"
+RESEARCH_QUEUE = "research"
+
 celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     task_serializer="json",
@@ -18,6 +21,18 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    task_default_queue=RESEARCH_QUEUE,
+    task_routes={
+        "app.worker.tasks.live_lab_stream_ingest": {"queue": REALTIME_QUEUE},
+        "app.worker.tasks.live_lab_forward_tick": {"queue": REALTIME_QUEUE},
+        "app.worker.tasks.paper_forward_tick": {"queue": REALTIME_QUEUE},
+        "app.worker.tasks.health_pulse": {"queue": REALTIME_QUEUE},
+        "app.worker.tasks.run_backtest_task": {"queue": RESEARCH_QUEUE},
+        "app.worker.tasks.run_data_ingestion": {"queue": RESEARCH_QUEUE},
+        "app.worker.tasks.run_prop_search_job": {"queue": RESEARCH_QUEUE},
+        "app.worker.tasks.run_ai_hypothesis_task": {"queue": RESEARCH_QUEUE},
+        "app.worker.tasks.autonomous_prop_cycle": {"queue": RESEARCH_QUEUE},
+    },
     beat_schedule={
         "research-health-pulse": {
             "task": "app.worker.tasks.health_pulse",

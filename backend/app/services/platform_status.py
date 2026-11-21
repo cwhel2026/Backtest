@@ -11,6 +11,8 @@ from app.models.enums import ResearchJobStatus
 from app.models.live_lab import LiveCompletedCandle, LiveFeedStatus
 from app.models.research import ResearchJob
 from app.models.scanner import ScannerSetup, WorkerHealthBeat
+from app.services.cme_market_clock import cme_futures_market_status
+from app.services.market_data.storage_backend import resolved_store_path
 from app.services.worker_health import worker_is_stale
 
 
@@ -91,8 +93,14 @@ def build_platform_status(session: Session) -> dict:
                 }
             )
 
+    store = resolved_store_path()
     return {
         "generated_at": now.isoformat(),
+        "cme_session": cme_futures_market_status(now=now),
+        "storage": {
+            "ohlcv_root": str(store.resolve()),
+            "volume_mounted": __import__("pathlib").Path("/data").is_dir(),
+        },
         "market_data": {
             "provider": feed.provider if feed else None,
             "latency_mode": feed.latency_mode.value if feed and feed.latency_mode else "synthetic",

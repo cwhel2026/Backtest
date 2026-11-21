@@ -124,17 +124,18 @@ def run_autonomous_prop_cycle(
         job = session.get(ResearchJob, UUID(job_id) if isinstance(job_id, str) else job_id)
         if not job:
             raise ValueError(f"Unknown prop search job {job_id}")
+        prior = job.payload or {}
+        sp = prior.get("search_progress") or {}
+        if prior.get("bounded_run"):
+            budget = int(sp.get("budget_per_symbol") or prior.get("budget_per_symbol") or budget)
+            history_days = int(sp.get("history_days") or prior.get("history_days") or history_days)
         job.status = ResearchJobStatus.RUNNING
         set_job_message(job, "Loading market data")
         job.started_at = datetime.now(UTC)
-        job.payload = {
-            **(job.payload or {}),
-            "actor": actor,
-            "budget_per_symbol": budget,
-            "search_progress": initial_search_progress(
-                symbols=symbols, budget=budget, history_days=history_days
-            ),
-        }
+        progress = initial_search_progress(symbols=symbols, budget=budget, history_days=history_days)
+        if prior.get("bounded_run"):
+            progress = {**progress, **sp, "budget_per_symbol": budget, "history_days": history_days, "phase": "starting"}
+        job.payload = {**prior, "actor": actor, "budget_per_symbol": budget, "search_progress": progress}
         session.flush()
     else:
         job = ResearchJob(
@@ -267,6 +268,15 @@ def run_autonomous_prop_cycle(
         for slot_idx, (symbol, tf) in enumerate(search_slots):
             ds = datasets.get((symbol, tf)) or _latest_dataset(session, symbol, tf)
             if not ds:
+                continue
+            from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+            elig = prepare_dataset_for_research(session, ds)
+            if not elig.ok:
+                warnings.append(f"{symbol} {tf}: skipped research — {elig.reason}")
+                job = _job()
+                set_job_message(job, f"Skipped {symbol} {tf}: {elig.reason}")
+                session.commit()
                 continue
             inst = session.get(Instrument, ds.instrument_id)
             if not inst:

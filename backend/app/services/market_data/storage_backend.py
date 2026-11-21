@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 from uuid import UUID
 
 from app.core.config import get_settings
 from app.services.market_data import ohlcv_s3
-from app.services.market_data.ohlcv_parquet import store_root
+from app.services.market_data.ohlcv_parquet import set_store_dir, store_root
+from app.util.log_events import log_event
+
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ def resolved_store_path() -> Path:
 def ensure_ohlcv_storage() -> dict:
     """Create store directories; log warnings on ephemeral Railway layout."""
     settings = get_settings()
-    root = store_root()
+    root = resolved_store_path()
+    set_store_dir(root)
     root.mkdir(parents=True, exist_ok=True)
     (root / ".railway").mkdir(exist_ok=True)
 
@@ -64,9 +67,10 @@ def ensure_ohlcv_storage() -> dict:
         ),
     }
     if settings.on_railway and settings.ohlcv_persistent_required and not persist_ok and not settings.ohlcv_s3_configured:
-        logger.error("ohlcv_ephemeral_railway", detail=p_msg, store=str(root))
+        log_event(logger, logging.ERROR, "ohlcv_ephemeral_railway", detail=p_msg, store=str(root), actionable=out)
     elif not persist_ok:
-        logger.warning("ohlcv_storage_ephemeral", detail=p_msg)
+        log_event(logger, logging.WARNING, "ohlcv_storage_ephemeral", detail=p_msg, store=str(root))
+    out["store_synchronized"] = True
     return out
 
 
@@ -96,6 +100,6 @@ def after_local_write(dataset_id: UUID | str) -> None:
         try:
             n = ohlcv_s3.sync_dataset_to_s3(dataset_id)
             if n:
-                logger.info("ohlcv_s3_synced", dataset_id=str(dataset_id), files=n)
+                log_event(logger, logging.INFO, "ohlcv_s3_synced", dataset_id=str(dataset_id), files=n)
         except Exception as exc:
-            logger.warning("ohlcv_s3_sync_failed", dataset_id=str(dataset_id), error=str(exc))
+            log_event(logger, logging.ERROR, "ohlcv_s3_sync_failed", dataset_id=str(dataset_id), error=str(exc))

@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.railway import celery_urls_from_redis, to_async_database_url, to_sync_database_url
 
+_ENV_TRUTHY = frozenset({"1", "true", "t", "yes", "y", "on"})
+_ENV_FALSY = frozenset({"0", "false", "f", "no", "n", "off", ""})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -126,6 +129,31 @@ class Settings(BaseSettings):
     def _strip_wrapping_quotes(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip().strip('"').strip("'")
+        return v
+
+    @field_validator(
+        "ai_research_enabled",
+        "autonomous_hourly_enabled",
+        "autonomous_forward_sim",
+        "reverse_search_enabled",
+        "search_prefer_ibkr",
+        "search_robustness_enabled",
+        "ohlcv_persistent_required",
+        "databento_live_smoke",
+        "live_lab_tick_enabled",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_env_bool(cls, v: object) -> object:
+        """Railway/dashboard env values are often strings like ``True `` or ``TRUE``."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().strip('"').strip("'").lower()
+            if s in _ENV_TRUTHY:
+                return True
+            if s in _ENV_FALSY:
+                return False
         return v
 
     @field_validator(

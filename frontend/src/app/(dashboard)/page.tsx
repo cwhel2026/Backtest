@@ -30,7 +30,9 @@ type Home = {
     provider: string | null;
     platform_active: boolean;
     is_paused: boolean;
+    cme_session?: { headline: string; market_open_now: boolean; session_day: boolean; status: string };
   };
+  cme_session?: { headline: string; market_open_now: boolean; session_day: boolean; status: string };
   markets: {
     symbol: string;
     display_name: string;
@@ -127,6 +129,16 @@ export default function DashboardPage() {
             <p className="text-sm text-zinc-400">
               Provider {home?.market_data_status.provider ?? "—"} · {feedLatency} ·{" "}
               {home?.market_data_status.connection_status ?? "—"}
+            </p>
+            <p className="text-sm text-zinc-400">
+              CME calendar:{" "}
+              <span className="text-zinc-200">
+                {home?.cme_session?.headline ??
+                  (home?.market_data_status?.cme_session?.headline ?? "—")}
+              </span>
+              {home?.cme_session?.market_open_now === false && home?.cme_session?.session_day === false
+                ? " · Historical research and replay still available."
+                : null}
             </p>
             <p className="text-sm text-zinc-400">
               Scanner {home?.summary.scanner_running ? "running" : "stopped or stale"} · Setups today{" "}
