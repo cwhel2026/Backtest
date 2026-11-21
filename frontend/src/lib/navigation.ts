@@ -26,6 +26,7 @@ export const MOBILE_TAB_NAV: NavItem[] = [
 ];
 
 export const MENU_NAV: NavItem[] = [
+  { href: "/ai-arena", label: "AI Research Arena", short: "Arena", icon: "⚔", description: "Multi-provider AI researchers" },
   { href: "/paper-trading", label: "Paper Trading", short: "Paper", icon: "◇", description: "Simulated forward runs" },
   { href: "/analytics", label: "Analytics", short: "Stats", icon: "▤", description: "Performance compare" },
   PRIMARY_NAV[4],

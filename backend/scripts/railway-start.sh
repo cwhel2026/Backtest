@@ -14,7 +14,8 @@ case "$ROLE" in
     ;;
   worker)
     python -c "from app.services.market_data.storage_backend import ensure_ohlcv_storage; ensure_ohlcv_storage()"
-    exec celery -A app.worker.celery_app worker --loglevel=info
+    QUEUE="${CELERY_QUEUE:-realtime,research}"
+    exec celery -A app.worker.celery_app worker --loglevel=info --pool=solo -Q "$QUEUE"
     ;;
   beat)
     exec celery -A app.worker.celery_app beat --loglevel=info

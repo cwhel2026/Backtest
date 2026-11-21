@@ -246,7 +246,16 @@ def run_deep_search(
     if settings.ai_configured and ai_rounds < 1:
         ai_rounds = 1
 
+    from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+    elig = prepare_dataset_for_research(session, dataset)
+    if not elig.ok:
+        stats = {"skipped": elig.reason, "lineage": elig.lineage}
+        return [], 0, stats
+
     bars = load_bars(session, dataset.id)
+    if not bars:
+        return [], 0, {"skipped": "no bars in store", "lineage": elig.lineage}
     research, holdout = split_holdout(bars, HOLDOUT_FRAC)
     train, _test = _split_train_test(research)
     tf = dataset.timeframe
@@ -510,9 +519,16 @@ def persist_search_hits(
     for hit in hits:
         try:
             _persist_one_hit(session, hit, dataset, symbol, actor, forward_sim, winners)
-        except Exception:
+        except Exception as exc:
             session.rollback()
-            raise
+            session.add(
+                ResearchActivity(
+                    headline=f"Skip persist {symbol}",
+                    detail=str(exc)[:300],
+                    meta={"symbol": symbol, "hit": hit.spec.get("name")},
+                )
+            )
+            session.flush()
     return winners
 
 
@@ -594,7 +610,20 @@ def _persist_one_hit(
     )
     session.add(run)
     session.flush()
-    execute_backtest_run(session, run.id)
+    from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+    persist_elig = prepare_dataset_for_research(session, dataset)
+    if not persist_elig.genuine_persist:
+        session.delete(run)
+        session.flush()
+        return
+    try:
+        execute_backtest_run(session, run.id)
+    except ValueError as exc:
+        run.status = "failed"
+        run.error = str(exc)[:500]
+        session.flush()
+        return
     if run.status == "completed" and isinstance(run.metrics, dict):
         extra = {
             k: hit.full_metrics.get(k)
@@ -658,3 +687,88 @@ def _persist_one_hit(
             )
         )
         session.commit()
+
+
+def scientifically_validate_spec(
+    session: Session,
+    dataset: HistoricalDataset,
+    instrument: Instrument,
+    spec: dict,
+    *,
+    origin: str = "ai_arena",
+) -> dict:
+    """Rigorous IS/OOS walk-forward + robustness + holdout grade. Holdout never returned for LLM optimization."""
+    from app.services.research_grade import GRADE_CANDIDATE, GRADE_KEEPER
+
+    settings = get_settings()
+    bars = load_bars(session, dataset.id)
+    if len(bars) < 80:
+        return {"ok": False, "reason": "insufficient_bars", "validation_tier": "rejected"}
+
+    research, holdout = split_holdout(bars, HOLDOUT_FRAC)
+    train_m = _metrics_for_spec(spec, research, instrument, dataset.timeframe)
+    if not train_m:
+        return {"ok": False, "reason": "train_backtest_failed", "validation_tier": "rejected"}
+
+    n_folds = int(getattr(settings, "search_walkforward_folds", 3) or 3)
+    oos_min_wr = float(getattr(settings, "search_oos_min_win_rate", 0.38) or 0.38)
+    oos_ok, test_m, oos_runs = _run_oos_battery(
+        spec, research, instrument, dataset.timeframe, n_folds=n_folds, min_win_rate=oos_min_wr
+    )
+    full_m, rob_runs = _apply_robustness(spec, research, instrument, dataset.timeframe, train_m)
+    if not full_m:
+        return {
+            "ok": False,
+            "reason": "robustness_failed",
+            "validation_tier": "rejected",
+            "oos": test_m,
+            "train": train_m,
+            "backtests_run": oos_runs + rob_runs,
+        }
+
+    data_source = source_slug(str((dataset.meta or {}).get("source") or ""))
+    sample_days = None
+    if dataset.coverage_start and dataset.coverage_end:
+        sample_days = max((dataset.coverage_end - dataset.coverage_start).total_seconds(), 0) / 86400
+
+    graded = _attach_holdout_and_grade(
+        spec,
+        full_m,
+        test_m,
+        holdout,
+        instrument,
+        dataset.timeframe,
+        origin=origin,
+        data_source=data_source,
+        sample_days=sample_days,
+    )
+    grade = graded.get("grade")
+    if not oos_ok:
+        tier = "rejected"
+    elif grade == GRADE_KEEPER:
+        tier = "validated"
+    elif grade == GRADE_CANDIDATE:
+        tier = "experimental"
+    else:
+        tier = "rejected"
+
+    summary_for_ai = {
+        k: v
+        for k, v in graded.items()
+        if not str(k).startswith("holdout") and k not in ("grade",)
+    }
+    summary_for_ai["oos_passed"] = oos_ok
+    summary_for_ai["grade_hint"] = grade
+
+    return {
+        "ok": tier in ("validated", "experimental"),
+        "validation_tier": tier,
+        "grade": grade,
+        "metrics": graded,
+        "oos": test_m,
+        "train": train_m,
+        "robustness_runs": rob_runs,
+        "oos_battery_runs": oos_runs,
+        "summary_for_ai": summary_for_ai,
+        "holdout_locked": True,
+    }

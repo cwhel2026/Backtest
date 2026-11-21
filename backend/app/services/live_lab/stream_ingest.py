@@ -66,7 +66,7 @@ def ingest_stream_once(session: Session) -> dict:
 
     completed = ingest_market_events(session, events) if events else []
     feed.updated_at = now
-    return {
+    out: dict = {
         "ok": True,
         "events": len(events),
         "candles": len(completed),
@@ -74,3 +74,9 @@ def ingest_stream_once(session: Session) -> dict:
         "latency_mode": feed.latency_mode.value,
         "used_event_store": used_store,
     }
+    if not events:
+        if settings.live_lab_provider == "replay" and not (settings.live_lab_replay_path or "").strip():
+            out["idle_reason"] = "replay_provider_missing_LIVE_LAB_REPLAY_PATH"
+        else:
+            out["idle_reason"] = "no_market_events_this_poll"
+    return out
