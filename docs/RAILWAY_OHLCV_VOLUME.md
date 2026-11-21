@@ -19,6 +19,7 @@ API and worker containers use **separate filesystems**. Parquet files written on
    ```
    OHLCV_STORE_DIR=/data/ohlcv
    OHLCV_PERSISTENT_REQUIRED=true
+   (lowercase `true` / `false` — avoid trailing spaces; the app tolerates `True` with stray spaces.)
    ```
 
 3. Redeploy. On boot, `ensure_ohlcv_storage()` synchronizes the in-process store path and logs `store_path` without crashing startup.
