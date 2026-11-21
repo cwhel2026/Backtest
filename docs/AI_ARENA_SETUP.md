@@ -1,4 +1,4 @@
-# AI Research Arena (PROP EDGE AI 5.0)
+# AI Research Arena (PROP EDGE AI 5.1)
 
 ## API keys (Railway / server env only)
 
@@ -19,7 +19,7 @@ Optional: `AI_ARENA_ENABLED=true` (default true) — master switch for scheduler
 
 ## Start / stop researchers
 
-1. Deploy migration **013** (`alembic upgrade head`).
+1. Deploy migrations **013** and **014** (`alembic upgrade head`).
 2. Add at least one API key above.
 3. Open **Settings → AI Arena** or `GET /api/v1/ai-arena/providers`.
 4. **Test connection**: `POST /api/v1/ai-arena/researchers/{slug}/test-connection`
