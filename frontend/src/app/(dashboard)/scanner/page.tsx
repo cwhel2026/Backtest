@@ -31,7 +31,8 @@ type Platform = {
     provider: string | null;
     platform_active: boolean;
   };
-  workers: { worker_name: string; stale: boolean; last_success_at: string | null }[];
+  cme_session?: { headline: string; market_open_now: boolean; session_day: boolean };
+  workers: { worker_name: string; stale: boolean; last_success_at: string | null; detail?: Record<string, unknown> }[];
 };
 
 export default function MarketScannerPage() {
@@ -71,6 +72,10 @@ export default function MarketScannerPage() {
           Feed: <span className="text-zinc-200">{platform?.market_data.connection_status ?? "—"}</span>
         </span>
         <span>Provider {platform?.market_data.provider ?? "—"}</span>
+        <span>
+          CME:{" "}
+          <span className="text-zinc-200">{platform?.cme_session?.headline ?? "—"}</span>
+        </span>
         <span>
           Workers:{" "}
           {platform?.workers?.map((w) => `${w.worker_name}${w.stale ? " (stale)" : ""}`).join(" · ") || "No beats yet"}

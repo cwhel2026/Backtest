@@ -7,8 +7,6 @@ import json
 import random
 from typing import Any
 
-import httpx
-
 from app.backtest.dsl import ENTRY_TYPES, validate_spec
 from app.core.config import get_settings
 from app.services.ai_research import DSL_HINT
@@ -97,44 +95,39 @@ def propose_search_specs(
     *,
     max_specs: int = 12,
     seed: int | None = None,
+    provider_slug: str | None = None,
+    model: str | None = None,
+    arena_provider_only: bool = False,
 ) -> tuple[str, list[dict]]:
-    settings = get_settings()
-    if not settings.ai_configured:
-        specs = _heuristic_mutations(symbol, memory_summary, max_specs, seed=seed)
-        return "Heuristic mutations (enable OpenAI for directed search).", specs
-
-    model = settings.openai_model or "gpt-4o-mini"
     hint = MUTATE_BATCH_HINT_PREFIX.replace("{max_specs}", str(max_specs)) + DSL_HINT
     user = f"Symbol: {symbol}\n\nTrial memory:\n{memory_summary}\n\n{hint}"
+    system = "CME index futures quant researcher. Output JSON only."
+
+    from app.services.ai_arena.llm_providers import get_provider
+
+    slug = provider_slug
+    if not slug and not arena_provider_only:
+        settings = get_settings()
+        slug = "openai" if settings.ai_configured else None
+    if arena_provider_only and not slug:
+        specs = _heuristic_mutations(symbol, memory_summary, max_specs, seed=seed)
+        return "Arena heuristic mutations (provider slug required for LLM).", specs
+
+    provider = get_provider(slug) if slug else None
+    if not provider or not provider.api_key_configured():
+        specs = _heuristic_mutations(symbol, memory_summary, max_specs, seed=seed)
+        return "Heuristic mutations (configure researcher LLM API key for directed search).", specs
+
+    use_model = model or provider.default_model
     try:
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openai_api_key.strip()}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "CME index futures quant researcher. Output JSON only.",
-                        },
-                        {"role": "user", "content": user},
-                    ],
-                    "temperature": 0.55,
-                },
-            )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        rationale = str(json.loads(content).get("rationale", "AI mutation round"))
-        raw_specs = _parse_spec_list(content)
+        result = provider.complete_json(system=system, user=user, model=use_model)
+        rationale = str(result.data.get("rationale", "AI mutation round"))
+        raw_specs = result.data.get("specifications") or result.data.get("specs") or []
+        if not isinstance(raw_specs, list):
+            raw_specs = _parse_spec_list(json.dumps(result.data))
     except Exception:
         specs = _heuristic_mutations(symbol, memory_summary, max_specs, seed=seed)
-        return "OpenAI unavailable — heuristic mutations.", specs
+        return f"{provider.slug} unavailable — heuristic mutations.", specs
 
     out: list[dict] = []
     seen: set[str] = set()

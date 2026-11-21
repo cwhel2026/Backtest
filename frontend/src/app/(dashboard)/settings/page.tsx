@@ -12,11 +12,17 @@ type Health = {
   storage?: { writable?: boolean; persistent_ok?: boolean };
 };
 
+type AiProvider = { slug: string; env_var: string; key_configured: boolean; default_model: string; docs_url: string };
+
 export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
 
   useEffect(() => {
     apiFetch<Health>("/api/v1/market-data/health").then(setHealth).catch(() => setHealth(null));
+    apiFetch<{ providers: AiProvider[] }>("/api/v1/ai-arena/providers")
+      .then((r) => setAiProviders(r.providers))
+      .catch(() => setAiProviders([]));
   }, []);
 
   const sections = [
@@ -62,6 +68,27 @@ export default function SettingsPage() {
           </li>
         ))}
       </ul>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold text-zinc-200">AI Research Arena</h2>
+        <Card className="panel space-y-2 text-sm text-zinc-400">
+          <p>
+            Keys are set only in Railway/environment (<code className="text-zinc-300">OPENAI_API_KEY</code>,{" "}
+            <code className="text-zinc-300">ANTHROPIC_API_KEY</code>, etc.). This UI never stores secrets.
+          </p>
+          <ul className="space-y-1">
+            {aiProviders.map((p) => (
+              <li key={p.slug}>
+                <span className="text-zinc-200">{p.slug}</span> · env <code>{p.env_var}</code> ·{" "}
+                {p.key_configured ? "key present" : "not configured"} · model {p.default_model}
+              </li>
+            ))}
+          </ul>
+          <Link href="/ai-arena" className="text-[var(--accent-teal)] hover:underline">
+            Open AI Arena to activate researchers
+          </Link>
+        </Card>
+      </section>
 
       <section>
         <h2 className="mb-2 text-sm font-semibold text-zinc-200">Backtest assumptions</h2>

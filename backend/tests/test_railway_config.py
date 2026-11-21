@@ -27,6 +27,16 @@ def test_search_history_days_accepts_trailing_plus(monkeypatch):
     get_settings.cache_clear()
 
 
+def test_ohlcv_persistent_required_accepts_spaced_true_string(monkeypatch):
+    monkeypatch.setenv("OHLCV_PERSISTENT_REQUIRED", "True ")
+    get_settings.cache_clear()
+    assert get_settings().ohlcv_persistent_required is True
+    monkeypatch.setenv("OHLCV_PERSISTENT_REQUIRED", " false ")
+    get_settings.cache_clear()
+    assert get_settings().ohlcv_persistent_required is False
+    get_settings.cache_clear()
+
+
 def test_railway_celery_uses_redis_url(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
     monkeypatch.setenv("REDIS_URL", "redis://default:secret@redis.railway.internal:6379")

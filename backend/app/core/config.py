@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.railway import celery_urls_from_redis, to_async_database_url, to_sync_database_url
 
+_ENV_TRUTHY = frozenset({"1", "true", "t", "yes", "y", "on"})
+_ENV_FALSY = frozenset({"0", "false", "f", "no", "n", "off", ""})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -67,6 +70,14 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=11, validation_alias=AliasChoices("IBKR_CLIENT_ID", "ibkr_client_id"))
     openai_api_key: str = ""
     openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    google_ai_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_AI_API_KEY", "GEMINI_API_KEY"))
+    moonshot_api_key: str = Field(default="", validation_alias="MOONSHOT_API_KEY")
+    deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
+    xai_api_key: str = Field(default="", validation_alias="XAI_API_KEY")
+    dashscope_api_key: str = Field(default="", validation_alias=AliasChoices("DASHSCOPE_API_KEY", "QWEN_API_KEY"))
+    mistral_api_key: str = Field(default="", validation_alias="MISTRAL_API_KEY")
+    ai_arena_enabled: bool = Field(default=True, validation_alias="AI_ARENA_ENABLED")
     ai_research_enabled: bool = False
     max_experiments_per_day: int = 50
     autonomous_hourly_enabled: bool = Field(default=True, validation_alias="AUTONOMOUS_HOURLY_ENABLED")
@@ -126,6 +137,31 @@ class Settings(BaseSettings):
     def _strip_wrapping_quotes(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip().strip('"').strip("'")
+        return v
+
+    @field_validator(
+        "ai_research_enabled",
+        "autonomous_hourly_enabled",
+        "autonomous_forward_sim",
+        "reverse_search_enabled",
+        "search_prefer_ibkr",
+        "search_robustness_enabled",
+        "ohlcv_persistent_required",
+        "databento_live_smoke",
+        "live_lab_tick_enabled",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_env_bool(cls, v: object) -> object:
+        """Railway/dashboard env values are often strings like ``True `` or ``TRUE``."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().strip('"').strip("'").lower()
+            if s in _ENV_TRUTHY:
+                return True
+            if s in _ENV_FALSY:
+                return False
         return v
 
     @field_validator(
