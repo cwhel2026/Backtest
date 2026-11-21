@@ -419,3 +419,55 @@ def live_lab_forward_tick() -> None:
         except Exception:
             db.rollback()
             raise
+
+
+@celery_app.task(name="app.worker.tasks.ai_researcher_cycle_task")
+def ai_researcher_cycle_task(provider_slug: str) -> dict | None:
+    from app.models.ai_arena import AiResearcher
+    from app.services.ai_arena.bootstrap import ensure_ai_researchers
+    from app.services.ai_arena.cycle import run_researcher_cycle
+    from sqlalchemy import select
+
+    with SyncSession() as db:
+        ensure_ai_researchers(db)
+        row = db.execute(select(AiResearcher).where(AiResearcher.provider_slug == provider_slug)).scalar_one_or_none()
+        if not row:
+            return None
+        out = run_researcher_cycle(db, row, manual=False)
+        db.commit()
+        return out
+
+
+@celery_app.task(name="app.worker.tasks.ai_arena_scheduler_tick")
+def ai_arena_scheduler_tick() -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.core.config import get_settings
+    from app.models.ai_arena import AiResearchCycle, AiResearcher
+    from app.services.ai_arena.bootstrap import ensure_ai_researchers
+
+    settings = get_settings()
+    if not settings.ai_arena_enabled:
+        return
+    now = datetime.now(UTC)
+    with SyncSession() as db:
+        ensure_ai_researchers(db)
+        rows = db.execute(
+            select(AiResearcher).where(AiResearcher.enabled.is_(True), AiResearcher.activated_by_user.is_(True))
+        ).scalars().all()
+        for r in rows:
+            running = db.execute(
+                select(AiResearchCycle)
+                .where(AiResearchCycle.researcher_id == r.id, AiResearchCycle.status == "running")
+                .limit(1)
+            ).scalar_one_or_none()
+            if running:
+                continue
+            due = True
+            if r.last_cycle_at:
+                due = now >= r.last_cycle_at + timedelta(minutes=max(15, r.research_frequency_minutes))
+            if due:
+                ai_researcher_cycle_task.delay(r.provider_slug)
+        db.commit()

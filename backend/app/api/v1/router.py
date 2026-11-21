@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    ai_arena,
     auth,
     autopilot,
     backtests,
@@ -32,3 +33,4 @@ api_router.include_router(live_lab.router)
 api_router.include_router(scanner.router)
 api_router.include_router(platform.router)
 api_router.include_router(dashboard_home.router)
+api_router.include_router(ai_arena.router)
