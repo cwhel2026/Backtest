@@ -174,7 +174,7 @@ def tick_live_strategy_lab(session: Session) -> dict:
         "allow_trading": allow_trading,
         "connection_status": feed.connection_status.value if feed else "disconnected",
         "ingest": ingest,
-        "scanner": scanner_meta,
+        "scanner": scan_meta,
         "idle_reason": None
         if completed_count or setups_n or len(runs)
         else "no_new_candles_or_runs_this_tick",

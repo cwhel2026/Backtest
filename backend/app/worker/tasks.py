@@ -469,31 +469,35 @@ def paper_forward_tick() -> None:
 def live_lab_stream_ingest() -> None:
     from app.services.live_lab.stream_ingest import ingest_stream_once
     from app.services.worker_health import record_worker_beat
-    from app.services.worker_task_metrics import merge_tick_detail
+    from app.services.worker_task_metrics import emit_tick_log, merge_tick_detail
 
     settings_ref = get_settings()
     if not settings_ref.live_lab_tick_enabled:
         with SyncSession() as db:
+            detail = merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_stream_ingest")
             record_worker_beat(
                 db,
                 "live_lab_stream_ingest",
                 success=True,
                 stale_after_seconds=180,
-                detail=merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_stream_ingest"),
+                detail=detail,
             )
             db.commit()
+        emit_tick_log(detail)
         return
     with SyncSession() as db:
         try:
             result = ingest_stream_once(db)
+            detail = merge_tick_detail(None, result, task="live_lab_stream_ingest")
             record_worker_beat(
                 db,
                 "live_lab_stream_ingest",
                 success=bool(result.get("ok")),
                 stale_after_seconds=180,
-                detail=merge_tick_detail(None, result, task="live_lab_stream_ingest"),
+                detail=detail,
             )
             db.commit()
+            emit_tick_log(detail)
         except Exception as exc:
             db.rollback()
             record_worker_beat(
@@ -511,31 +515,31 @@ def live_lab_stream_ingest() -> None:
 def live_lab_forward_tick() -> None:
     from app.services.live_lab.service import tick_live_strategy_lab
     from app.services.worker_health import record_worker_beat
-    from app.services.worker_task_metrics import merge_tick_detail
+    from app.services.worker_task_metrics import emit_tick_log, merge_tick_detail
 
     settings_ref = get_settings()
     if not settings_ref.live_lab_tick_enabled:
         with SyncSession() as db:
+            detail = merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_forward_tick")
             record_worker_beat(
                 db,
                 "live_lab_forward_tick",
                 success=True,
                 stale_after_seconds=180,
-                detail=merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_forward_tick"),
+                detail=detail,
             )
             db.commit()
+        emit_tick_log(detail)
         return
     with SyncSession() as db:
         try:
             result = tick_live_strategy_lab(db)
             detail = merge_tick_detail(None, result, task="live_lab_forward_tick")
-            scan = (result.get("ingest") or {}).get("scanner") if isinstance(result.get("ingest"), dict) else result.get("scanner")
-            if not scan and isinstance(result, dict):
-                scan = result.get("scanner")
             if isinstance(result, dict) and result.get("ingest"):
                 detail["ingest"] = result["ingest"]
             record_worker_beat(db, "live_lab_forward_tick", success=bool(result.get("ok", True)), stale_after_seconds=180, detail=detail)
             db.commit()
+            emit_tick_log(detail)
         except Exception as exc:
             db.rollback()
             record_worker_beat(

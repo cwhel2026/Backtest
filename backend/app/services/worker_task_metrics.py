@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
+
+from app.util.log_events import log_event
+
+_tick_logger = logging.getLogger("app.worker.tick")
 
 
 def merge_tick_detail(base: dict | None, result: dict | None, *, task: str) -> dict:
@@ -24,12 +29,17 @@ def merge_tick_detail(base: dict | None, result: dict | None, *, task: str) -> d
         "candles_closed",
         "provider",
         "latency_mode",
+        "setups_detected",
         "setups_written",
         "runs_touched",
         "allow_trading",
+        "connection_status",
         "error",
         "skipped",
         "summary",
+        "idle_reason",
+        "disabled",
+        "reason",
     ):
         if key in res:
             out[key] = res[key]
@@ -41,7 +51,31 @@ def merge_tick_detail(base: dict | None, result: dict | None, *, task: str) -> d
         out["idle_reason"] = res.get("idle_reason", "no_market_events_this_tick")
     else:
         out["work_done"] = True
+    if res.get("idle_reason") and "idle_reason" not in out:
+        out["idle_reason"] = res["idle_reason"]
     return out
+
+
+def emit_tick_log(detail: dict) -> None:
+    """One Railway-visible line per Celery tick (metrics also live in worker_health_beats)."""
+    task = detail.get("task", "worker_tick")
+    compact = {k: detail[k] for k in (
+        "work_done",
+        "idle_reason",
+        "events",
+        "candles",
+        "candles_closed",
+        "setups_detected",
+        "provider",
+        "runs_touched",
+        "error",
+        "disabled",
+        "reason",
+    ) if k in detail}
+    level = logging.WARNING if detail.get("ok") is False or detail.get("error") else logging.INFO
+    if compact.get("work_done") is False and not compact.get("error"):
+        level = logging.INFO
+    log_event(_tick_logger, level, task, **compact)
 
 
 def paper_tick_detail(result: dict[str, Any]) -> dict:
