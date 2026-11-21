@@ -10,10 +10,13 @@ PORT="${PORT:-8000}"
 echo "[propedge] Waiting for Postgres (will start the API even if it is in recovery)..."
 python -m app.util.db_wait --timeout 25 --migrate-if-ready || echo "[propedge] Migrations deferred; API will retry when Postgres is up."
 
-echo "[propedge] Starting realtime worker (ingest / paper)..."
+echo "[propedge] OHLCV storage bootstrap..."
+python -c "from app.services.market_data.storage_backend import ensure_ohlcv_storage; print(ensure_ohlcv_storage())"
+
+echo "[propedge] Starting realtime worker (stream ingest / paper tick)..."
 celery -A app.worker.celery_app worker --loglevel=info --pool=solo -Q realtime -n realtime@%h &
 
-echo "[propedge] Starting research worker (backtests / search)..."
+echo "[propedge] Starting research worker (backtests / ingestion / search)..."
 celery -A app.worker.celery_app worker --loglevel=info --pool=solo -Q research -n research@%h &
 
 echo "[propedge] Starting AI arena worker (LLM research cycles)..."

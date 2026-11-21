@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text  # noqa: I001
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,13 +54,34 @@ class AiResearcher(Base):
     )
 
 
+class AiArenaSettings(Base):
+    __tablename__ = "ai_arena_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    emergency_stop: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    global_daily_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("10"), nullable=False)
+    global_monthly_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("100"), nullable=False)
+    auto_paper_promotion: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class AiExperiment(Base):
     __tablename__ = "ai_experiments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     researcher_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_researchers.id"), nullable=False)
     cycle_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    parent_experiment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_experiments.id"), nullable=True)
+    lifecycle_phase: Mapped[str] = mapped_column(String(32), default="hypothesis", nullable=False)
     hypothesis: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    reasoning_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    validation_tier: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    validation_report: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    strategy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    lineage: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     specification: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     spec_fingerprint: Mapped[str] = mapped_column(String(64), default="", nullable=False, index=True)
     strategy_family: Mapped[str] = mapped_column(String(64), default="", nullable=False)

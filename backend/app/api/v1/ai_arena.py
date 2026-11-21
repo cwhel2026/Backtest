@@ -21,6 +21,13 @@ from app.worker.tasks import ai_researcher_cycle_task
 router = APIRouter(prefix="/ai-arena", tags=["ai-arena"])
 
 
+class ArenaGlobalPatch(BaseModel):
+    emergency_stop: bool | None = None
+    global_daily_budget_usd: float | None = Field(None, ge=0, le=10_000)
+    global_monthly_budget_usd: float | None = Field(None, ge=0, le=100_000)
+    auto_paper_promotion: bool | None = None
+
+
 class ResearcherSettingsPatch(BaseModel):
     enabled: bool | None = None
     activated_by_user: bool | None = None
@@ -29,6 +36,25 @@ class ResearcherSettingsPatch(BaseModel):
     daily_budget_usd: float | None = Field(None, ge=0, le=500)
     monthly_budget_usd: float | None = Field(None, ge=0, le=5000)
     max_concurrent_experiments: int | None = Field(None, ge=1, le=8)
+
+
+@router.patch("/global")
+async def patch_arena_global(body: ArenaGlobalPatch, _: User = Depends(get_current_user)) -> dict:
+    from app.services.ai_arena.guardrails import get_or_create_settings
+
+    with SyncSessionLocal() as session:
+        settings = get_or_create_settings(session)
+        for k, v in body.model_dump(exclude_unset=True).items():
+            setattr(settings, k, v)
+        settings.updated_at = datetime.now(UTC)
+        session.commit()
+        return {
+            "ok": True,
+            "emergency_stop": settings.emergency_stop,
+            "global_daily_budget_usd": float(settings.global_daily_budget_usd),
+            "global_monthly_budget_usd": float(settings.global_monthly_budget_usd),
+            "auto_paper_promotion": settings.auto_paper_promotion,
+        }
 
 
 @router.get("")
@@ -92,6 +118,35 @@ async def test_connection(slug: str, _: User = Depends(get_current_user)) -> dic
             row.last_connection_error = None if ok else msg
             session.commit()
     return {"ok": ok, "status": "connected" if ok else "error", "message": msg}
+
+
+@router.post("/researchers/{slug}/start")
+async def start_researcher(slug: str, _: User = Depends(get_current_user)) -> dict:
+    with SyncSessionLocal() as session:
+        row = session.execute(select(AiResearcher).where(AiResearcher.provider_slug == slug)).scalar_one_or_none()
+        if not row:
+            raise HTTPException(404, "Researcher not found")
+        prov = build_provider(slug)
+        if not prov or not prov.api_key_configured():
+            raise HTTPException(400, "Configure API key before starting")
+        row.activated_by_user = True
+        row.enabled = True
+        row.updated_at = datetime.now(UTC)
+        session.commit()
+        return {"ok": True, "enabled": True}
+
+
+@router.post("/researchers/{slug}/stop")
+async def stop_researcher(slug: str, _: User = Depends(get_current_user)) -> dict:
+    with SyncSessionLocal() as session:
+        row = session.execute(select(AiResearcher).where(AiResearcher.provider_slug == slug)).scalar_one_or_none()
+        if not row:
+            raise HTTPException(404, "Researcher not found")
+        row.enabled = False
+        row.current_activity = "Stopped by user"
+        row.updated_at = datetime.now(UTC)
+        session.commit()
+        return {"ok": True, "enabled": False}
 
 
 @router.post("/researchers/{slug}/run-cycle")

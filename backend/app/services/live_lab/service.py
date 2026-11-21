@@ -160,16 +160,24 @@ def tick_live_strategy_lab(session: Session) -> dict:
         },
     )
 
+    setups_n = int((scan_meta or {}).get("setups_written", 0) or 0)
+
     return {
         "ok": True,
         "provider": feed.provider if feed else None,
         "latency_mode": feed.latency_mode.value if feed else None,
         "events": ingest.get("events", 0),
+        "candles": completed_count,
         "candles_closed": completed_count,
+        "setups_detected": setups_n,
         "runs_touched": len(runs),
         "allow_trading": allow_trading,
         "connection_status": feed.connection_status.value if feed else "disconnected",
         "ingest": ingest,
+        "scanner": scan_meta,
+        "idle_reason": None
+        if completed_count or setups_n or len(runs)
+        else "no_new_candles_or_runs_this_tick",
     }
 
 

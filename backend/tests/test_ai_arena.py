@@ -33,5 +33,6 @@ def test_cycle_skips_when_disabled():
 
     r = AiResearcher(provider_slug="openai", display_name="OpenAI", enabled=False, activated_by_user=False)
     session = MagicMock()
-    out = run_researcher_cycle(session, r)
+    with patch("app.services.ai_arena.guardrails.arena_globally_allowed", return_value=True):
+        out = run_researcher_cycle(session, r)
     assert out.get("skipped")

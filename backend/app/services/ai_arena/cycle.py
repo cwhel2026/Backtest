@@ -58,6 +58,38 @@ def _record_usage(session: Session, researcher: AiResearcher, result, call_kind:
     )
 
 
+def _experiment_shell(
+    researcher: AiResearcher,
+    cycle: AiResearchCycle,
+    payload: dict,
+    spec: dict,
+    fp: str,
+    family: str,
+    tf: str,
+    reasoning_summary: str,
+    *,
+    status: str,
+    reason: str,
+    strategy_id=None,
+) -> AiExperiment:
+    return AiExperiment(
+        researcher_id=researcher.id,
+        cycle_id=cycle.id,
+        hypothesis=str(payload.get("hypothesis") or ""),
+        reasoning_summary=reasoning_summary,
+        specification=spec,
+        spec_fingerprint=fp,
+        strategy_family=str(payload.get("strategy_family") or family),
+        symbol=str(spec.get("instrument_symbol")).upper(),
+        timeframe=str(spec.get("timeframe") or tf),
+        status=status,
+        rejection_reason=reason,
+        strategy_id=strategy_id,
+        author_provider_slug=researcher.provider_slug,
+        completed_at=datetime.now(UTC),
+    )
+
+
 def _duplicate_exists(session: Session, fp: str) -> bool:
     return (
         session.execute(select(func.count()).select_from(AiExperiment).where(AiExperiment.spec_fingerprint == fp)).scalar_one()
@@ -66,6 +98,10 @@ def _duplicate_exists(session: Session, fp: str) -> bool:
 
 
 def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: bool = False) -> dict:
+    from app.services.ai_arena.guardrails import arena_globally_allowed
+
+    if not arena_globally_allowed(session):
+        return {"skipped": True, "reason": "global_guardrail"}
     if not researcher.enabled or not researcher.activated_by_user:
         return {"skipped": True, "reason": "researcher_disabled"}
     ok, reason = budget_allows(session, researcher)
@@ -89,9 +125,17 @@ def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: 
     memory_block = json.dumps({"market": stats, "memory": memory, "researcher_objectives": researcher.objectives}, default=str)
 
     cycle.phase = "hypothesis"
+    family = random.choice(STRATEGY_FAMILIES)
     researcher.current_activity = f"Generating {family} hypothesis for {symbol}"
     model = researcher.model_id or provider.default_model
-    family = random.choice(STRATEGY_FAMILIES)
+    from app.services.ai_arena.guardrails import release_llm_reservation, reserve_llm_budget
+
+    ok_reserve, reserve_reason = reserve_llm_budget(session, researcher)
+    if not ok_reserve:
+        cycle.status = "skipped"
+        cycle.error = reserve_reason
+        cycle.completed_at = datetime.now(UTC)
+        return {"skipped": True, "reason": reserve_reason}
     user = (
         f"Strategy family to explore: {family}. Context:\n{memory_block}\n"
         f"Pick symbol near {symbol} and timeframe {tf}. Include category {family} in specification."
@@ -117,8 +161,11 @@ def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: 
             )
         )
         return {"ok": False, "error": str(exc)}
+    finally:
+        release_llm_reservation()
 
     payload = result.data
+    reasoning_summary = str(payload.get("hypothesis") or payload.get("rationale") or "")
     spec = payload.get("specification") or payload
     if not isinstance(spec, dict):
         cycle.status = "failed"
@@ -251,11 +298,35 @@ def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: 
         cycle.completed_at = datetime.now(UTC)
         return {"ok": True, "experiment_id": str(exp.id), "status": "rejected", "reason": reason}
 
-    cycle.phase = "backtest"
-    researcher.current_activity = "Running genuine historical backtest"
+    cycle.phase = "scientific_validation"
+    researcher.current_activity = "Running research-grade validation (OOS, walk-forward, holdout)"
+    from app.models.instrument import Instrument
+    from app.services.strategy_search import scientifically_validate_spec
     from app.services.backtest_runner import execute_backtest_run
 
-    rationale = str(payload.get("hypothesis") or f"AI arena {family}")
+    rationale = reasoning_summary or f"AI arena {family}"
+    inst = session.execute(
+        select(Instrument).where(Instrument.symbol == spec["instrument_symbol"].upper())
+    ).scalar_one_or_none()
+    if not inst:
+        exp = _experiment_shell(
+            researcher,
+            cycle,
+            payload,
+            spec,
+            fp,
+            family,
+            tf,
+            reasoning_summary,
+            status="rejected",
+            reason="Instrument not registered",
+        )
+        session.add(exp)
+        cycle.status = "completed"
+        cycle.phase = "no_instrument"
+        cycle.completed_at = datetime.now(UTC)
+        return {"ok": True, "experiment_id": str(exp.id), "status": "rejected"}
+
     try:
         strategy = create_strategy_sync(
             session,
@@ -263,35 +334,20 @@ def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: 
             economic_rationale=rationale,
             created_by=f"ai_arena:{researcher.provider_slug}",
         )
-        run = BacktestRun(
-            strategy_id=strategy.id,
-            strategy_version_id=strategy.current_version_id,
-            dataset_id=dataset.id,
-            status="queued",
-            engine_version="pending",
-            reproducibility_id=provisional_reproducibility_id(),
-            assumptions={"require_genuine_historical": True},
-            parameters={"origin": "ai_arena", "provider": researcher.provider_slug, "family": family},
-        )
-        session.add(run)
-        session.flush()
-        execute_backtest_run(session, run.id)
-        session.refresh(run)
-        bt = run
+        validation = scientifically_validate_spec(session, dataset, inst, spec, origin="ai_arena")
     except Exception as exc:
-        exp = AiExperiment(
-            researcher_id=researcher.id,
-            cycle_id=cycle.id,
-            hypothesis=str(payload.get("hypothesis") or ""),
-            specification=spec,
-            spec_fingerprint=fp,
-            strategy_family=str(payload.get("strategy_family") or family),
-            symbol=str(spec.get("instrument_symbol")).upper(),
-            timeframe=str(spec.get("timeframe") or tf),
+        exp = _experiment_shell(
+            researcher,
+            cycle,
+            payload,
+            spec,
+            fp,
+            family,
+            tf,
+            reasoning_summary,
             status="failed_validation",
-            rejection_reason=str(exc)[:400],
-            author_provider_slug=researcher.provider_slug,
-            completed_at=datetime.now(UTC),
+            reason=str(exc)[:400],
+            strategy_id=None,
         )
         session.add(exp)
         cycle.status = "failed"
@@ -299,59 +355,128 @@ def run_researcher_cycle(session: Session, researcher: AiResearcher, *, manual: 
         cycle.completed_at = datetime.now(UTC)
         return {"ok": False, "error": str(exc)}
 
-    m = bt.metrics or {}
-    trade_count = int(m.get("trade_count") or 0)
-    net_pnl = float(m.get("net_pnl") or 0)
-    max_dd = float(m.get("max_drawdown") or 0)
-    win_rate = m.get("win_rate")
+    tier = validation.get("validation_tier", "rejected")
+    graded = validation.get("metrics") or {}
+    summary_ai = validation.get("summary_for_ai") or {}
     metrics = {
-        "trade_count": trade_count,
-        "net_pnl": net_pnl,
-        "win_rate": float(win_rate) if win_rate is not None else None,
-        "max_drawdown": max_dd,
-        "sharpe": float(m.get("sharpe")) if m.get("sharpe") is not None else None,
-        "backtest_status": bt.status,
+        **summary_ai,
+        "validation_tier": tier,
+        "grade": validation.get("grade"),
+        "trade_count": graded.get("trade_count"),
+        "net_pnl": graded.get("total_net_profit") or graded.get("net_pnl"),
+        "max_drawdown": graded.get("max_drawdown"),
+        "profit_factor": graded.get("profit_factor"),
+        "oos_passed": summary_ai.get("oos_passed"),
     }
-    validated = bt.status == "completed" and trade_count >= 15 and net_pnl > 0 and max_dd < 5000
+    run = BacktestRun(
+        strategy_id=strategy.id,
+        strategy_version_id=strategy.current_version_id,
+        dataset_id=dataset.id,
+        status="queued",
+        engine_version="pending",
+        reproducibility_id=provisional_reproducibility_id(),
+        assumptions={"require_genuine_historical": True},
+        parameters={"origin": "ai_arena", "provider": researcher.provider_slug, "validation_tier": tier},
+        metrics=graded,
+    )
+    session.add(run)
+    session.flush()
+    try:
+        execute_backtest_run(session, run.id)
+        session.refresh(run)
+    except Exception:
+        pass
+
+    if tier == "validated":
+        status = "validated"
+        rejection = None
+        lifecycle = "validation"
+    elif tier == "experimental":
+        status = "experimental"
+        rejection = "Passed simplified historical gates only — labeled experimental until full keeper grade"
+        lifecycle = "robustness"
+    else:
+        status = "rejected"
+        rejection = validation.get("reason") or "Failed research-grade validation"
+        lifecycle = "rejected"
+
     exp = AiExperiment(
         researcher_id=researcher.id,
         cycle_id=cycle.id,
         hypothesis=str(payload.get("hypothesis") or ""),
+        reasoning_summary=reasoning_summary,
+        lifecycle_phase=lifecycle,
         specification=spec,
         spec_fingerprint=fp,
         strategy_family=str(payload.get("strategy_family") or family),
         symbol=str(spec.get("instrument_symbol")).upper(),
         timeframe=str(spec.get("timeframe") or tf),
-        status="validated" if validated else "rejected",
-        rejection_reason=None if validated else "Did not meet arena validation gates (sample size, pnl, drawdown)",
+        status=status,
+        validation_tier=tier,
+        validation_report={k: v for k, v in validation.items() if k != "metrics"},
+        rejection_reason=rejection,
         backtest_run_id=run.id,
         validation_metrics=metrics,
+        strategy_id=strategy.id,
+        strategy_version_id=strategy.current_version_id,
+        lineage={
+            "provider": researcher.provider_slug,
+            "family": family,
+            "dsl_fingerprint": fp,
+            "validation_summary": summary_ai,
+        },
         author_provider_slug=researcher.provider_slug,
         completed_at=datetime.now(UTC),
     )
     session.add(exp)
+    if tier == "validated":
+        from app.services.ai_arena.paper_promotion import try_promote_validated_experiment
+
+        try_promote_validated_experiment(session, exp)
+
     mem = dict(researcher.memory or {})
     mem.setdefault("experiments", [])
+    mem.setdefault("failed_families", [])
+    if status == "rejected":
+        fam = exp.strategy_family
+        fails = [f for f in (mem.get("failed_families") or []) if f != fam]
+        fails.append(fam)
+        mem["failed_families"] = fails[-20:]
     mem["experiments"] = (mem.get("experiments") or [])[-49:] + [
-        {"id": str(exp.id), "status": exp.status, "family": exp.strategy_family, "metrics": metrics}
+        {
+            "id": str(exp.id),
+            "status": exp.status,
+            "tier": tier,
+            "family": exp.strategy_family,
+            "metrics": metrics,
+        }
     ]
     researcher.memory = mem
     cycle.status = "completed"
-    cycle.phase = "validated" if validated else "rejected_metrics"
-    cycle.detail = {"experiment_id": str(exp.id), "metrics": metrics, "manual": manual}
+    cycle.phase = lifecycle
+    cycle.detail = {"experiment_id": str(exp.id), "metrics": metrics, "validation_tier": tier, "manual": manual}
     cycle.completed_at = datetime.now(UTC)
     researcher.last_success_at = datetime.now(UTC)
     researcher.current_activity = "Idle between cycles"
-    _bump_stats(researcher, rejected=not validated, validated=validated)
-    return {"ok": True, "experiment_id": str(exp.id), "status": exp.status, "metrics": metrics}
+    _bump_stats(researcher, rejected=status == "rejected", validated=status == "validated", experimental=status == "experimental")
+    return {"ok": True, "experiment_id": str(exp.id), "status": exp.status, "validation_tier": tier, "metrics": metrics}
 
 
-def _bump_stats(researcher: AiResearcher, *, rejected: bool = False, validated: bool = False) -> None:
+def _bump_stats(
+    researcher: AiResearcher,
+    *,
+    rejected: bool = False,
+    validated: bool = False,
+    experimental: bool = False,
+) -> None:
     st = dict(researcher.stats or {})
     st["cycles"] = int(st.get("cycles") or 0) + 1
     if rejected:
         st["rejected"] = int(st.get("rejected") or 0) + 1
     if validated:
         st["validated"] = int(st.get("validated") or 0) + 1
+    if experimental:
+        st["experimental"] = int(st.get("experimental") or 0) + 1
     st["generated"] = int(st.get("generated") or 0) + 1
+    st["tested"] = int(st.get("tested") or 0) + 1
     researcher.stats = st

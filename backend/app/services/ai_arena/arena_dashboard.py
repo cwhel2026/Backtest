@@ -8,9 +8,10 @@ from decimal import Decimal
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models.ai_arena import AiApiUsage, AiExperiment, AiResearcher
+from app.models.ai_arena import AiApiUsage, AiArenaSettings, AiExperiment, AiResearcher
 from app.services.ai_arena.bootstrap import ensure_ai_researchers
 from app.services.ai_arena.budget import spend_usd
+from app.services.ai_arena.guardrails import get_or_create_settings, global_spend_usd
 from app.services.ai_arena.llm_providers import list_provider_catalog
 
 
@@ -50,39 +51,66 @@ def build_arena_dashboard(session: Session) -> dict:
         )
 
     leaderboard = _leaderboard(session)
+    settings = get_or_create_settings(session)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "researchers": cards,
         "provider_catalog": list_provider_catalog(),
         "leaderboard": leaderboard,
-        "note": "Performance ranks use validated backtest metrics only — not LLM self-assessment.",
+        "global": {
+            "emergency_stop": settings.emergency_stop,
+            "global_daily_budget_usd": float(settings.global_daily_budget_usd),
+            "global_monthly_budget_usd": float(settings.global_monthly_budget_usd),
+            "global_daily_spend_usd": float(global_spend_usd(session, day=True)),
+            "global_monthly_spend_usd": float(global_spend_usd(session, day=False)),
+            "auto_paper_promotion": settings.auto_paper_promotion,
+        },
+        "note": "Leaderboard ranks researchers on composite score — not top historical P&L alone.",
     }
 
 
 def _leaderboard(session: Session) -> list[dict]:
-    rows = session.execute(
-        select(AiExperiment)
-        .where(AiExperiment.status == "validated")
-        .order_by(desc(AiExperiment.completed_at))
-        .limit(50)
-    ).scalars().all()
-    ranked = []
-    for e in rows:
-        m = e.validation_metrics or {}
-        ranked.append(
+    researchers = session.execute(select(AiResearcher)).scalars().all()
+    rows: list[dict] = []
+    for r in researchers:
+        exps = session.execute(select(AiExperiment).where(AiExperiment.researcher_id == r.id)).scalars().all()
+        validated = [e for e in exps if e.validation_tier == "validated" or e.status == "validated"]
+        failed = [e for e in exps if e.status in ("rejected", "duplicate", "failed_validation")]
+        tested_fps = {e.spec_fingerprint for e in exps if e.spec_fingerprint}
+        total_cost = spend_usd(session, r.id, day=False)
+        best_oos_pf = 0.0
+        worst_dd = 0.0
+        for e in validated:
+            m = e.validation_metrics or {}
+            best_oos_pf = max(best_oos_pf, float(m.get("profit_factor") or 0))
+            worst_dd = max(worst_dd, float(m.get("max_drawdown") or 0))
+        cost_per_valid = float(total_cost / len(validated)) if validated else None
+        composite = (
+            len(validated) * 100
+            + len(tested_fps) * 5
+            + best_oos_pf * 20
+            - len(failed) * 2
+            - worst_dd / 500
+            - float(total_cost) * 10
+        )
+        rows.append(
             {
-                "experiment_id": str(e.id),
-                "provider_slug": e.author_provider_slug,
-                "family": e.strategy_family,
-                "symbol": e.symbol,
-                "net_pnl": m.get("net_pnl"),
-                "trade_count": m.get("trade_count"),
-                "max_drawdown": m.get("max_drawdown"),
-                "completed_at": e.completed_at.isoformat() if e.completed_at else None,
+                "provider_slug": r.provider_slug,
+                "display_name": r.display_name,
+                "strategies_generated": int((r.stats or {}).get("generated") or len(exps)),
+                "unique_tested": len(tested_fps),
+                "failed": len(failed),
+                "validated": len(validated),
+                "experimental": len([e for e in exps if e.status == "experimental"]),
+                "best_profit_factor": best_oos_pf,
+                "max_drawdown_worst": worst_dd,
+                "monthly_research_cost_usd": float(total_cost),
+                "cost_per_validated_strategy_usd": cost_per_valid,
+                "composite_score": round(composite, 2),
             }
         )
-    ranked.sort(key=lambda x: (x.get("net_pnl") or 0), reverse=True)
-    return ranked[:20]
+    rows.sort(key=lambda x: x["composite_score"], reverse=True)
+    return rows
 
 
 def researcher_detail(session: Session, slug: str) -> dict:
@@ -108,11 +136,15 @@ def researcher_detail(session: Session, slug: str) -> dict:
             {
                 "id": str(e.id),
                 "status": e.status,
+                "validation_tier": e.validation_tier,
+                "lifecycle_phase": e.lifecycle_phase,
                 "family": e.strategy_family,
                 "symbol": e.symbol,
                 "hypothesis": e.hypothesis,
+                "reasoning_summary": e.reasoning_summary,
                 "rejection_reason": e.rejection_reason,
                 "metrics": e.validation_metrics,
+                "lineage": e.lineage,
                 "backtest_run_id": str(e.backtest_run_id) if e.backtest_run_id else None,
                 "created_at": e.created_at.isoformat(),
             }
