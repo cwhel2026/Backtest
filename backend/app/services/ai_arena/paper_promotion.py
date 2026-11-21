@@ -8,6 +8,7 @@ from app.backtest.dsl import ENTRY_TYPES
 from app.models.ai_arena import AiExperiment
 from app.models.strategy import StrategyDefinition
 from app.services.ai_arena.guardrails import get_or_create_settings
+from app.services.ai_arena.paper_attribution import attribution_for_experiment
 from app.services.paper_book import enroll_strategy
 
 INCREMENTAL_EXCLUDED = frozenset({"video_anchor_bos", "video_liquidity_sweep", "video_combined"})
@@ -32,10 +33,13 @@ def try_promote_validated_experiment(session: Session, experiment: AiExperiment)
     spec = experiment.specification or {}
     if not incremental_execution_compatible(spec):
         return {"promoted": False, "reason": "not_incremental_compatible"}
-    enroll_strategy(session, strategy, experiment.symbol)
+    attr = attribution_for_experiment(session, experiment)
+    slot = enroll_strategy(session, strategy, experiment.symbol, arena_attribution=attr)
+    if not slot:
+        return {"promoted": False, "reason": "paper_slot_unavailable"}
     lineage = dict(experiment.lineage or {})
     lineage["paper_promoted"] = True
     experiment.lineage = lineage
     experiment.lifecycle_phase = "forward_paper"
     session.add(experiment)
-    return {"promoted": True, "strategy_id": str(strategy.id)}
+    return {"promoted": True, "strategy_id": str(strategy.id), "slot_id": str(slot.id)}

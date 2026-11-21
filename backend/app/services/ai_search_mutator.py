@@ -97,6 +97,7 @@ def propose_search_specs(
     seed: int | None = None,
     provider_slug: str | None = None,
     model: str | None = None,
+    arena_provider_only: bool = False,
 ) -> tuple[str, list[dict]]:
     hint = MUTATE_BATCH_HINT_PREFIX.replace("{max_specs}", str(max_specs)) + DSL_HINT
     user = f"Symbol: {symbol}\n\nTrial memory:\n{memory_summary}\n\n{hint}"
@@ -105,9 +106,12 @@ def propose_search_specs(
     from app.services.ai_arena.llm_providers import get_provider
 
     slug = provider_slug
-    if not slug:
+    if not slug and not arena_provider_only:
         settings = get_settings()
         slug = "openai" if settings.ai_configured else None
+    if arena_provider_only and not slug:
+        specs = _heuristic_mutations(symbol, memory_summary, max_specs, seed=seed)
+        return "Arena heuristic mutations (provider slug required for LLM).", specs
 
     provider = get_provider(slug) if slug else None
     if not provider or not provider.api_key_configured():

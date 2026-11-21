@@ -96,7 +96,13 @@ def _spec_for_strategy(session: Session, strategy: StrategyDefinition) -> dict:
     return dict(version.specification or {}) if version else {}
 
 
-def enroll_strategy(session: Session, strategy: StrategyDefinition, symbol: str) -> PaperSlot | None:
+def enroll_strategy(
+    session: Session,
+    strategy: StrategyDefinition,
+    symbol: str,
+    *,
+    arena_attribution: dict | None = None,
+) -> PaperSlot | None:
     account = ensure_paper_account(session)
     if account.status == "breached":
         return None
@@ -123,6 +129,7 @@ def enroll_strategy(session: Session, strategy: StrategyDefinition, symbol: str)
         symbol=symbol.upper(),
         timeframe=timeframe,
         status="active",
+        arena_attribution=dict(arena_attribution or {}),
     )
     session.add(slot)
     session.add(
@@ -331,6 +338,13 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
                 allow = False
 
     try:
+        from app.services.ai_arena.paper_forward_monitor import monitor_arena_paper_slots
+
+        arena_monitor = monitor_arena_paper_slots(session)
+    except Exception:
+        arena_monitor = {"suspended": [], "checked": 0}
+
+    try:
         session.commit()
     except Exception as exc:
         session.rollback()
@@ -345,6 +359,7 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         "slots": len(slots),
         "opened": opened,
         "closed": closed,
+        "arena_paper_monitor": arena_monitor,
         "refreshed": refreshed,
         "enrolled_new": enrolled_new,
         "status": account.status,

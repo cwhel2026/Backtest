@@ -37,6 +37,9 @@ class AiResearcher(Base):
     daily_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("2"), nullable=False)
     monthly_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("25"), nullable=False)
     max_concurrent_experiments: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_refinement_depth: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_child_experiments: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_backtests_per_cycle: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
     connection_status: Mapped[str] = mapped_column(String(32), default="unconfigured", nullable=False)
     last_connection_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_connection_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -108,6 +111,8 @@ class AiResearchCycle(Base):
     phase: Mapped[str] = mapped_column(String(64), default="init", nullable=False)
     detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

@@ -36,6 +36,9 @@ class ResearcherSettingsPatch(BaseModel):
     daily_budget_usd: float | None = Field(None, ge=0, le=500)
     monthly_budget_usd: float | None = Field(None, ge=0, le=5000)
     max_concurrent_experiments: int | None = Field(None, ge=1, le=8)
+    max_refinement_depth: int | None = Field(None, ge=0, le=5)
+    max_child_experiments: int | None = Field(None, ge=0, le=8)
+    max_backtests_per_cycle: int | None = Field(None, ge=1, le=20)
 
 
 @router.patch("/global")

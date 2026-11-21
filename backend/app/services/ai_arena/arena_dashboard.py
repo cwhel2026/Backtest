@@ -8,11 +8,13 @@ from decimal import Decimal
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models.ai_arena import AiApiUsage, AiArenaSettings, AiExperiment, AiResearcher
+from app.models.ai_arena import AiApiUsage, AiArenaSettings, AiExperiment, AiResearchCycle, AiResearcher
 from app.services.ai_arena.bootstrap import ensure_ai_researchers
 from app.services.ai_arena.budget import spend_usd
 from app.services.ai_arena.guardrails import get_or_create_settings, global_spend_usd
 from app.services.ai_arena.llm_providers import list_provider_catalog
+from app.services.ai_arena.research_memory import memory_context_for_llm
+from app.services.ai_arena.paper_stats import paper_stats_for_researcher
 
 
 def build_arena_dashboard(session: Session) -> dict:
@@ -85,6 +87,9 @@ def _leaderboard(session: Session) -> list[dict]:
             best_oos_pf = max(best_oos_pf, float(m.get("profit_factor") or 0))
             worst_dd = max(worst_dd, float(m.get("max_drawdown") or 0))
         cost_per_valid = float(total_cost / len(validated)) if validated else None
+        paper = paper_stats_for_researcher(session, r)
+        refinements = int((r.stats or {}).get("refinements") or sum(1 for e in exps if e.parent_experiment_id))
+        families = len({e.strategy_family for e in exps if e.strategy_family})
         composite = (
             len(validated) * 100
             + len(tested_fps) * 5
@@ -93,17 +98,29 @@ def _leaderboard(session: Session) -> list[dict]:
             - worst_dd / 500
             - float(total_cost) * 10
         )
+        if not paper.get("insufficient_sample"):
+            composite += float(paper.get("paper_net_pnl") or 0) / 50
+            composite += float(paper.get("paper_profit_factor") or 0) * 5
         rows.append(
             {
                 "provider_slug": r.provider_slug,
                 "display_name": r.display_name,
                 "strategies_generated": int((r.stats or {}).get("generated") or len(exps)),
-                "unique_tested": len(tested_fps),
+                "unique_experiments": len(tested_fps),
+                "families_explored": families,
+                "refinements_completed": refinements,
                 "failed": len(failed),
                 "validated": len(validated),
                 "experimental": len([e for e in exps if e.status == "experimental"]),
-                "best_profit_factor": best_oos_pf,
-                "max_drawdown_worst": worst_dd,
+                "historical_best_profit_factor": best_oos_pf,
+                "historical_max_drawdown": worst_dd,
+                "active_forward_strategies": paper.get("active_forward_strategies", 0),
+                "closed_paper_trades": paper.get("closed_paper_trades", 0),
+                "paper_net_pnl": paper.get("paper_net_pnl"),
+                "paper_win_rate": paper.get("paper_win_rate"),
+                "paper_profit_factor": paper.get("paper_profit_factor"),
+                "paper_max_drawdown": paper.get("paper_max_drawdown"),
+                "paper_insufficient_sample": paper.get("insufficient_sample", True),
                 "monthly_research_cost_usd": float(total_cost),
                 "cost_per_validated_strategy_usd": cost_per_valid,
                 "composite_score": round(composite, 2),
@@ -118,23 +135,69 @@ def researcher_detail(session: Session, slug: str) -> dict:
     if not r:
         raise ValueError("Unknown researcher")
     exps = session.execute(
-        select(AiExperiment).where(AiExperiment.researcher_id == r.id).order_by(desc(AiExperiment.created_at)).limit(40)
+        select(AiExperiment).where(AiExperiment.researcher_id == r.id).order_by(desc(AiExperiment.created_at)).limit(80)
     ).scalars().all()
+    cycles = session.execute(
+        select(AiResearchCycle).where(AiResearchCycle.researcher_id == r.id).order_by(desc(AiResearchCycle.started_at)).limit(20)
+    ).scalars().all()
+    monthly = spend_usd(session, r.id, day=False)
+    daily = spend_usd(session, r.id, day=True)
+    paper = paper_stats_for_researcher(session, r)
+    latest = exps[0] if exps else None
+    evolution_tree = [
+        {
+            "id": str(e.id),
+            "parent_id": str(e.parent_experiment_id) if e.parent_experiment_id else None,
+            "status": e.status,
+            "tier": e.validation_tier,
+            "family": e.strategy_family,
+            "hypothesis": e.hypothesis[:180],
+            "metrics": e.validation_metrics,
+            "lineage": e.lineage,
+        }
+        for e in exps
+    ]
     return {
         "researcher": {
             "id": str(r.id),
             "provider_slug": r.provider_slug,
             "display_name": r.display_name,
             "enabled": r.enabled,
+            "activated_by_user": r.activated_by_user,
             "model_id": r.model_id,
-            "memory": r.memory,
+            "memory": memory_context_for_llm(r),
             "objectives": r.objectives,
             "stats": r.stats,
             "current_activity": r.current_activity,
+            "discovery_goal": (r.objectives or {}).get("prop_constraints"),
+            "latest_hypothesis": latest.hypothesis if latest else None,
+            "daily_spend_usd": float(daily),
+            "monthly_spend_usd": float(monthly),
+            "daily_budget_usd": float(r.daily_budget_usd),
+            "monthly_budget_usd": float(r.monthly_budget_usd),
+            "remaining_daily_budget_usd": max(0, float(r.daily_budget_usd - daily)),
+            "remaining_monthly_budget_usd": max(0, float(r.monthly_budget_usd - monthly)),
+            "max_refinement_depth": r.max_refinement_depth,
+            "max_child_experiments": r.max_child_experiments,
+            "max_backtests_per_cycle": r.max_backtests_per_cycle,
         },
+        "forward_paper": paper,
+        "cycles": [
+            {
+                "id": str(c.id),
+                "status": c.status,
+                "phase": c.phase,
+                "detail": c.detail,
+                "started_at": c.started_at.isoformat(),
+                "completed_at": c.completed_at.isoformat() if c.completed_at else None,
+            }
+            for c in cycles
+        ],
+        "evolution_tree": evolution_tree,
         "experiments": [
             {
                 "id": str(e.id),
+                "parent_experiment_id": str(e.parent_experiment_id) if e.parent_experiment_id else None,
                 "status": e.status,
                 "validation_tier": e.validation_tier,
                 "lifecycle_phase": e.lifecycle_phase,
