@@ -20,6 +20,14 @@ type ResearcherDetail = {
     max_backtests_per_cycle: number;
   };
   forward_paper: Record<string, unknown>;
+  active_paper_positions: {
+    slot_id: string;
+    symbol: string;
+    direction: string | null;
+    entry_price: number | null;
+    stop: number | null;
+    target: number | null;
+  }[];
   cycles: { id: string; status: string; phase: string; started_at: string }[];
   evolution_tree: {
     id: string;
@@ -102,6 +110,15 @@ export default function ResearcherPage() {
           {Number(fp.paper_net_pnl ?? 0).toFixed(2)}
           {fp.insufficient_sample ? " (insufficient sample for ranking)" : ""}
         </p>
+        {(data.active_paper_positions?.length ?? 0) > 0 ? (
+          <ul className="text-xs text-zinc-500">
+            {data.active_paper_positions.map((p) => (
+              <li key={p.slot_id}>
+                {p.symbol} {p.direction} @ {p.entry_price} stop {p.stop} target {p.target}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Card>
 
       <Card className="panel space-y-2">

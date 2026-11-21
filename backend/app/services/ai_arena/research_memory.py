@@ -19,6 +19,8 @@ def memory_context_for_llm(researcher: AiResearcher) -> dict:
         "weak_execution_patterns": (mem.get("weak_execution_patterns") or [])[-8:],
         "families_to_avoid": (mem.get("failed_families") or [])[-10:],
         "families_working": (mem.get("working_families") or [])[-6:],
+        "market_regimes": mem.get("market_regimes") or {},
+        "forward_deterioration": (mem.get("forward_deterioration") or [])[-5:],
         "recent_compact": (mem.get("recent_compact") or [])[-10:],
     }
 
@@ -92,6 +94,16 @@ def update_memory_from_experiment(researcher: AiResearcher, experiment: AiExperi
         note["losses"] = int(note.get("losses", 0)) + 1
     inst_notes[sym] = note
     mem["instrument_notes"] = inst_notes
+
+    regime = (experiment.lineage or {}).get("market_regime")
+    if regime:
+        regimes = dict(mem.get("market_regimes") or {})
+        bucket = regimes.setdefault(str(regime), {"validated": 0, "rejected": 0})
+        if experiment.status == "validated":
+            bucket["validated"] = int(bucket.get("validated", 0)) + 1
+        elif experiment.status == "rejected":
+            bucket["rejected"] = int(bucket.get("rejected", 0)) + 1
+        mem["market_regimes"] = regimes
 
     vm = experiment.validation_metrics or {}
     if int(vm.get("trade_count") or 0) < 10:

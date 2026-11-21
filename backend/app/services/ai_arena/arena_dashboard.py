@@ -182,6 +182,7 @@ def researcher_detail(session: Session, slug: str) -> dict:
             "max_backtests_per_cycle": r.max_backtests_per_cycle,
         },
         "forward_paper": paper,
+        "active_paper_positions": paper.get("active_paper_positions") or [],
         "cycles": [
             {
                 "id": str(c.id),

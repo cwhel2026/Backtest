@@ -236,6 +236,7 @@ def run_spec_experiment(
         "validation_summary": summary_ai,
         "analysis": analysis or {},
         "data_source": str((meta.get("data_lineage") or {}).get("source") or meta.get("source") or ""),
+        "market_regime": str((meta.get("data_lineage") or {}).get("regime") or meta.get("regime") or "unspecified"),
     }
     if parent_experiment_id:
         parent = session.get(AiExperiment, parent_experiment_id)

@@ -41,8 +41,22 @@ def paper_stats_for_researcher(session: Session, researcher: AiResearcher) -> di
         equity += n
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
+    open_positions = [
+        {
+            "slot_id": str(s.id),
+            "symbol": s.symbol,
+            "strategy_id": str(s.strategy_id),
+            "direction": s.open_direction,
+            "entry_price": float(s.open_entry_price) if s.open_entry_price else None,
+            "stop": float(s.open_stop) if s.open_stop else None,
+            "target": float(s.open_target) if s.open_target else None,
+            "attribution": s.arena_attribution,
+        }
+        for s in active
+    ]
     return {
         "active_forward_strategies": len(active),
+        "active_paper_positions": open_positions,
         "closed_paper_trades": len(fills),
         "paper_net_pnl": float(equity),
         "paper_win_rate": float(len(wins) / len(nets)) if nets else None,

@@ -31,4 +31,19 @@ def monitor_arena_paper_slots(session: Session, *, min_closed_trades: int = 5) -
             slot.last_error = f"Arena forward deterioration: last {len(recent)} trades net {net}"
             session.add(slot)
             suspended.append(str(slot.id))
+            attr = slot.arena_attribution or {}
+            rid = attr.get("researcher_id")
+            if rid:
+                from uuid import UUID
+
+                from app.models.ai_arena import AiResearcher
+
+                researcher = session.get(AiResearcher, UUID(str(rid)))
+                if researcher:
+                    mem = dict(researcher.memory or {})
+                    fd = mem.get("forward_deterioration") or []
+                    fd.append({"slot_id": str(slot.id), "net": float(net), "trades": len(recent)})
+                    mem["forward_deterioration"] = fd[-10:]
+                    researcher.memory = mem
+                    session.add(researcher)
     return {"suspended": suspended, "checked": len(slots)}

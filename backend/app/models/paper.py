@@ -75,6 +75,8 @@ class PaperFill(Base):
     exit_reason: Mapped[str] = mapped_column(String(64), nullable=False)
     net_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     note: Mapped[str] = mapped_column(Text, default="")
+    arena_attribution: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    execution_detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

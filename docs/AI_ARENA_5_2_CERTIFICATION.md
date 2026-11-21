@@ -8,7 +8,11 @@ Run on deploy (Railway API + workers):
 alembic upgrade head
 ```
 
-Required revisions: **013** (arena tables), **014** (lineage + global settings), **015** (evolution limits, paper attribution, cycle heartbeat).
+Required revisions: **013** (arena tables), **014** (lineage + global settings), **015** (evolution limits), **016** (paper fill attribution + execution detail).
+
+### Migration safety (CI-checked)
+
+`test_ai_arena_bar_parity.py::test_alembic_arena_revision_chain` asserts `012 → 013 → 014 → 015 → 016`.
 
 ## Workers (must be three)
 
@@ -22,7 +26,7 @@ Required revisions: **013** (arena tables), **014** (lineage + global settings),
 
 | Tier | What runs | API cost |
 |------|-----------|----------|
-| **CI mocked** | `test_ai_arena_evolution_e2e.py`, `test_ai_arena.py` | None |
+| **CI mocked** | `test_ai_arena_evolution_e2e.py`, `test_ai_arena_bar_parity.py`, `test_ai_arena.py` | None |
 | **Local genuine** | `/ai-arena` → Test connection → Run research now with env keys | Your keys |
 | **Railway production** | Same UI after migrate + triple worker | Your keys |
 

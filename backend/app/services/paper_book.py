@@ -307,6 +307,16 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
         for fill in fills:
             closed += 1
             status = _apply_fill(account, fill)
+            exec_detail = {
+                "entry_price": float(fill.entry_price),
+                "exit_price": float(fill.exit_price),
+                "stop": float(slot.open_stop) if slot.open_stop else None,
+                "target": float(slot.open_target) if slot.open_target else None,
+                "exit_reason": fill.exit_reason,
+                "commission_per_side": float(instrument.default_commission_per_side),
+                "slippage_ticks_per_side": 1,
+                "realised_net_pnl": float(fill.net_pnl),
+            }
             session.add(
                 PaperFill(
                     account_id=account.id,
@@ -322,6 +332,8 @@ def tick_paper_book(session: Session, *, refresh_data: bool = True) -> dict:
                     exit_reason=fill.exit_reason,
                     net_pnl=fill.net_pnl,
                     note=status,
+                    arena_attribution=dict(slot.arena_attribution or {}),
+                    execution_detail=exec_detail,
                 )
             )
             session.add(

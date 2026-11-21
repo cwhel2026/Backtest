@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session
 from app.backtest.dsl import ENTRY_TYPES
 from app.models.ai_arena import AiExperiment
 from app.models.strategy import StrategyDefinition
+from app.models.backtest import BacktestRun
+from app.models.instrument import Instrument
+from app.models.market_data import HistoricalDataset
+from app.services.ai_arena.bar_parity import chronological_parity_check
 from app.services.ai_arena.guardrails import get_or_create_settings
 from app.services.ai_arena.paper_attribution import attribution_for_experiment
 from app.services.paper_book import enroll_strategy
@@ -33,6 +37,22 @@ def try_promote_validated_experiment(session: Session, experiment: AiExperiment)
     spec = experiment.specification or {}
     if not incremental_execution_compatible(spec):
         return {"promoted": False, "reason": "not_incremental_compatible"}
+    run = session.get(BacktestRun, experiment.backtest_run_id)
+    inst = None
+    ds = None
+    if run:
+        ds = session.get(HistoricalDataset, run.dataset_id)
+        strategy = session.get(StrategyDefinition, experiment.strategy_id)
+        if strategy:
+            inst = session.get(Instrument, strategy.instrument_id)
+    if inst and ds:
+        ok_parity, parity_note = chronological_parity_check(session, spec, inst, ds)
+        if not ok_parity:
+            return {"promoted": False, "reason": "bar_parity_failed", "detail": parity_note}
+        lineage_p = dict(experiment.lineage or {})
+        lineage_p["bar_parity"] = parity_note
+        experiment.lineage = lineage_p
+        session.add(experiment)
     attr = attribution_for_experiment(session, experiment)
     slot = enroll_strategy(session, strategy, experiment.symbol, arena_attribution=attr)
     if not slot:
