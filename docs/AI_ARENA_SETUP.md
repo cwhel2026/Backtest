@@ -21,10 +21,10 @@ Optional: `AI_ARENA_ENABLED=true` (default true) — master switch for scheduler
 
 1. Deploy migrations **013** and **014** (`alembic upgrade head`).
 2. Add at least one API key above.
-3. Open **Settings → AI Arena** or `GET /api/v1/ai-arena/providers`.
-4. **Test connection**: `POST /api/v1/ai-arena/researchers/{slug}/test-connection`
-5. **Activate** (explicit): `PATCH /api/v1/ai-arena/researchers/{slug}/settings` with `{"activated_by_user": true, "enabled": true}`.
-6. **Stop**: `PATCH` with `{"enabled": false}` (keeps history).
+3. Open **`/ai-arena`** — test connection, start/stop, run now, model and budgets per researcher.
+4. Use the **global emergency stop** and combined spend caps on the same page.
+
+Cycles use research-grade validation; **experimental** strategies did not earn keeper grade. Holdout metrics are not sent back to LLMs.
 
 Budgets default to **$2/day** and **$25/month** per researcher until you raise them in the same PATCH endpoint.
 
