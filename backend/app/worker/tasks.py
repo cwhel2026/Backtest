@@ -1,5 +1,6 @@
 """Background research and data jobs — records real job state in PostgreSQL."""
 
+import os
 import uuid
 from datetime import UTC, datetime
 
@@ -304,7 +305,29 @@ def health_pulse() -> None:
     with SyncSession() as db:
         try:
             db.execute(text("SELECT 1"))
-            record_worker_beat(db, "celery_scheduler", success=True, stale_after_seconds=600, detail={"pulse": "ok"})
+            import redis
+
+            settings = get_settings()
+            redis_ok = False
+            redis_err = None
+            try:
+                redis.from_url(settings.redis_url, socket_connect_timeout=2).ping()
+                redis_ok = True
+            except Exception as rexc:
+                redis_err = str(rexc)[:200]
+            record_worker_beat(
+                db,
+                "celery_scheduler",
+                success=True,
+                stale_after_seconds=600,
+                detail={
+                    "pulse": "ok",
+                    "database": "ok",
+                    "redis_ok": redis_ok,
+                    "redis_error": redis_err,
+                    "role": os.getenv("PROP_EDGE_ROLE", "worker"),
+                },
+            )
             db.commit()
         except Exception as exc:
             record_worker_beat(
@@ -372,50 +395,155 @@ def run_prop_search_job(job_id: str) -> None:
 
 @celery_app.task(name="app.worker.tasks.autonomous_prop_cycle")
 def autonomous_prop_cycle() -> None:
+    from app.services.worker_health import record_worker_beat
+    from app.services.worker_task_metrics import merge_tick_detail
+
     settings_ref = get_settings()
     if not settings_ref.autonomous_hourly_enabled:
+        with SyncSession() as db:
+            record_worker_beat(
+                db,
+                "autonomous_prop_cycle",
+                success=True,
+                stale_after_seconds=7200,
+                detail=merge_tick_detail(None, {"disabled": True, "reason": "autonomous_hourly_disabled"}, task="autonomous_prop_cycle"),
+            )
+            db.commit()
         return
     with SyncSession() as db:
         if find_active_prop_search_job(db):
+            record_worker_beat(
+                db,
+                "autonomous_prop_cycle",
+                success=True,
+                stale_after_seconds=7200,
+                detail=merge_tick_detail(None, {"skipped": "active_job_exists"}, task="autonomous_prop_cycle"),
+            )
+            db.commit()
             return
-        run_autonomous_prop_cycle(db, actor="hourly_autopilot")
+        try:
+            summary = run_autonomous_prop_cycle(db, actor="hourly_autopilot")
+            record_worker_beat(
+                db,
+                "autonomous_prop_cycle",
+                success=True,
+                stale_after_seconds=7200,
+                detail=merge_tick_detail(None, {"ok": True, "summary": summary}, task="autonomous_prop_cycle"),
+            )
+            db.commit()
+        except Exception as exc:
+            record_worker_beat(
+                db,
+                "autonomous_prop_cycle",
+                success=False,
+                stale_after_seconds=7200,
+                detail=merge_tick_detail(None, {"ok": False, "error": str(exc)[:400]}, task="autonomous_prop_cycle"),
+            )
+            db.commit()
 
 
 @celery_app.task(name="app.worker.tasks.paper_forward_tick")
 def paper_forward_tick() -> None:
     from app.services.paper_book import tick_paper_book
+    from app.services.worker_health import record_worker_beat
+    from app.services.worker_task_metrics import paper_tick_detail
 
     with SyncSession() as db:
-        tick_paper_book(db)
+        try:
+            result = tick_paper_book(db)
+            record_worker_beat(db, "paper_forward_tick", success=True, stale_after_seconds=180, detail=paper_tick_detail(result))
+            db.commit()
+        except Exception as exc:
+            record_worker_beat(
+                db,
+                "paper_forward_tick",
+                success=False,
+                stale_after_seconds=180,
+                detail={"task": "paper_forward_tick", "error": str(exc)[:400]},
+            )
+            db.commit()
+            raise
 
 
 @celery_app.task(name="app.worker.tasks.live_lab_stream_ingest")
 def live_lab_stream_ingest() -> None:
     from app.services.live_lab.stream_ingest import ingest_stream_once
+    from app.services.worker_health import record_worker_beat
+    from app.services.worker_task_metrics import merge_tick_detail
 
     settings_ref = get_settings()
     if not settings_ref.live_lab_tick_enabled:
+        with SyncSession() as db:
+            record_worker_beat(
+                db,
+                "live_lab_stream_ingest",
+                success=True,
+                stale_after_seconds=180,
+                detail=merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_stream_ingest"),
+            )
+            db.commit()
         return
     with SyncSession() as db:
         try:
-            ingest_stream_once(db)
+            result = ingest_stream_once(db)
+            record_worker_beat(
+                db,
+                "live_lab_stream_ingest",
+                success=bool(result.get("ok")),
+                stale_after_seconds=180,
+                detail=merge_tick_detail(None, result, task="live_lab_stream_ingest"),
+            )
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            record_worker_beat(
+                db,
+                "live_lab_stream_ingest",
+                success=False,
+                stale_after_seconds=180,
+                detail={"task": "live_lab_stream_ingest", "error": str(exc)[:400]},
+            )
+            db.commit()
             raise
 
 
 @celery_app.task(name="app.worker.tasks.live_lab_forward_tick")
 def live_lab_forward_tick() -> None:
     from app.services.live_lab.service import tick_live_strategy_lab
+    from app.services.worker_health import record_worker_beat
+    from app.services.worker_task_metrics import merge_tick_detail
 
     settings_ref = get_settings()
     if not settings_ref.live_lab_tick_enabled:
+        with SyncSession() as db:
+            record_worker_beat(
+                db,
+                "live_lab_forward_tick",
+                success=True,
+                stale_after_seconds=180,
+                detail=merge_tick_detail(None, {"disabled": True, "reason": "live_lab_tick_disabled"}, task="live_lab_forward_tick"),
+            )
+            db.commit()
         return
     with SyncSession() as db:
         try:
-            tick_live_strategy_lab(db)
+            result = tick_live_strategy_lab(db)
+            detail = merge_tick_detail(None, result, task="live_lab_forward_tick")
+            scan = (result.get("ingest") or {}).get("scanner") if isinstance(result.get("ingest"), dict) else result.get("scanner")
+            if not scan and isinstance(result, dict):
+                scan = result.get("scanner")
+            if isinstance(result, dict) and result.get("ingest"):
+                detail["ingest"] = result["ingest"]
+            record_worker_beat(db, "live_lab_forward_tick", success=bool(result.get("ok", True)), stale_after_seconds=180, detail=detail)
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            record_worker_beat(
+                db,
+                "live_lab_forward_tick",
+                success=False,
+                stale_after_seconds=180,
+                detail={"task": "live_lab_forward_tick", "error": str(exc)[:400]},
+            )
+            db.commit()
             raise

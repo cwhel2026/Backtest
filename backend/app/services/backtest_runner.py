@@ -33,6 +33,9 @@ def execute_backtest_run(session: Session, run_id: uuid.UUID) -> None:
         if not all([version, strategy, dataset, instrument]):
             raise ValueError("Missing strategy, version, dataset, or instrument")
 
+        from app.services.market_data.dataset_research import backfill_dataset_lineage
+
+        backfill_dataset_lineage(session, dataset)
         meta = dataset.meta or {}
         qclass = (meta.get("quality_class") or "").lower()
         if qclass == "blocked" or dataset.validation_status.value == "failed":

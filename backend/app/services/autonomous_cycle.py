@@ -268,6 +268,15 @@ def run_autonomous_prop_cycle(
             ds = datasets.get((symbol, tf)) or _latest_dataset(session, symbol, tf)
             if not ds:
                 continue
+            from app.services.market_data.dataset_research import prepare_dataset_for_research
+
+            elig = prepare_dataset_for_research(session, ds)
+            if not elig.ok:
+                warnings.append(f"{symbol} {tf}: skipped research — {elig.reason}")
+                job = _job()
+                set_job_message(job, f"Skipped {symbol} {tf}: {elig.reason}")
+                session.commit()
+                continue
             inst = session.get(Instrument, ds.instrument_id)
             if not inst:
                 continue
