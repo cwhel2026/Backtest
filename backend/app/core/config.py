@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=11, validation_alias=AliasChoices("IBKR_CLIENT_ID", "ibkr_client_id"))
     openai_api_key: str = ""
     openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL", "openai_model"))
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    google_ai_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_AI_API_KEY", "GEMINI_API_KEY"))
+    moonshot_api_key: str = Field(default="", validation_alias="MOONSHOT_API_KEY")
+    deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
+    xai_api_key: str = Field(default="", validation_alias="XAI_API_KEY")
+    dashscope_api_key: str = Field(default="", validation_alias=AliasChoices("DASHSCOPE_API_KEY", "QWEN_API_KEY"))
+    mistral_api_key: str = Field(default="", validation_alias="MISTRAL_API_KEY")
+    ai_arena_enabled: bool = Field(default=True, validation_alias="AI_ARENA_ENABLED")
     ai_research_enabled: bool = False
     max_experiments_per_day: int = 50
     autonomous_hourly_enabled: bool = Field(default=True, validation_alias="AUTONOMOUS_HOURLY_ENABLED")
